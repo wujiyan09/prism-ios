@@ -398,14 +398,14 @@ extension View {
 @Observable
 final class DSDock {
     static let shared = DSDock()
-    var pinned = UserDefaults.standard.bool(forKey: "ds.pinned") { didSet { UserDefaults.standard.set(pinned, forKey: "ds.pinned") } }
-    var visible = UserDefaults.standard.object(forKey: "ds.pinned.visible") as? Bool ?? true { didSet { UserDefaults.standard.set(visible, forKey: "ds.pinned.visible") } }
+    var pinned = UserDefaults.standard.object(forKey: "ds.pinned") as? Bool ?? true { didSet { UserDefaults.standard.set(pinned, forKey: "ds.pinned") } }
+    var visible = UserDefaults.standard.object(forKey: "ds.pinned.visible") as? Bool ?? false { didSet { UserDefaults.standard.set(visible, forKey: "ds.pinned.visible") } }
     var width = max(320, UserDefaults.standard.double(forKey: "ds.pinned.width")) { didSet { UserDefaults.standard.set(width, forKey: "ds.pinned.width") } }
 
     /// If the last session didn't end cleanly (crash) while pinned, fall back to sheet mode.
     init() {
         let d = UserDefaults.standard
-        if d.bool(forKey: "ds.pinned") && d.object(forKey: "ds.cleanExit") as? Bool == false { pinned = false }
+        if (d.object(forKey: "ds.pinned") as? Bool ?? true) && d.object(forKey: "ds.cleanExit") as? Bool == false { pinned = false }
         d.set(false, forKey: "ds.cleanExit")
         for n in [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification] {
             NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { _ in d.set(true, forKey: "ds.cleanExit") }
@@ -430,7 +430,7 @@ struct DeepSeekEntry: ViewModifier {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        if Self.pinEnabled && hsc == .regular && dock.pinned { withAnimation(.snappy) { dock.visible.toggle() } }
+                        if Self.pinEnabled && hsc == .regular && dock.pinned { withAnimation(.smooth(duration: 0.35)) { dock.visible.toggle() } }
                         else { open = true }
                     } label: { Label("问 DeepSeek", systemImage: "sparkles") }
                         .accessibilityLabel("问 DeepSeek")
@@ -438,25 +438,26 @@ struct DeepSeekEntry: ViewModifier {
             }
             .safeAreaInset(edge: .trailing, spacing: 0) {
                 if showPinned {
-                    HStack(spacing: 0) {
-                        Divider()
-                            .overlay {
-                                Color.clear.frame(width: 16).contentShape(Rectangle())
-                                    .gesture(DragGesture(minimumDistance: 2).onChanged { v in
-                                        if dragStart == nil { dragStart = dock.width }
-                                        dock.width = min(640, max(300, (dragStart ?? dock.width) - v.translation.width))
-                                    }.onEnded { _ in dragStart = nil })
-                            }
-                        // Follows the current page: the context key changes when the pager moves, which rebuilds the panel
-                        // (each question keeps its own saved thread).
-                        let k = make()?.key ?? "none"
-                        DSLazyPanel(make: make, embedded: true, close: { withAnimation(.snappy) { dock.visible = false } },
-                                    togglePin: { withAnimation(.snappy) { dock.pinned = false; open = true } })
-                            .id(k)
-                            .frame(width: dock.width)
-                            .background(Color.appBackground)
-                    }
-                    .transition(.move(edge: .trailing))
+                    // Floating Liquid Glass panel, inset from the edges like the iOS 26 sidebar.
+                    let k = make()?.key ?? "none"   // follows the current page; each question keeps its own thread
+                    DSLazyPanel(make: make, embedded: true, close: { withAnimation(.smooth(duration: 0.35)) { dock.visible = false } },
+                                togglePin: { withAnimation(.smooth(duration: 0.35)) { dock.pinned = false; open = true } })
+                        .id(k)
+                        .frame(width: dock.width)
+                        .frame(maxHeight: .infinity)
+                        .dsSidebarGlass()
+                        .overlay(alignment: .leading) {
+                            Capsule().fill(.secondary.opacity(0.5)).frame(width: 4, height: 36)
+                                .frame(width: 18, height: 120).contentShape(Rectangle())
+                                .offset(x: -9)
+                                .gesture(DragGesture(minimumDistance: 2).onChanged { v in
+                                    if dragStart == nil { dragStart = dock.width }
+                                    dock.width = min(640, max(300, (dragStart ?? dock.width) - v.translation.width))
+                                }.onEnded { _ in dragStart = nil })
+                                .accessibilityLabel("调整宽度")
+                        }
+                        .padding(.vertical, 8).padding(.trailing, 8).padding(.leading, 4)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
             .sheet(isPresented: $open) {
@@ -945,5 +946,18 @@ enum DSJSON {
     static func object(_ t: String) -> [String: Any]? {
         if let o = try? JSONSerialization.jsonObject(with: Data(repair(t).utf8)) as? [String: Any] { return o }
         return try? JSONSerialization.jsonObject(with: Data(t.utf8)) as? [String: Any]
+    }
+}
+
+
+extension View {
+    /// Sidebar-style floating glass (iOS 26); thick material card before.
+    @ViewBuilder func dsSidebarGlass() -> some View {
+        let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+        if #available(iOS 26.0, *) {
+            self.clipShape(shape).glassEffect(.regular, in: shape)
+        } else {
+            self.background(.thickMaterial, in: shape).clipShape(shape).shadow(color: .black.opacity(0.2), radius: 10)
+        }
     }
 }
