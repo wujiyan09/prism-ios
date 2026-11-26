@@ -75,11 +75,8 @@ struct RootView: View {
             }
             .navigationTitle("Prism")
         } detail: {
-            HStack(spacing: 0) {
-                stack(scene.section)
-                    .id(scene.section)
-                DSDockColumn()
-            }
+            stack(scene.section)
+                .id(scene.section)
         }
     }
 

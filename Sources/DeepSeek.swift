@@ -394,108 +394,80 @@ extension View {
     func deepSeek(_ ctx: @autoclosure @escaping () -> DSContext?) -> some View { modifier(DeepSeekEntry(make: ctx)) }
 }
 
-/// Shared state for the pinned (sidebar) mode on iPad. Lives outside the navigation tree.
+/// Remembered display mode for the panel on iPad: sheet, or pinned as a trailing column inside the screen.
 @Observable
 final class DSDock {
     static let shared = DSDock()
     var pinned = UserDefaults.standard.bool(forKey: "ds.pinned") { didSet { UserDefaults.standard.set(pinned, forKey: "ds.pinned") } }
-    var visible = UserDefaults.standard.bool(forKey: "ds.pinned.visible") { didSet { UserDefaults.standard.set(visible, forKey: "ds.pinned.visible") } }
+    var visible = UserDefaults.standard.object(forKey: "ds.pinned.visible") as? Bool ?? true { didSet { UserDefaults.standard.set(visible, forKey: "ds.pinned.visible") } }
     var width = max(320, UserDefaults.standard.double(forKey: "ds.pinned.width")) { didSet { UserDefaults.standard.set(width, forKey: "ds.pinned.width") } }
-    @ObservationIgnored var provider: (() -> DSContext?)?
-    var owner: UUID?
-    var tick = 0
-    func attach(_ id: UUID, _ make: @escaping () -> DSContext?) { provider = make; owner = id; tick += 1 }
-    func detach(_ id: UUID) { if owner == id { provider = nil; owner = nil; tick += 1 } }
 }
 
+/// Per-screen entry. Everything stays inside the screen: no state at the root, no nested NavigationStack when pinned.
 struct DeepSeekEntry: ViewModifier {
     let make: () -> DSContext?
     @State private var open = false
-    @State private var me = UUID()
+    @State private var dragStart: Double?
     @Environment(\.horizontalSizeClass) private var hsc
     private var dock: DSDock { DSDock.shared }
+    private var showPinned: Bool { hsc == .regular && dock.pinned && dock.visible }
 
     func body(content: Content) -> some View {
         content
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        if hsc == .regular && dock.pinned { dock.attach(me, make); dock.visible.toggle() }
+                        if hsc == .regular && dock.pinned { withAnimation(.snappy) { dock.visible.toggle() } }
                         else { open = true }
                     } label: { Label("问 DeepSeek", systemImage: "sparkles") }
                         .accessibilityLabel("问 DeepSeek")
                 }
             }
-            .onAppear { dock.attach(me, make) }
-            .onDisappear { dock.detach(me) }
-            .sheet(isPresented: $open) {
-                DSLazyPanel(make: make, close: { open = false })
-                    .overlay(alignment: .topLeading) {
-                        if hsc == .regular {
-                            Button { open = false; dock.pinned = true; dock.attach(me, make); dock.visible = true } label: {
-                                Label("固定到侧边", systemImage: "sidebar.right")
+            .safeAreaInset(edge: .trailing, spacing: 0) {
+                if showPinned {
+                    HStack(spacing: 0) {
+                        Divider()
+                            .overlay {
+                                Color.clear.frame(width: 16).contentShape(Rectangle())
+                                    .gesture(DragGesture(minimumDistance: 2).onChanged { v in
+                                        if dragStart == nil { dragStart = dock.width }
+                                        dock.width = min(640, max(300, (dragStart ?? dock.width) - v.translation.width))
+                                    }.onEnded { _ in dragStart = nil })
                             }
-                            .font(.footnote).buttonStyle(.bordered).padding(10)
-                        }
+                        DSLazyPanel(make: make, embedded: true, close: { withAnimation(.snappy) { dock.visible = false } },
+                                    togglePin: { withAnimation(.snappy) { dock.pinned = false; open = true } })
+                            .frame(width: dock.width)
+                            .background(Color(uiColor: .systemBackground))
                     }
+                    .transition(.move(edge: .trailing))
+                }
+            }
+            .sheet(isPresented: $open) {
+                DSLazyPanel(make: make, embedded: false, close: { open = false },
+                            togglePin: hsc == .regular ? {
+                                open = false
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                    withAnimation(.snappy) { dock.pinned = true; dock.visible = true }
+                                }
+                            } : nil)
                 .presentationDetents([.medium, .large])
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
             }
     }
 }
 
-/// Trailing column next to the detail stack. Always present in the tree, so navigation never resets.
-struct DSDockColumn: View {
-    @Environment(\.horizontalSizeClass) private var hsc
-    @State private var dragStart: Double?
-    var body: some View {
-        let dock = DSDock.shared
-        let _ = dock.tick
-        if hsc == .regular && dock.pinned && dock.visible {
-            HStack(spacing: 0) {
-                Rectangle().fill(Color(uiColor: .separator)).frame(width: 1)
-                    .overlay {
-                        Rectangle().fill(.clear).frame(width: 14).contentShape(Rectangle())
-                            .gesture(DragGesture().onChanged { v in
-                                if dragStart == nil { dragStart = dock.width }
-                                dock.width = min(640, max(300, (dragStart ?? dock.width) - v.translation.width))
-                            }.onEnded { _ in dragStart = nil })
-                    }
-                VStack(spacing: 0) {
-                    HStack {
-                        Label("DeepSeek", systemImage: "sparkles").font(.headline)
-                        Spacer()
-                        Button { dock.pinned = false; dock.visible = false } label: { Image(systemName: "rectangle.bottomhalf.inset.filled") }
-                            .accessibilityLabel("改为弹出")
-                        Button { dock.visible = false } label: { Image(systemName: "xmark") }
-                            .accessibilityLabel("收起")
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    Divider()
-                    if let make = dock.provider {
-                        DSLazyPanel(make: make, close: { dock.visible = false }).id(dock.owner)
-                    } else {
-                        ContentUnavailableView("这一页暂时没有内容可以问", systemImage: "sparkles")
-                    }
-                }
-                .frame(width: dock.width)
-                .background(Color(uiColor: .systemBackground))
-            }
-            .transition(.move(edge: .trailing))
-        }
-    }
-}
-
 /// Builds the page context when shown; if the page content is still downloading, waits and retries.
 struct DSLazyPanel: View {
     let make: () -> DSContext?
+    var embedded = false
     var close: () -> Void
+    var togglePin: (() -> Void)? = nil
     @State private var ctx: DSContext?
     @State private var gaveUp = false
     var body: some View {
         Group {
             if let ctx {
-                DeepSeekPanel(ctx: ctx, close: close).id(ctx.key)
+                DeepSeekPanel(ctx: ctx, embedded: embedded, close: close, togglePin: togglePin).id(ctx.key)
             } else if gaveUp {
                 ContentUnavailableView("这一页暂时没有内容可以问", systemImage: "sparkles")
             } else {
@@ -516,7 +488,9 @@ struct DSLazyPanel: View {
 
 struct DeepSeekPanel: View {
     let ctx: DSContext
+    var embedded = false
     var close: () -> Void
+    var togglePin: (() -> Void)? = nil
     @State private var msgs: [DSMessage] = []
     @State private var input = ""
     @State private var task: Task<Void, Never>?
@@ -534,48 +508,84 @@ struct DeepSeekPanel: View {
     private var model: DSModel { DSModel(rawValue: modelRaw) ?? .flash }
     private var busy: Bool { task != nil || grading }
 
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 14) {
-                            if !DSKey.has { noKey }
-                            if msgs.isEmpty && grade == nil { intro }
-                            if let g = grade { DSGradeCard(result: g, spec: ctx.grade) }
-                            ForEach(msgs) { m in DSBubble(msg: m).id(m.id) }
-                            if let e = error {
-                                Label(e, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red)
-                            }
-                            Color.clear.frame(height: 1).id("end")
+    private var content: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        if !DSKey.has { noKey }
+                        if msgs.isEmpty && grade == nil { intro }
+                        if let g = grade { DSGradeCard(result: g, spec: ctx.grade) }
+                        ForEach(msgs) { m in DSBubble(msg: m).id(m.id) }
+                        if let e = error {
+                            Label(e, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red)
                         }
-                        .padding()
+                        Color.clear.frame(height: 1).id("end")
                     }
-                    .onChange(of: msgs.last?.text) { proxy.scrollTo("end", anchor: .bottom) }
-                    .onChange(of: msgs.count) { proxy.scrollTo("end", anchor: .bottom) }
+                    .padding()
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: msgs.last?.text) { proxy.scrollTo("end", anchor: .bottom) }
+                .onChange(of: msgs.count) { proxy.scrollTo("end", anchor: .bottom) }
+            }
+            Divider()
+            composer
+        }
+    }
+
+    private var menu: some View {
+        Menu {
+            if let togglePin {
+                Button { togglePin() } label: {
+                    embedded ? Label("改为弹出窗口", systemImage: "rectangle.bottomhalf.inset.filled") : Label("固定到侧边", systemImage: "sidebar.right")
                 }
                 Divider()
-                composer
             }
-            .navigationTitle("DeepSeek")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { close() } label: { Image(systemName: "xmark") }.accessibilityLabel("关闭")
+            Picker(selection: $modelRaw) {
+                ForEach(DSModel.allCases) { Text($0.rawValue).tag($0.rawValue) }
+            } label: { Label("模型", systemImage: "cpu") }
+            .pickerStyle(.menu)
+            Button { showHistory = true } label: { Label("历史", systemImage: "clock") }
+            Button { showSettings = true } label: { Label("DeepSeek 设置", systemImage: "gearshape") }
+            Divider()
+            Button(role: .destructive) { task?.cancel(); msgs = []; grade = nil; DSStore.shared.chats[ctx.key] = nil } label: {
+                Label("清空这题的对话", systemImage: "trash")
+            }
+        } label: { Label("选项", systemImage: "ellipsis.circle") }
+    }
+
+    var body: some View {
+        Group {
+            if embedded {
+                // Pinned column: no NavigationStack (it sits inside the screen's own stack).
+                VStack(spacing: 0) {
+                    HStack(spacing: 12) {
+                        Label("DeepSeek", systemImage: "sparkles").font(.headline).labelStyle(.titleAndIcon)
+                        Spacer()
+                        menu.labelStyle(.iconOnly)
+                        Button { close() } label: { Label("收起", systemImage: "sidebar.trailing") }
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.bordered).buttonBorderShape(.circle)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    Divider()
+                    content
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Picker("模型", selection: $modelRaw) {
-                            ForEach(DSModel.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                .sheet(isPresented: $showSettings) { NavigationStack { DeepSeekSettingsView() } }
+                .sheet(isPresented: $showHistory) { NavigationStack { DSHistoryView(scope: ctx.key) } }
+            } else {
+                NavigationStack {
+                    content
+                        .navigationTitle("DeepSeek")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) { menu }
+                            ToolbarItem(placement: .confirmationAction) { Button("完成") { close() } }
                         }
-                        Button("清空这题的对话", role: .destructive) { task?.cancel(); msgs = []; grade = nil; DSStore.shared.chats[ctx.key] = nil }
-                        Button("历史") { showHistory = true }
-                        Button("DeepSeek 设置") { showSettings = true }
-                    } label: { Image(systemName: "ellipsis.circle") }
+                        .navigationDestination(isPresented: $showSettings) { DeepSeekSettingsView() }
+                        .navigationDestination(isPresented: $showHistory) { DSHistoryView(scope: ctx.key) }
                 }
             }
-            .navigationDestination(isPresented: $showSettings) { DeepSeekSettingsView() }
-            .navigationDestination(isPresented: $showHistory) { DSHistoryView(scope: ctx.key) }
         }
         .onAppear { msgs = DSStore.shared.chats[ctx.key]?.msgs ?? []; grade = DSStore.shared.history(ctx.key, "grade").first.flatMap { DSGradeResult.parse($0.body, max: ctx.grade?.maxMarks ?? 0) }; useScratch = false }
         .onDisappear { task?.cancel() }
@@ -636,17 +646,16 @@ struct DeepSeekPanel: View {
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("问点什么…", text: $input, axis: .vertical)
                     .lineLimit(1...5)
+                    .textFieldStyle(.roundedBorder)
                     .focused($focused)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .onSubmit { send(input, shown: input) }
                 if task != nil {
-                    Button { task?.cancel(); task = nil } label: { Image(systemName: "stop.circle.fill").font(.title) }
-                        .accessibilityLabel("停止")
+                    Button { task?.cancel(); task = nil } label: { Label("停止", systemImage: "stop.fill") }
+                        .labelStyle(.iconOnly).buttonStyle(.bordered).buttonBorderShape(.circle)
                 } else {
-                    Button { send(input, shown: input) } label: { Image(systemName: "arrow.up.circle.fill").font(.title) }
+                    Button { send(input, shown: input) } label: { Label("发送", systemImage: "arrow.up") }
+                        .labelStyle(.iconOnly).buttonStyle(.borderedProminent).buttonBorderShape(.circle)
                         .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || grading)
-                        .accessibilityLabel("发送")
                 }
             }
         }
@@ -654,18 +663,12 @@ struct DeepSeekPanel: View {
     }
 
     private func chip(_ t: String, on: Binding<Bool>, icon: String? = nil) -> some View {
-        Button { on.wrappedValue.toggle() } label: {
-            HStack(spacing: 4) {
-                if let icon { Image(systemName: icon) }
-                Text(t)
-                Image(systemName: on.wrappedValue ? "xmark" : "plus").font(.caption2.bold())
-            }
-            .font(.caption)
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(on.wrappedValue ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1), in: Capsule())
-            .foregroundStyle(on.wrappedValue ? Color.accentColor : .secondary)
+        Toggle(isOn: on) {
+            if let icon { Label(t, systemImage: icon) } else { Text(t) }
         }
-        .buttonStyle(.plain)
+        .toggleStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 
     private func contextPart() -> DSPart {

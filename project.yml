@@ -45,3 +45,23 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_PREVIEWS: NO
         SUPPORTS_MACCATALYST: NO
+  PrismUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: ICT
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wujiyan09.prism.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: ICT
+schemes:
+  ICT:
+    build:
+      targets:
+        ICT: all
+    test:
+      targets:
+        - PrismUITests
