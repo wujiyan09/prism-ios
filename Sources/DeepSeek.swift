@@ -394,23 +394,53 @@ extension View {
     func deepSeek(_ ctx: @autoclosure @escaping () -> DSContext?) -> some View { modifier(DeepSeekEntry(make: ctx)) }
 }
 
+/// Shared state for the pinned (sidebar) mode on iPad. Lives outside the navigation tree.
+@Observable
+final class DSDock {
+    static let shared = DSDock()
+    var pinned = UserDefaults.standard.bool(forKey: "ds.pinned") { didSet { UserDefaults.standard.set(pinned, forKey: "ds.pinned") } }
+    var visible = UserDefaults.standard.bool(forKey: "ds.pinned.visible") { didSet { UserDefaults.standard.set(visible, forKey: "ds.pinned.visible") } }
+    var width = max(320, UserDefaults.standard.double(forKey: "ds.pinned.width")) { didSet { UserDefaults.standard.set(width, forKey: "ds.pinned.width") } }
+    @ObservationIgnored var provider: (() -> DSContext?)?
+    var owner: UUID?
+    var tick = 0
+    func attach(_ id: UUID, _ make: @escaping () -> DSContext?) { provider = make; owner = id; tick += 1 }
+    func detach(_ id: UUID) { if owner == id { provider = nil; owner = nil; tick += 1 } }
+}
+
 struct DeepSeekEntry: ViewModifier {
     let make: () -> DSContext?
     @State private var open = false
     @State private var ctx: DSContext?
+    @State private var me = UUID()
+    @Environment(\.horizontalSizeClass) private var hsc
+    private var dock: DSDock { DSDock.shared }
 
     func body(content: Content) -> some View {
         content
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button { ctx = make(); open = true } label: { Label("问 DeepSeek", systemImage: "sparkles") }
+                    Button {
+                        if hsc == .regular && dock.pinned { dock.attach(me, make); dock.visible.toggle() }
+                        else { ctx = make(); open = true }
+                    } label: { Label("问 DeepSeek", systemImage: "sparkles") }
                         .accessibilityLabel("问 DeepSeek")
                 }
             }
+            .onAppear { dock.attach(me, make) }
+            .onDisappear { dock.detach(me) }
             .sheet(isPresented: $open) {
                 Group {
                     if let ctx {
                         DeepSeekPanel(ctx: ctx, close: { open = false })
+                            .overlay(alignment: .topLeading) {
+                                if hsc == .regular {
+                                    Button { open = false; dock.pinned = true; dock.attach(me, make); dock.visible = true } label: {
+                                        Label("固定到侧边", systemImage: "sidebar.right")
+                                    }
+                                    .font(.footnote).buttonStyle(.bordered).padding(10)
+                                }
+                            }
                     } else {
                         ContentUnavailableView("这一页暂时没有内容可以问", systemImage: "sparkles")
                     }
@@ -418,6 +448,48 @@ struct DeepSeekEntry: ViewModifier {
                 .presentationDetents([.medium, .large])
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
             }
+    }
+}
+
+/// Trailing column next to the detail stack. Always present in the tree, so navigation never resets.
+struct DSDockColumn: View {
+    @Environment(\.horizontalSizeClass) private var hsc
+    @State private var dragStart: Double?
+    var body: some View {
+        let dock = DSDock.shared
+        let _ = dock.tick
+        if hsc == .regular && dock.pinned && dock.visible {
+            HStack(spacing: 0) {
+                Rectangle().fill(Color(uiColor: .separator)).frame(width: 1)
+                    .overlay {
+                        Rectangle().fill(.clear).frame(width: 14).contentShape(Rectangle())
+                            .gesture(DragGesture().onChanged { v in
+                                if dragStart == nil { dragStart = dock.width }
+                                dock.width = min(640, max(300, (dragStart ?? dock.width) - v.translation.width))
+                            }.onEnded { _ in dragStart = nil })
+                    }
+                VStack(spacing: 0) {
+                    HStack {
+                        Label("DeepSeek", systemImage: "sparkles").font(.headline)
+                        Spacer()
+                        Button { dock.pinned = false; dock.visible = false } label: { Image(systemName: "rectangle.bottomhalf.inset.filled") }
+                            .accessibilityLabel("改为弹出")
+                        Button { dock.visible = false } label: { Image(systemName: "xmark") }
+                            .accessibilityLabel("收起")
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    Divider()
+                    if let ctx = dock.provider?() {
+                        DeepSeekPanel(ctx: ctx, close: { dock.visible = false }).id(ctx.key)
+                    } else {
+                        ContentUnavailableView("这一页暂时没有内容可以问", systemImage: "sparkles")
+                    }
+                }
+                .frame(width: dock.width)
+                .background(Color(uiColor: .systemBackground))
+            }
+            .transition(.move(edge: .trailing))
+        }
     }
 }
 

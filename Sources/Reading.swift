@@ -9,7 +9,17 @@ enum Reading {
 
     static func font(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         let scale = UserDefaults.standard.object(forKey: sizeKey) as? Double ?? sizeDefault
-        return Font.custom(fontName, size: size * scale).weight(weight)
+        return Font(uiFont(size * scale, weight: weight))
+    }
+
+    /// Times New Roman for Latin, PingFang SC for CJK, as one cascade font so sizes and bold match.
+    static func uiFont(_ size: CGFloat, weight: Font.Weight = .regular) -> UIFont {
+        let heavy = weight == .bold || weight == .semibold || weight == .heavy || weight == .black
+        let latin = heavy ? "TimesNewRomanPS-BoldMT" : "TimesNewRomanPSMT"
+        let cjk = heavy ? "PingFangSC-Semibold" : (weight == .medium ? "PingFangSC-Medium" : "PingFangSC-Regular")
+        let d = UIFontDescriptor(name: latin, size: size)
+            .addingAttributes([.cascadeList: [UIFontDescriptor(name: cjk, size: size)]])
+        return UIFont(descriptor: d, size: size)
     }
 }
 
@@ -20,7 +30,7 @@ struct ReadingText: ViewModifier {
     var size: CGFloat = 17
     func body(content: Content) -> some View {
         content
-            .font(.custom(Reading.fontName, size: size * scale, relativeTo: .body))
+            .font(Font(Reading.uiFont(size * scale)))
             .lineSpacing(line)
     }
 }

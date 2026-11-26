@@ -240,15 +240,15 @@ struct MathText: View {
         for m in re?.matches(in: s, range: NSRange(location: 0, length: ns.length)) ?? [] {
             if m.range.location > last { a += plain(ns.substring(with: NSRange(location: last, length: m.range.location - last))) }
             if m.range(at: 1).location != NSNotFound {
-                var x = AttributedString(ns.substring(with: m.range(at: 1))); x.font = .system(size: size, weight: .bold); a += x
+                var x = AttributedString(ns.substring(with: m.range(at: 1))); x.font = Reading.font(size, weight: .bold); a += x
             } else if m.range(at: 2).location != NSNotFound {
-                var x = AttributedString(ns.substring(with: m.range(at: 2))); x.font = .system(size: size, weight: .semibold)
+                var x = AttributedString(ns.substring(with: m.range(at: 2))); x.font = Reading.font(size, weight: .semibold)
                 x.backgroundColor = Color.yellow.opacity(0.28); a += x
             } else if m.range(at: 3).location != NSNotFound {
-                var x = AttributedString(ns.substring(with: m.range(at: 3))); x.font = .system(size: size, weight: weight)
+                var x = AttributedString(ns.substring(with: m.range(at: 3))); x.font = Reading.font(size, weight: weight)
                 x.underlineStyle = .single; a += x
             } else if m.range(at: 4).location != NSNotFound {
-                var x = AttributedString(ns.substring(with: m.range(at: 4))); x.font = .system(size: size, weight: weight).italic(); a += x
+                var x = AttributedString(ns.substring(with: m.range(at: 4))); x.font = Reading.font(size, weight: weight).italic(); a += x
             }
             last = m.range.location + m.range.length
         }
