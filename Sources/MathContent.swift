@@ -257,6 +257,7 @@ struct StorageView: View {
                        "章节在打开时下载。超过上限时，会先删最久没打开的章节；设为离线的课本不会被删。"))
             }
             ImportStorageSection()
+            NotesStorageSection()
             PDFInkSection()
             Section {
                 ForEach(ict.books) { b in

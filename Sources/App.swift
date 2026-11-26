@@ -95,7 +95,7 @@ extension View {
 // MARK: - Sections & navigation
 
 enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
-    case daily, learn, dse, quiz, plan, tools, progress, inbox, settings
+    case daily, learn, dse, quiz, plan, tools, progress, inbox, notes, settings
     var id: String { rawValue }
     func title(_ T: Tr) -> String {
         switch self {
@@ -107,6 +107,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
         case .tools: return T("Tools", "工具")
         case .progress: return T("Progress", "进度")
         case .inbox: return T("Inbox", "收件箱")
+        case .notes: return T("Notes", "笔记")
         case .settings: return T("Settings", "设置")
         }
     }
@@ -120,6 +121,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
         case .tools: return "wrench.and.screwdriver"
         case .progress: return "chart.bar"
         case .inbox: return "tray"
+        case .notes: return "note.text"
         case .settings: return "gearshape"
         }
     }
@@ -158,6 +160,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
         case .tools: return .indigo
         case .progress: return .teal
         case .inbox: return .brown
+        case .notes: return .yellow
         case .settings: return .gray
         }
     }

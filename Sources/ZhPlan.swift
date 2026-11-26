@@ -110,7 +110,7 @@ struct ZhExamSections: View {
         let books = lib.books(subj)
         Section {
             if books.isEmpty {
-                Text(subj == "zh" ? "範文內容下載中，請稍後再試。" : "数学内容加载中，请稍后再试。").foregroundStyle(.secondary)
+                Text(subj == "zh" ? "範文內容下載中，請稍後再試。" : (subj == "chem" ? "化学内容加载中，请稍后再试。" : "数学内容加载中，请稍后再试。")).foregroundStyle(.secondary)
             }
             ForEach(books) { b in
                 if subj == "zh" {

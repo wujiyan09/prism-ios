@@ -212,7 +212,7 @@ struct ImportLibraryView: View {
     @State private var edit: EditMode = .inactive
     @State private var confirm: [String] = []
     @State private var picker: ImportSource?
-    @State private var pending: PDFDocument?
+    @State private var pending: PendingDoc?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var error: String?
 
@@ -266,9 +266,9 @@ struct ImportLibraryView: View {
             Button("删除", role: .destructive) { confirm.forEach { store.delete($0) }; confirm = []; selection = [] }
         }
         .importPickers(source: $picker, photos: $photoItems) { doc, err in
-            if let doc { pending = doc } else if let err { error = err }
+            if let doc { pending = PendingDoc(doc: doc) } else if let err { error = err }
         }
-        .sheet(item: Binding(get: { pending.map { PendingDoc(doc: $0) } }, set: { if $0 == nil { pending = nil } })) { p in
+        .sheet(item: $pending) { p in
             NavigationStack { ImportNewSheet(doc: p.doc) { pending = nil } }
         }
         .alert("导入失败", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {} message: { Text(error ?? "") }
@@ -340,7 +340,7 @@ struct ImportPickers: ViewModifier {
             let ok = u.startAccessingSecurityScopedResource()
             defer { if ok { u.stopAccessingSecurityScopedResource() } }
             if u.pathExtension.lowercased() == "prismpaper" {
-                if let d = try? Data(contentsOf: u), ImpBundle.restore(d) != nil { done(nil, nil) } else { done(nil, "这个导出包无法读取") }
+                if let d = try? Data(contentsOf: u), ImpBundle.restore(d) != nil || NoteBundle.restore(d) != nil { done(nil, nil) } else { done(nil, "这个导出包无法读取") }
                 return
             }
             if let d = PDFDocument(url: u) {
@@ -382,6 +382,7 @@ struct ImportNewSheet: View {
         case "ict": return Library.shared.chapters.map { ($0.id, $0.name) }
         case "math": return MathLibrary.shared.chapters("math").map { ($0.id, $0.label) }
         case "zh": return MathLibrary.shared.chapters("zh").map { ($0.id, $0.t) }
+        case "chem": return MathLibrary.shared.chapters("chem").map { ($0.id, $0.label) }
         default: return []
         }
     }
@@ -441,7 +442,7 @@ struct ImportPaperView: View {
     @State private var showMark = false
     @State private var msSource: ImportSource?
     @State private var msPhotos: [PhotosPickerItem] = []
-    @State private var share: URL?
+    @State private var share: ShareItem?
     @State private var confirmSubmit = false
     @State private var confirmSettle = false
     @State private var confirmParse = false
@@ -467,7 +468,7 @@ struct ImportPaperView: View {
         }
         .sheet(isPresented: $showEdit) { NavigationStack { ImportEditSheet(id: id) } }
         .sheet(isPresented: $showMark) { NavigationStack { ImportInkMarkSheet(id: id) } }
-        .sheet(item: Binding(get: { share.map { ShareItem(url: $0) } }, set: { if $0 == nil { share = nil } })) { s in ActivitySheet(url: s.url) }
+        .sheet(item: $share) { s in ActivitySheet(url: s.url) }
         .confirmationDialog("确定交卷？", isPresented: $confirmSubmit, titleVisibility: .visible) {
             Button("交卷") { update { $0.submitted = true } }
         } message: { Text("交卷后可以上传评分标准，自评或让 DeepSeek 批改。") }
@@ -641,10 +642,10 @@ struct ImportPaperView: View {
                         }
                     }
                     Section("导出") {
-                        Button { share = ImpExport.annotated(id) } label: { Label("带手写的 PDF", systemImage: "pencil.and.outline") }
-                        Button { share = ImpExport.original(id) } label: { Label("原始 PDF", systemImage: "doc") }
-                        Button { share = ImpExport.results(id) } label: { Label("答题与批改结果 PDF", systemImage: "list.bullet.clipboard") }
-                        Button { share = ImpExport.bundle(id) } label: { Label("完整导出包（可再导入）", systemImage: "shippingbox") }
+                        Button { share = ImpExport.annotated(id).map { ShareItem(url: $0) } } label: { Label("带手写的 PDF", systemImage: "pencil.and.outline") }
+                        Button { share = ImpExport.original(id).map { ShareItem(url: $0) } } label: { Label("原始 PDF", systemImage: "doc") }
+                        Button { share = ImpExport.results(id).map { ShareItem(url: $0) } } label: { Label("答题与批改结果 PDF", systemImage: "list.bullet.clipboard") }
+                        Button { share = ImpExport.bundle(id).map { ShareItem(url: $0) } } label: { Label("完整导出包（可再导入）", systemImage: "shippingbox") }
                     }
                 } label: { Image(systemName: "ellipsis.circle") }
             }
@@ -1052,7 +1053,7 @@ enum ImpExport {
         }
     }
 
-    private static func drawInk(_ key: String, _ i: Int, in r: CGRect) {
+    static func drawInk(_ key: String, _ i: Int, in r: CGRect) {
         guard let dr = PDFInk.load(key, i) else { return }
         let w = PDFInk.width(key, i) ?? max(dr.bounds.maxX, 1)
         let h = w * r.height / max(1, r.width)
