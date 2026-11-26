@@ -118,6 +118,7 @@ struct RouteView: View {
         case .subject(.learn, "math"): MathBookListView()
         case .subject(.quiz, "math"): MathQuizHome()
         case .subject(.progress, "math"): MathStatsView()
+        case .subject(.dse, "math"): MathPapersHome()
         case .subject(.learn, "zh"): MathBookListView(subj: "zh")
         case .subject(.quiz, "zh"): MathQuizHome(subj: "zh")
         case .subject(.progress, "zh"): MathStatsView(subj: "zh")
@@ -155,7 +156,7 @@ struct SubjectListView: View {
     @State private var editing: EditMode = .inactive
     private var subjects: [Subject] {
         _ = orderRaw
-        return Subject.ordered.filter { section == .learn || section == .quiz || section == .progress || !$0.bundled }
+        return Subject.ordered.filter { section == .learn || section == .quiz || section == .progress || !$0.bundled || $0.id == "math" }
     }
     var body: some View {
         List {
@@ -201,6 +202,7 @@ struct SubjectListView: View {
     }
 
     private func detail(_ sub: Subject) -> String {
+        if sub.id == "math" && section == .dse { return T("HKCEE by topic · school papers", "HKCEE 按课题 · 学校卷") }
         if sub.id == "zh" {
             let m = MathLibrary.shared
             let chs = m.chapters("zh")

@@ -358,7 +358,7 @@ struct MathQuizRunner: View {
             Image(systemName: "checkmark.seal.fill").font(.system(size: 54)).foregroundStyle(Color.accentColor)
             Text("\(got) / \(items.count)").font(.largeTitle.bold().monospacedDigit())
             Text(T("\(picked.count) answered", "已答 \(picked.count) 题")).foregroundStyle(.secondary)
-            if case .set = spec { PortalStatusView(attempt: attempt).font(.subheadline) }
+            if case .set(let sid) = spec, MathMC.shared.set(sid)?.kind != "pastpaper" { PortalStatusView(attempt: attempt).font(.subheadline) }
             HStack {
                 Button(T("Review", "回看")) { index = 0 }.buttonStyle(.bordered)
                 Button(T("New round", "再来一轮")) { picked = [:]; index = 0; attempt = UUID().uuidString; ScratchStore.shared.session("quiz-\(spec)-\(Date().timeIntervalSince1970)"); build() }.buttonStyle(.borderedProminent)
@@ -368,7 +368,7 @@ struct MathQuizRunner: View {
         .onAppear {
             prog.saveRun(RunRecord(t: started, title: title, got: got, tot: items.count))
             ScratchStore.shared.clear()
-            if case .set(let id) = spec, let set = MathMC.shared.set(id) {
+            if case .set(let id) = spec, let set = MathMC.shared.set(id), set.kind != "pastpaper" {
                 // One bit per portal question, in the portal's order (any variant).
                 let ok = Dictionary(items.map { ($0.q.id, picked[$0.id] == $0.v.a ? 1 : 0) }, uniquingKeysWith: { a, _ in a })
                 PortalSubmit.shared.submit(setID: set.id, attempt: attempt, answers: set.qs.map { ok[$0.id] ?? 0 })
