@@ -314,6 +314,11 @@ struct MathQuizRunner: View {
                         picked[it.id] = ci
                         prog.record(MathMC.key(it.q), ok: isAns)
                         prog.marks[MathMC.key(it.q)] = isAns
+                        // Instant feedback: move on after 1 s, only when right (wrong stays so the explanation can be read).
+                        if isAns, UserDefaults.standard.bool(forKey: "autoNext"), index < items.count - 1 {
+                            let here = index
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { if index == here { withAnimation(.snappy) { index += 1 } } }
+                        }
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .firstTextBaseline, spacing: 10) {

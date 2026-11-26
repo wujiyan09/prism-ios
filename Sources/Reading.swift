@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreText
 
 /// Apple Books–style reading settings for content (cards, questions, options, solutions).
 enum Reading {
@@ -7,18 +8,21 @@ enum Reading {
     static let lineDefault = 5.0, paraDefault = 12.0, marginDefault = 16.0, sizeDefault = 1.0
     static let keys = [lineKey, paraKey, marginKey, sizeKey]
 
-    static func font(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+    static func font(_ size: CGFloat, weight: Font.Weight = .regular, serif: Bool = false) -> Font {
         let scale = UserDefaults.standard.object(forKey: sizeKey) as? Double ?? sizeDefault
-        return Font(uiFont(size * scale, weight: weight))
+        return Font(uiFont(size * scale, weight: weight, serif: serif))
     }
 
     /// Times New Roman for Latin, PingFang SC for CJK, as one cascade font so sizes and bold match.
-    static func uiFont(_ size: CGFloat, weight: Font.Weight = .regular) -> UIFont {
+    /// serif: 中文 content — Songti TC (宋體) for CJK, Times New Roman for Latin; PingFang if Songti isn't downloaded yet.
+    static func uiFont(_ size: CGFloat, weight: Font.Weight = .regular, serif: Bool = false) -> UIFont {
         let heavy = weight == .bold || weight == .semibold || weight == .heavy || weight == .black
         let latin = heavy ? "TimesNewRomanPS-BoldMT" : "TimesNewRomanPSMT"
         let cjk = heavy ? "PingFangSC-Semibold" : (weight == .medium ? "PingFangSC-Medium" : "PingFangSC-Regular")
-        let d = UIFontDescriptor(name: latin, size: size)
-            .addingAttributes([.cascadeList: [UIFontDescriptor(name: cjk, size: size)]])
+        var list: [UIFontDescriptor] = []
+        if serif, SongtiFont.ready { list.append(UIFontDescriptor(name: heavy ? SongtiFont.bold : SongtiFont.regular, size: size)) }
+        list.append(UIFontDescriptor(name: cjk, size: size))
+        let d = UIFontDescriptor(name: latin, size: size).addingAttributes([.cascadeList: list])
         return UIFont(descriptor: d, size: size)
     }
 }
@@ -101,4 +105,26 @@ struct ReadingSettingsView: View {
             Slider(value: value, in: r, step: step)
         }
     }
+}
+
+
+/// Songti TC is an Apple downloadable system font on iOS/iPadOS: ask for it once, use it when it's in.
+enum SongtiFont {
+    static let regular = "STSongti-TC-Regular", bold = "STSongti-TC-Bold"
+    static var ready: Bool { UIFont(name: regular, size: 12) != nil }
+    static func request() {
+        guard !ready else { return }
+        let ds = [regular, bold].map { CTFontDescriptorCreateWithNameAndSize($0 as CFString, 0) } as CFArray
+        CTFontDescriptorMatchFontDescriptorsWithProgressHandler(ds, nil) { state, _ in
+            if state == .didFinish { DispatchQueue.main.async { NotificationCenter.default.post(name: .songtiReady, object: nil) } }
+            return true
+        }
+    }
+}
+extension Notification.Name { static let songtiReady = Notification.Name("songtiReady") }
+
+private struct ZhSerifKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    /// 中文 subject content uses Songti TC.
+    var zhSerif: Bool { get { self[ZhSerifKey.self] } set { self[ZhSerifKey.self] = newValue } }
 }

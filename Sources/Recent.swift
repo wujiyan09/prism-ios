@@ -62,7 +62,7 @@ final class RecentStore {
             return nil
         case .mathQuiz(let spec):
             switch spec {
-            case .set(let id): return id.hasPrefix("z-") ? "zh" : "math"
+            case .set(let id): return id.lowercased().hasPrefix("z-") ? "zh" : "math"
             case .custom(let ids, _, _): return ids.first.map { m(String($0.split(separator: ":").first ?? "")) }
             }
         default: return nil

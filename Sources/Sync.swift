@@ -158,6 +158,7 @@ enum SyncRecords {
         o["quiz"] = j(p.quiz)
         for (k, v) in DailyStore.shared.results { o["daily/" + k] = j(v) }
         for e in ExamStore.shared.exams { o["exam/" + e.id.uuidString] = j(e) }
+        for (k, v) in InboxStore.shared.items { o["inbox/" + k] = j(v) }
         for (k, v) in DSStore.shared.collect() { o[k] = v }
         let u = UserDefaults.standard
         for k in settingKeys {
@@ -179,6 +180,7 @@ enum SyncRecords {
         var hist = p.hist, runs = p.runs, sheets = p.sheets, seen = p.seen, learned = p.learned, quiz = p.quiz, marks = p.marks, scores = p.scores
         var daily = DailyStore.shared.results
         var exams = ExamStore.shared.exams
+        var inbox = InboxStore.shared.items
         func split(_ k: String) -> (String, String) {
             guard let i = k.firstIndex(of: "/") else { return (k, "") }
             return (String(k[..<i]), String(k[k.index(after: i)...]))
@@ -199,6 +201,7 @@ enum SyncRecords {
             case "sc": scores[id] = r.d ? nil : r.v.flatMap { Int($0) }
             case "quiz": if let x = d(r.v, QuizPrefs.self) { quiz = x }
             case "daily": daily[id] = r.d ? nil : d(r.v, DailyResult.self)
+            case "inbox": inbox[id] = r.d ? nil : d(r.v, InboxItem.self)
             case "exam":
                 exams.removeAll { $0.id.uuidString == id }
                 if !r.d, let x = d(r.v, Exam.self) { exams.append(x) }
@@ -221,6 +224,7 @@ enum SyncRecords {
         if recs.contains(where: { $0.k.hasPrefix("sc/") }) { p.scores = scores }
         if recs.contains(where: { $0.k.hasPrefix("daily/") }) { DailyStore.shared.results = daily }
         DSStore.shared.apply(ds)
+        if recs.contains(where: { $0.k.hasPrefix("inbox/") }) { InboxStore.shared.items = inbox }
         if recs.contains(where: { $0.k.hasPrefix("exam/") }) { ExamStore.shared.exams = exams.sorted { $0.date < $1.date } }
     }
 }

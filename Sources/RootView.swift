@@ -127,6 +127,7 @@ struct SectionRoot: View {
         case .learn, .dse, .quiz, .progress: SubjectListView(section: section)
         case .tools: ToolsView()
         case .settings: SettingsView()
+        case .inbox: InboxView()
         case .plan: PlanListView()
         case .daily: DailyListView()
         }
@@ -135,7 +136,25 @@ struct SectionRoot: View {
 
 struct RouteView: View {
     let route: Route
+    /// 中文 content screens get the Songti serif.
+    private var zh: Bool {
+        switch route {
+        case .subject(_, "zh"): return true
+        case .mathChapter(let id), .mathCards(let id, _), .mathSets(let id): return id.hasPrefix("z-")
+        case .mathItem(let id): return MathLibrary.shared.item(id)?.0.isZh ?? false
+        case .mathBook(let id): return MathLibrary.shared.books("zh").contains { $0.id == id }
+        case .mathQuiz(let s):
+            switch s {
+            case .set(let id): return id.lowercased().hasPrefix("z-")
+            case .custom(let chs, _, _): return !chs.isEmpty && chs.allSatisfy { $0.hasPrefix("z-") }
+            }
+        default: return false
+        }
+    }
     var body: some View {
+        content.environment(\.zhSerif, zh)
+    }
+    @ViewBuilder private var content: some View {
         switch route {
         case .chapter(let id): ChapterView(chapterID: id)
         case .cards(let id, let i): CardPagerView(chapterID: id, start: i)
@@ -336,6 +355,7 @@ struct MoreRoot: View {
         case .learn: return T("Textbooks and chapters", "课本和章节")
         case .quiz: return T("MC quizzes by chapter", "按章节做选择题")
         case .plan: return T("Test-week plans", "测验周计划")
+        case .inbox: return T("Ideas, to-dos and notes", "想法、待办和笔记")
         case .settings: return ""
         }
     }

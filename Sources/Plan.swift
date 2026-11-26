@@ -15,8 +15,10 @@ struct Exam: Codable, Identifiable, Hashable {
     var done: [String: Double] = [:]   // task id → time completed
     var remind = true
     var remindAt = 19 * 60              // minutes after midnight
+    var notes = ""
+    var source: String? = nil           // "quest" when added remotely by Quest
 
-    enum CodingKeys: String, CodingKey { case id, name, subject, date, chapters, topics, mastery, minutes, done, remind, remindAt }
+    enum CodingKeys: String, CodingKey { case id, name, subject, date, chapters, topics, mastery, minutes, done, remind, remindAt, notes, source }
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -31,6 +33,8 @@ struct Exam: Codable, Identifiable, Hashable {
         done = (try? c.decode([String: Double].self, forKey: .done)) ?? [:]
         remind = (try? c.decode(Bool.self, forKey: .remind)) ?? false
         remindAt = (try? c.decode(Int.self, forKey: .remindAt)) ?? 19 * 60
+        notes = (try? c.decode(String.self, forKey: .notes)) ?? ""
+        source = try? c.decode(String.self, forKey: .source)
     }
 }
 
@@ -270,6 +274,7 @@ struct PlanListView: View {
         .listStyle(.insetGrouped)
         .appList()
         .navigationTitle(T("Exam Plan", "备考计划"))
+        .refreshable { await SyncManager.shared.sync() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { editing = Exam() } label: { Label(T("Add exam", "添加考试"), systemImage: "plus") }
@@ -294,6 +299,10 @@ struct ExamRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(exam.name.isEmpty ? T("Exam", "考试") : exam.name).font(.headline)
+                if exam.source == "quest" {
+                    Text(T("from Quest", "来自 Quest")).font(.caption2).foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 2).background(Color.secondary.opacity(0.12), in: Capsule())
+                }
                 Spacer()
                 Text(n > 0 ? T("\(n) days left", "还有 \(n) 天") : (n == 0 ? T("Today", "今天") : T("Finished", "已结束")))
                     .font(.subheadline.monospacedDigit()).foregroundStyle(n <= 7 && n >= 0 ? Color.orange : .secondary)
@@ -322,7 +331,9 @@ struct ExamDetailView: View {
             let suggested = Planner.scopeChapters(e, lib).filter { Planner.suggestedMastery($0, prog) > (e.mastery[$0.id] ?? 1) }
             List {
                 Section {
-                    LabeledContent(T("Exam date", "考试日期"), value: e.date.formatted(date: .abbreviated, time: .omitted))
+                    LabeledContent(T("Exam date", "考试日期"), value: e.date.formatted(date: .abbreviated, time: Calendar.current.component(.hour, from: e.date) == 0 && Calendar.current.component(.minute, from: e.date) == 0 ? .omitted : .shortened))
+                    if !e.notes.isEmpty { DSMarkdown(text: e.notes) }
+                    if e.source == "quest" { Text(T("Added by Quest", "来自 Quest")).font(.caption).foregroundStyle(.secondary) }
                     LabeledContent(T("Days left", "剩余天数"), value: "\(max(0, n))")
                     LabeledContent(T("Daily budget", "每日时间"), value: T("\(e.minutes) min", "\(e.minutes) 分钟"))
                     LabeledContent(T("Chapters", "章节"), value: "\(e.usesMathLib ? Planner.zhChapters(e).count : Planner.scopeChapters(e, lib).count)")

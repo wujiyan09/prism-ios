@@ -16,6 +16,7 @@ struct ICTApp: App {
                 .environment(exams)
                 .task { if !library.loaded { await library.load() }; Reminders.shared.reschedule() }
                 .task { Reminders.shared.setUp() }
+                .task { SongtiFont.request() }
                 .task { await MathContent.shared.sync() }
                 .task { await PortalSubmit.shared.flush() }
                 .task { SyncManager.shared.start() }
@@ -94,7 +95,7 @@ extension View {
 // MARK: - Sections & navigation
 
 enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
-    case daily, learn, dse, quiz, plan, tools, progress, settings
+    case daily, learn, dse, quiz, plan, tools, progress, inbox, settings
     var id: String { rawValue }
     func title(_ T: Tr) -> String {
         switch self {
@@ -105,6 +106,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
         case .daily: return T("Daily Practice", "每日练习")
         case .tools: return T("Tools", "工具")
         case .progress: return T("Progress", "进度")
+        case .inbox: return T("Inbox", "收件箱")
         case .settings: return T("Settings", "设置")
         }
     }
@@ -117,6 +119,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
         case .daily: return "pencil.and.list.clipboard"
         case .tools: return "wrench.and.screwdriver"
         case .progress: return "chart.bar"
+        case .inbox: return "tray"
         case .settings: return "gearshape"
         }
     }
@@ -154,6 +157,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
         case .daily: return .pink
         case .tools: return .indigo
         case .progress: return .teal
+        case .inbox: return .brown
         case .settings: return .gray
         }
     }

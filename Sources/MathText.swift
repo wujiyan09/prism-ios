@@ -121,6 +121,7 @@ struct MathText: View {
     var weight: Font.Weight = .regular
     var color: Color = .primary
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.zhSerif) private var zhSerif
 
     @AppStorage(Reading.lineKey) private var line = Reading.lineDefault
     @AppStorage(Reading.paraKey) private var para = Reading.paraDefault
@@ -191,14 +192,14 @@ struct MathText: View {
 
     /// One paragraph as a single wrapping Text with maths images inline.
     func inline(_ s: String) -> Text {
-        MathText.inlineText(s, size: size, weight: weight, color: uiColor)
+        MathText.inlineText(s, size: size, weight: weight, color: uiColor, serif: zhSerif)
     }
 
-    static func inlineText(_ s: String, size: CGFloat, weight: Font.Weight = .regular, color: UIColor) -> Text {
+    static func inlineText(_ s: String, size: CGFloat, weight: Font.Weight = .regular, color: UIColor, serif: Bool = false) -> Text {
         var result = Text("")
         var i = s.startIndex
         var buf = ""
-        func flush() { if !buf.isEmpty { result = result + styled(buf, size: size, weight: weight); buf = "" } }
+        func flush() { if !buf.isEmpty { result = result + styled(buf, size: size, weight: weight, serif: serif); buf = "" } }
         while i < s.endIndex {
             let ch = s[i]
             if ch == "\\", s.index(after: i) < s.endIndex, s[s.index(after: i)] == "$" {
@@ -226,7 +227,7 @@ struct MathText: View {
     }
 
     /// **bold**, ==highlight==, __underline__, *italic* for plain text runs; curly quotes like the site.
-    private static func styled(_ s: String, size: CGFloat, weight: Font.Weight) -> Text {
+    private static func styled(_ s: String, size: CGFloat, weight: Font.Weight, serif: Bool = false) -> Text {
         var a = AttributedString()
         let pattern = #"\*\*(.+?)\*\*|==(.+?)==|__(.+?)__|(?<![*\w])\*([^*\s][^*]*?)\*(?!\*)"#
         let re = try? NSRegularExpression(pattern: pattern)
@@ -234,21 +235,21 @@ struct MathText: View {
         var last = 0
         func plain(_ t: String) -> AttributedString {
             var x = AttributedString(t)
-            x.font = Reading.font(size, weight: weight)
+            x.font = Reading.font(size, weight: weight, serif: serif)
             return x
         }
         for m in re?.matches(in: s, range: NSRange(location: 0, length: ns.length)) ?? [] {
             if m.range.location > last { a += plain(ns.substring(with: NSRange(location: last, length: m.range.location - last))) }
             if m.range(at: 1).location != NSNotFound {
-                var x = AttributedString(ns.substring(with: m.range(at: 1))); x.font = Reading.font(size, weight: .bold); a += x
+                var x = AttributedString(ns.substring(with: m.range(at: 1))); x.font = Reading.font(size, weight: .bold, serif: serif); a += x
             } else if m.range(at: 2).location != NSNotFound {
-                var x = AttributedString(ns.substring(with: m.range(at: 2))); x.font = Reading.font(size, weight: .semibold)
+                var x = AttributedString(ns.substring(with: m.range(at: 2))); x.font = Reading.font(size, weight: .semibold, serif: serif)
                 x.backgroundColor = Color.yellow.opacity(0.28); a += x
             } else if m.range(at: 3).location != NSNotFound {
-                var x = AttributedString(ns.substring(with: m.range(at: 3))); x.font = Reading.font(size, weight: weight)
+                var x = AttributedString(ns.substring(with: m.range(at: 3))); x.font = Reading.font(size, weight: weight, serif: serif)
                 x.underlineStyle = .single; a += x
             } else if m.range(at: 4).location != NSNotFound {
-                var x = AttributedString(ns.substring(with: m.range(at: 4))); x.font = Reading.font(size, weight: weight).italic(); a += x
+                var x = AttributedString(ns.substring(with: m.range(at: 4))); x.font = Reading.font(size, weight: weight, serif: serif).italic(); a += x
             }
             last = m.range.location + m.range.length
         }
