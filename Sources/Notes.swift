@@ -354,6 +354,20 @@ struct NotesLibraryView: View {
         sync(); return !ids.isEmpty
     }
 
+    @ViewBuilder private var notesHeader: some View { if !store.children(folder).isEmpty { Text("笔记") } }
+    private func noteRow(_ n: NoteDoc) -> some View {
+        NavigationLink { NoteDocView(id: n.id) } label: { row(n) }
+            .tag(n.id)
+            .draggable(n.id)
+            .swipeActions { Button("删除", role: .destructive) { confirm = [n.id] } }
+            .contextMenu { noteMenu(n) }
+    }
+    @ViewBuilder private func noteMenu(_ n: NoteDoc) -> some View {
+        Button { field = n.title; rename = n } label: { Label("重命名", systemImage: "pencil") }
+        Button { field = n.folder; moving = n } label: { Label("移到文件夹", systemImage: "folder") }
+        Button(role: .destructive) { confirm = [n.id] } label: { Label("删除", systemImage: "trash") }
+    }
+
     var body: some View {
         List(selection: $selection) {
             folderSection
@@ -363,18 +377,8 @@ struct NotesLibraryView: View {
             }
             ForEach(groups, id: \.0) { g in
                 Section {
-                    ForEach(g.1) { n in
-                        NavigationLink { NoteDocView(id: n.id) } label: { row(n) }
-                            .tag(n.id)
-                            .draggable(n.id)
-                            .swipeActions { Button("删除", role: .destructive) { confirm = [n.id] } }
-                            .contextMenu {
-                                Button { field = n.title; rename = n } label: { Label("重命名", systemImage: "pencil") }
-                                Button { field = n.folder; moving = n } label: { Label("移到文件夹", systemImage: "folder") }
-                                Button(role: .destructive) { confirm = [n.id] } label: { Label("删除", systemImage: "trash") }
-                            }
-                    }
-                } header: { if !store.children(folder).isEmpty { Text("笔记") } }
+                    ForEach(g.1) { n in noteRow(n) }
+                } header: { notesHeader }
                 .listRowBackground(Color.cardBackground)
             }
             if !store.remote.isEmpty && search.isEmpty && folder.isEmpty {
