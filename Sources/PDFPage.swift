@@ -13,6 +13,7 @@ struct PDFPage: View {
     @State private var pageIndex = 0
     @State private var ink = InkProvider()
     @State private var inkOn = false
+    @State private var vctl = ViewCtl()
 
     private var file: URL {
         let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("papers", isDirectory: true)
@@ -24,7 +25,8 @@ struct PDFPage: View {
     var body: some View {
         Group {
             if let doc {
-                PDFKitView(doc: doc, onPage: { pageIndex = $0 }, ink: ink, inkKey: inkID ?? ("pdf:" + url.absoluteString), inkTitle: title).ignoresSafeArea(edges: .bottom)
+                PDFKitView(doc: doc, onPage: { pageIndex = $0 }, ink: ink, inkKey: inkID ?? ("pdf:" + url.absoluteString), inkTitle: title, ctl: vctl).ignoresSafeArea(edges: .bottom)
+                    .overlay(alignment: .topTrailing) { ViewHUD(ctl: vctl) }
             } else if failed {
                 ContentUnavailableView {
                     Label(T("Couldn't load the paper", "试卷下载失败"), systemImage: "wifi.exclamationmark")
@@ -78,7 +80,14 @@ struct PDFKitView: UIViewRepresentable {
     var ink: InkProvider? = nil
     var inkKey = ""
     var inkTitle = ""
+    var ctl: ViewCtl? = nil
     final class Coord: NSObject {
+        var cmd: CmdZoom?
+        weak var ctl: ViewCtl?
+        @objc func scaled(_ n: Notification) {
+            guard let v = n.object as? PDFView, v.scaleFactorForSizeToFit > 0 else { return }
+            ctl?.report(zoom: v.scaleFactor / v.scaleFactorForSizeToFit)
+        }
         var onPage: ((Int) -> Void)?
         var owner = ""
         weak var view: PDFView?
@@ -86,6 +95,7 @@ struct PDFKitView: UIViewRepresentable {
             guard let v = n.object as? PDFView, let p = v.currentPage, let d = v.document else { return }
             let i = d.index(for: p)
             PadHub.shared.setIndex(owner, i)
+            ctl?.report(page: i, of: d.pageCount)
             DispatchQueue.main.async { self.onPage?(i) }
         }
         /// Main window follows the pad's page.
@@ -114,6 +124,27 @@ struct PDFKitView: UIViewRepresentable {
         }
         context.coordinator.view = v
         v.document = doc
+        if let ctl {
+            let c = context.coordinator
+            c.ctl = ctl
+            ctl.view = v
+            NotificationCenter.default.addObserver(c, selector: #selector(Coord.scaled(_:)), name: .PDFViewScaleChanged, object: v)
+            ctl.setZoom = { [weak v] z in guard let v else { return }; v.scaleFactor = v.scaleFactorForSizeToFit * z }
+            ctl.goPage = { [weak v] i in if let v, let p = v.document?.page(at: i) { v.go(to: p) } }
+            ctl.thumb = { [weak doc] i in doc?.page(at: i)?.thumbnail(of: CGSize(width: 180, height: 240), for: .mediaBox) }
+            ctl.applyLock = { [weak v] on in
+                guard let v else { return }
+                let fit = v.scaleFactorForSizeToFit
+                v.minScaleFactor = on ? v.scaleFactor : fit * 0.5
+                v.maxScaleFactor = on ? v.scaleFactor : fit * 4
+            }
+            ctl.report(page: 0, of: doc.pageCount)
+            ctl.bind(key: "pdf:" + inkKey)
+            c.cmd = CmdZoom.install(on: v, apply: { [weak v] k, _ in
+                guard let v else { return }
+                v.scaleFactor = min(v.maxScaleFactor, max(v.minScaleFactor, v.scaleFactor * k))
+            }, blocked: { [weak ctl] in ctl?.locked ?? false })
+        }
         return v
     }
     static func dismantleUIView(_ v: PDFView, coordinator: Coord) {

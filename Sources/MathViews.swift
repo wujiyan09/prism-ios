@@ -888,13 +888,15 @@ struct ScratchPane: View {
     @State private var placed: [ScratchDraft.PlacedFig] = []
     @State private var pinned = true
     @State private var port = CanvasViewport()
+    @State private var vctl = ViewCtl()
 
     private var figKey: String { figs.map { "\($0.hash)" }.joined(separator: ",") }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            CanvasRep(itemID: sheetID, paper: paper, tools: tools, placed: $placed, port: port)
+            CanvasRep(itemID: sheetID, paper: paper, tools: tools, placed: $placed, port: port, ctl: vctl)
                 .id(sheetID)
+                .overlay(alignment: .topTrailing) { ViewHUD(ctl: vctl) }
             if !figs.isEmpty {
                 VStack(alignment: .trailing, spacing: 8) {
                     if pinned {
@@ -918,6 +920,7 @@ struct ScratchPane: View {
                     }
                 }
                 .padding(10)
+                .padding(.top, 50)
             }
         }
         .background(Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .black : .white }))
@@ -954,6 +957,7 @@ struct CanvasRep: UIViewRepresentable {
     let tools: Bool
     @Binding var placed: [ScratchDraft.PlacedFig]
     let port: CanvasViewport
+    var ctl: ViewCtl? = nil
 
     static let width: CGFloat = 2400
     /// A4 pages (595×842) at the sheet width.
@@ -1011,6 +1015,8 @@ struct CanvasRep: UIViewRepresentable {
         v.addGestureRecognizer(tap)
         // One shared picker for every canvas, so the tool chosen is the tool used.
         let picker = CanvasRep.sharedPicker
+        picker.colorUserInterfaceStyle = .unspecified   // scratch follows the theme (black paper in dark)
+        picker.overrideUserInterfaceStyle = .unspecified
         picker.addObserver(v)
         picker.addObserver(context.coordinator)
         v.tool = picker.selectedTool
@@ -1031,7 +1037,25 @@ struct CanvasRep: UIViewRepresentable {
             co?.padDriven = false
         }
         co.link = link
+        link.live.dark = { [weak v] in v?.traitCollection.userInterfaceStyle == .dark }
         PadHub.shared.activate(PadSources.scratch(itemID, height: h))
+        if let ctl {
+            ctl.view = v
+            ctl.setZoom = { [weak v] z in v?.setZoomScale(z, animated: true) }
+            ctl.goPage = { [weak v] i in
+                guard let v else { return }
+                let maxY = max(0, v.contentSize.height - v.bounds.height)
+                v.setContentOffset(CGPoint(x: v.contentOffset.x, y: min(maxY, CGFloat(i) * CanvasRep.pageH * v.zoomScale)), animated: true)
+            }
+            ctl.applyLock = { [weak v] on in
+                guard let v else { return }
+                v.minimumZoomScale = on ? v.zoomScale : 0.5
+                v.maximumZoomScale = on ? v.zoomScale : 4
+            }
+            ctl.bind(key: "scratch:" + itemID)
+            ctl.report(page: 0, of: Int((h / CanvasRep.pageH).rounded()))
+            co.cmd = CmdZoom.install(on: v, apply: { [weak v] k, p in v?.zoom(by: k, at: p) }, blocked: { [weak ctl] in ctl?.locked ?? false })
+        }
         return v
     }
 
@@ -1068,7 +1092,12 @@ struct CanvasRep: UIViewRepresentable {
         var addButton: UIButton?
         var link: PadLink?
         var padDriven = false
+        var cmd: CmdZoom?
         func scrollViewDidScroll(_ sv: UIScrollView) {
+            if let ctl = parent.ctl, sv.zoomScale > 0 {
+                let y = (sv.contentOffset.y + sv.bounds.height / 2) / sv.zoomScale
+                ctl.report(page: min(Int(height / CanvasRep.pageH) - 1, max(0, Int(y / CanvasRep.pageH))), of: Int((height / CanvasRep.pageH).rounded()))
+            }
             guard !padDriven, let link, link.isOn, PadHub.shared.mainFollows, sv.zoomScale > 0 else { return }
             let y = max(0, sv.contentOffset.y) / sv.zoomScale
             if abs(PadHub.shared.scratchY - y) > 2 { PadHub.shared.scratchY = y }
@@ -1130,6 +1159,7 @@ struct CanvasRep: UIViewRepresentable {
             guard let u = under else { return }
             u.transform = CGAffineTransform(scaleX: sv.zoomScale, y: sv.zoomScale)
             u.layer.position = .zero
+            parent.ctl?.report(zoom: sv.zoomScale)
             layoutSelection()
             layoutAdd(sv)
         }
@@ -1326,10 +1356,6 @@ struct CanvasRep: UIViewRepresentable {
                     line.backgroundColor = UIColor.separator
                     u.addSubview(line)
                 }
-                let l = UILabel(frame: CGRect(x: size.width - 260, y: y + CanvasRep.pageH - 70, width: 220, height: 50))
-                l.text = "\(i + 1) / \(max(1, pages))"; l.textAlignment = .right
-                l.font = .systemFont(ofSize: 34); l.textColor = .tertiaryLabel
-                u.addSubview(l)
             }
             imageViews = []
             for p in placed {

@@ -515,10 +515,13 @@ struct ImportPaperView: View {
         } else { ProgressView() }
     }
 
+    @State private var vctl = ViewCtl()
+    @State private var msCtl = ViewCtl()
     private func pdf(_ d: PDFDocument, isMS: Bool) -> some View {
         PDFKitView(doc: d, onPage: { if !isMS { page = $0 } }, ink: isMS ? msInk : ink,
-                   inkKey: "imp:" + id + (isMS ? "-ms" : ""), inkTitle: (p?.name ?? "") + (isMS ? " · 评分标准" : ""))
+                   inkKey: "imp:" + id + (isMS ? "-ms" : ""), inkTitle: (p?.name ?? "") + (isMS ? " · 评分标准" : ""), ctl: isMS ? msCtl : vctl)
             .id((isMS ? "ms" : "p") + (swap ? "1" : "0"))
+            .overlay(alignment: .topTrailing) { ViewHUD(ctl: isMS ? msCtl : vctl) }
             .deepSeek(pageContext(d, isMS: isMS))
     }
 

@@ -80,7 +80,25 @@ final class PadHub {
     func forget(_ ch: String) { latest[ch] = nil }
 
     // Live mid-stroke preview (pad → main), points in logical units. nil points = clear.
-    struct Live { var points: [CGPoint]; var color: UIColor; var width: CGFloat }
+    enum Kind { case pen, pencil, marker, eraser, bitmapEraser, other }
+    /// width: logical units; forces: 0…1 per point (empty = constant width).
+    struct Live { var points: [CGPoint]; var color: UIColor; var width: CGFloat; var forces: [CGFloat] = []; var kind: Kind = .pen }
+    static func describe(_ t: PKTool) -> (Kind, UIColor, CGFloat) {
+        if let i = t as? PKInkingTool {
+            switch i.inkType {
+            case .pen: return (.pen, i.color, i.width)
+            case .pencil: return (.pencil, i.color, i.width)
+            case .marker: return (.marker, i.color, i.width)
+            default: return (.other, i.color, i.width)
+            }
+        }
+        if let e = t as? PKEraserTool {
+            var w: CGFloat = 16
+            if #available(iOS 16.4, *) { w = e.width }
+            return (e.eraserType == .bitmap ? .bitmapEraser : .eraser, .systemGray, w)
+        }
+        return (.other, .systemGray, 6)
+    }
     @ObservationIgnored private var liveListeners: [String: [(id: ObjectIdentifier, f: (Live?) -> Void)]] = [:]
     func live(_ ch: String, _ l: Live?) { for x in liveListeners[ch] ?? [] { x.f(l) } }
     func listenLive(_ ch: String, _ o: AnyObject, _ f: @escaping (Live?) -> Void) {
@@ -115,19 +133,64 @@ final class PadHub {
 final class LivePreview {
     let layer = CAShapeLayer()
     init() { layer.fillColor = nil; layer.lineCap = .round; layer.lineJoin = .round; layer.zPosition = 100 }
-    /// k: logical → host-layer units.
-    func show(_ l: PadHub.Live?, k: CGFloat, in host: CALayer) {
+    /// Paper colour for the bitmap-eraser preview.
+    var paper: UIColor = .white
+    /// k: logical → host-layer units. dark: host shows ink inverted (dark scratch).
+    func show(_ l: PadHub.Live?, k: CGFloat, in host: CALayer, dark: Bool = false) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        guard let l, l.points.count > 0 else { layer.path = nil; return }
+        guard let l, l.points.count > 0, l.kind != .eraser else { layer.path = nil; return }
         if layer.superlayer !== host { host.addSublayer(layer) }
+        let pts = l.points.map { CGPoint(x: $0.x * k, y: $0.y * k) }
+        var colour = l.color
+        if dark { colour = PKInkingTool.convertColor(colour, from: .light, to: .dark) }
+        var alpha: CGFloat = 1
+        var base = l.width * k
+        switch l.kind {
+        case .pencil: alpha = 0.75
+        case .marker: alpha = 0.5
+        case .bitmapEraser: colour = paper
+        default: break
+        }
+        if l.kind == .marker || l.kind == .bitmapEraser || l.forces.count != pts.count {
+            // Constant width: one stroked path.
+            let p = UIBezierPath()
+            p.move(to: pts[0])
+            for q in pts.dropFirst() { p.addLine(to: q) }
+            if pts.count == 1 { p.addLine(to: CGPoint(x: pts[0].x + 0.1, y: pts[0].y)) }
+            layer.path = p.cgPath
+            layer.fillColor = nil
+            layer.strokeColor = colour.withAlphaComponent(alpha).cgColor
+            layer.lineWidth = max(1, base)
+            layer.lineCap = l.kind == .marker ? .square : .round
+            return
+        }
+        // Pressure-sensitive (pen / pencil): filled outline of round segments, width from force.
+        if l.kind == .pencil { base *= 0.8 }
         let p = UIBezierPath()
-        p.move(to: CGPoint(x: l.points[0].x * k, y: l.points[0].y * k))
-        for q in l.points.dropFirst() { p.addLine(to: CGPoint(x: q.x * k, y: q.y * k)) }
-        if l.points.count == 1 { p.addLine(to: CGPoint(x: l.points[0].x * k + 0.1, y: l.points[0].y * k)) }
+        func w(_ i: Int) -> CGFloat { max(0.6, base * (0.35 + 0.9 * min(1, l.forces[i]))) / 2 }
+        for i in pts.indices {
+            let r = w(i)
+            p.append(UIBezierPath(ovalIn: CGRect(x: pts[i].x - r, y: pts[i].y - r, width: r * 2, height: r * 2)))
+            if i > 0 {
+                let a = pts[i - 1], b = pts[i], ra = w(i - 1)
+                let dx = b.x - a.x, dy = b.y - a.y, d = max(0.001, hypot(dx, dy))
+                let nx = -dy / d, ny = dx / d
+                let q = UIBezierPath()
+                q.move(to: CGPoint(x: a.x + nx * ra, y: a.y + ny * ra))
+                q.addLine(to: CGPoint(x: b.x + nx * r, y: b.y + ny * r))
+                q.addLine(to: CGPoint(x: b.x - nx * r, y: b.y - ny * r))
+                q.addLine(to: CGPoint(x: a.x - nx * ra, y: a.y - ny * ra))
+                q.close()
+                p.append(q)
+            }
+        }
+        p.usesEvenOddFillRule = false
         layer.path = p.cgPath
-        layer.strokeColor = l.color.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)).cgColor
-        layer.lineWidth = max(1, l.width * k)
+        layer.fillRule = .nonZero
+        layer.fillColor = colour.withAlphaComponent(alpha).cgColor
+        layer.strokeColor = nil
+        layer.lineWidth = 0
     }
     /// Pencil hover cursor: a dot at points[0]; width = diameter in logical units.
     func dot(_ l: PadHub.Live?, k: CGFloat, in host: CALayer) {
@@ -137,9 +200,15 @@ final class LivePreview {
         if layer.superlayer !== host { host.addSublayer(layer) }
         let r = max(3, l.width * k / 2)
         layer.path = UIBezierPath(ovalIn: CGRect(x: p.x * k - r, y: p.y * k - r, width: r * 2, height: r * 2)).cgPath
-        layer.fillColor = l.color.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)).withAlphaComponent(0.55).cgColor
-        layer.strokeColor = UIColor.white.withAlphaComponent(0.8).cgColor
-        layer.lineWidth = 1
+        if l.kind == .eraser || l.kind == .bitmapEraser {
+            layer.fillColor = UIColor.white.withAlphaComponent(0.25).cgColor
+            layer.strokeColor = UIColor.systemGray.cgColor
+            layer.lineWidth = 1.5
+        } else {
+            layer.fillColor = l.color.withAlphaComponent(0.55).cgColor
+            layer.strokeColor = UIColor.white.withAlphaComponent(0.8).cgColor
+            layer.lineWidth = 1
+        }
     }
 }
 
@@ -147,10 +216,15 @@ final class LivePreview {
 final class LiveHost {
     let stroke = LivePreview()
     let cursor = LivePreview()
+    var dark: () -> Bool = { false }
     func attach(_ ch: String, k: @escaping () -> CGFloat, host: @escaping () -> CALayer?) {
         PadHub.shared.listenLive(ch, self) { [weak self] l in
             guard let self, let h = host() else { return }
-            self.stroke.show(l, k: k(), in: h)
+            self.stroke.show(l, k: k(), in: h, dark: self.dark())
+            // Erasers: a cursor ring at the pen tip while erasing.
+            if let l, l.kind == .eraser || l.kind == .bitmapEraser, let last = l.points.last {
+                var c = l; c.points = [last]; self.cursor.dot(c, k: k(), in: h)
+            } else if l == nil { self.cursor.dot(nil, k: k(), in: h) }
         }
         PadHub.shared.listenLive("hover:" + ch, self) { [weak self] l in
             guard let self, let h = host() else { return }
@@ -162,7 +236,8 @@ final class LiveHost {
 
 /// Watches pen touches on the pad without interfering with PencilKit, streaming points (incl. coalesced) to the main window.
 final class PenTap: UIGestureRecognizer, UIGestureRecognizerDelegate {
-    var onPoints: (([CGPoint]) -> Void)?
+    var onPoints: (([CGPoint], [CGFloat]) -> Void)?
+    private var fs: [CGFloat] = []
     var onEnd: (() -> Void)?
     var onBegin: (() -> Void)?
     var onCancel: (() -> Void)?
@@ -175,17 +250,18 @@ final class PenTap: UIGestureRecognizer, UIGestureRecognizerDelegate {
     }
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
     override func touchesBegan(_ t: Set<UITouch>, with e: UIEvent) {
-        pts = []; onBegin?(); add(t, e)
+        pts = []; fs = []; onBegin?(); add(t, e)
     }
     override func touchesMoved(_ t: Set<UITouch>, with e: UIEvent) { add(t, e) }
     override func touchesEnded(_ t: Set<UITouch>, with e: UIEvent) { add(t, e); finish() }
     override func touchesCancelled(_ t: Set<UITouch>, with e: UIEvent) { pts = []; onCancel?(); state = .failed }
     private func add(_ t: Set<UITouch>, _ e: UIEvent) {
         guard let v = view, let touch = t.first else { return }
-        for c in e.coalescedTouches(for: touch) ?? [touch] { pts.append(c.location(in: v)) }
-        var show = pts
-        for p in e.predictedTouches(for: touch) ?? [] { show.append(p.location(in: v)) }
-        onPoints?(show)
+        func f(_ t: UITouch) -> CGFloat { t.maximumPossibleForce > 0 ? t.force / t.maximumPossibleForce : 0.5 }
+        for c in e.coalescedTouches(for: touch) ?? [touch] { pts.append(c.location(in: v)); fs.append(f(c)) }
+        var show = pts, sf = fs
+        for p in e.predictedTouches(for: touch) ?? [] { show.append(p.location(in: v)); sf.append(f(p)) }
+        onPoints?(show, sf)
     }
     private func finish() { pts = []; onEnd?(); state = .failed }
     override func reset() { pts = [] }
@@ -202,7 +278,7 @@ extension Notification.Name {
 final class PadLink {
     let channel: String
     weak var canvas: PKCanvasView?
-    private let live = LiveHost()
+    let live = LiveHost()
     private var on = false
     var isOn: Bool { on }
     private var obs: NSObjectProtocol?
@@ -304,6 +380,7 @@ struct PadView: View {
     @State private var hub = PadHub.shared
     @Environment(\.scenePhase) private var phase
     @State private var zoom: CGFloat = 1
+    @State private var zlock = false
 
     private var pageIndex: Int {
         guard let s = hub.source, !s.pages.isEmpty else { return 0 }
@@ -315,7 +392,7 @@ struct PadView: View {
             Group {
                 if let s = hub.source, !s.pages.isEmpty {
                     let p = s.pages[s.continuous ? 0 : pageIndex]
-                    PadCanvas(page: p, continuous: s.continuous, followY: hub.mainFollows && s.continuous ? hub.scratchY : nil, zoom: $zoom)
+                    PadCanvas(page: p, continuous: s.continuous, followY: hub.mainFollows && s.continuous ? hub.scratchY : nil, zoom: $zoom, locked: zlock)
                         .id(p.channel + "|\(Int(p.size.height))")
                         .ignoresSafeArea(edges: .bottom)
                 } else {
@@ -338,13 +415,20 @@ struct PadView: View {
         }
         .onChange(of: hub.index) { _, i in if hub.mainFollows && hub.padIndex != i { hub.padIndex = i } }
         .onChange(of: hub.mainFollows) { _, on in if on { hub.padIndex = hub.index } }
+        .onChange(of: hub.source?.owner, initial: true) { _, o in zlock = ZoomLock.get(o ?? "") }
+        .onReceive(NotificationCenter.default.publisher(for: .zoomLockChanged)) { n in
+            if let o = hub.source?.owner, (n.object as? String) == o { zlock = ZoomLock.get(o) }
+        }
     }
 
     @ToolbarContentBuilder private var bar: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if abs(zoom - 1) > 0.01 { Button("\(Int(zoom * 100))%") { zoom = 1 } }
+            if abs(zoom - 1) > 0.01 { Button("\(Int(zoom * 100))%") { if !zlock { zoom = 1 } } }
+            Button { if let o = hub.source?.owner { zlock.toggle(); ZoomLock.set(o, zlock) } } label: {
+                Label(zlock ? "解锁缩放" : "锁定缩放", systemImage: zlock ? "lock.fill" : "lock.open")
+            }
             Button { hub.mainFollows.toggle() } label: {
-                Label(hub.mainFollows ? "已与主窗口同步" : "独立浏览", systemImage: hub.mainFollows ? "lock.fill" : "lock.open")
+                Label(hub.mainFollows ? "已与主窗口同步" : "独立浏览", systemImage: hub.mainFollows ? "link" : "link.badge.plus")
             }
         }
     }
@@ -409,6 +493,7 @@ struct PadCanvas: UIViewRepresentable {
     let continuous: Bool
     let followY: CGFloat?
     @Binding var zoom: CGFloat
+    var locked = false
 
     func makeCoordinator() -> Coord { Coord(self) }
 
@@ -424,6 +509,7 @@ struct PadCanvas: UIViewRepresentable {
         if page.background() != nil {
             v.overrideUserInterfaceStyle = .light   // white paper: true ink colours, light tool palette
             c.picker.colorUserInterfaceStyle = .light
+            c.picker.overrideUserInterfaceStyle = .light
         }
         v.drawing = PadHub.shared.current(page.channel) ?? page.load()
         let under = UIView(frame: CGRect(origin: .zero, size: page.size))
@@ -443,13 +529,17 @@ struct PadCanvas: UIViewRepresentable {
         c.picker.addObserver(v)
         PadHub.shared.listen(page.channel, c) { [weak c] d in c?.remote(d) }
         let pen = PenTap(target: nil, action: nil)
-        pen.onBegin = { PadHub.shared.strokeSeq += 1 }
+        pen.onBegin = { [weak c] in
+            PadHub.shared.strokeSeq += 1
+            if let ch = c?.parent.page.channel { PadHub.shared.live("hover:" + ch, nil) }   // hover dot off at pen-down
+        }
         pen.onCancel = { [weak c] in if let ch = c?.parent.page.channel { PadHub.shared.live(ch, nil) } }
-        pen.onPoints = { [weak c, weak v] pts in
+        pen.onPoints = { [weak c, weak v] pts, fs in
             guard let c, let v else { return }
-            guard let ink = c.picker.selectedTool as? PKInkingTool else { return }
+            let (kind, color, width) = PadHub.describe(c.picker.selectedTool)
+            guard kind != .other else { return }
             let z = max(v.zoomScale, 0.0001)
-            PadHub.shared.live(c.parent.page.channel, .init(points: pts.map { CGPoint(x: $0.x / z, y: $0.y / z) }, color: ink.color, width: ink.width))
+            PadHub.shared.live(c.parent.page.channel, .init(points: pts.map { CGPoint(x: $0.x / z, y: $0.y / z) }, color: color, width: width, forces: fs, kind: kind))
         }
         pen.onEnd = { [weak c] in
             // Preview stays until this stroke's PKStroke commits; fallback if PencilKit drops it (e.g. a tap).
@@ -472,6 +562,10 @@ struct PadCanvas: UIViewRepresentable {
         let c = context.coordinator
         c.parent = self
         if v.bounds.width > 10 && abs(v.bounds.width - c.fittedWidth) > 1 { c.fit() }
+        if c.base > 0 {
+            v.minimumZoomScale = locked ? v.zoomScale : c.base * 0.5
+            v.maximumZoomScale = locked ? v.zoomScale : c.base * 4
+        }
         let target = c.base * zoom
         if !v.isZooming && abs(v.zoomScale - target) > 0.001 && c.base > 0 { v.setZoomScale(target, animated: true) }
         if let y = followY, continuous, abs(y - c.lastFollow) > 1 {
@@ -528,11 +622,11 @@ struct PadCanvas: UIViewRepresentable {
             case .began, .changed:
                 let z = max(v.zoomScale, 0.0001)
                 let p = g.location(in: v)
-                let tool = picker.selectedTool
-                let color = (tool as? PKInkingTool)?.color ?? .systemGray
-                let w = (tool as? PKInkingTool)?.width ?? 6
+                let (kind, color, w) = PadHub.describe(picker.selectedTool)
                 let lift = g.zOffset   // 0 (touching) … 1 (max hover height)
-                PadHub.shared.live(ch, .init(points: [CGPoint(x: p.x / z, y: p.y / z)], color: color, width: max(6, w) * (1 + 2 * lift)))
+                let eraser = kind == .eraser || kind == .bitmapEraser
+                PadHub.shared.live(ch, .init(points: [CGPoint(x: p.x / z, y: p.y / z)], color: color,
+                                             width: eraser ? w : max(6, w) * (1 + 2 * lift), kind: kind))
             default:
                 PadHub.shared.live(ch, nil)
             }

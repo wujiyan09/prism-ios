@@ -8,6 +8,7 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
     @Binding var zoom: CGFloat
     @Binding var jump: CGFloat?      // unscaled y to bring to the top
     var onScroll: (CGFloat) -> Void  // unscaled y at the view's centre
+    var locked = false
     @ViewBuilder let content: () -> Content
 
     func makeCoordinator() -> Coord { Coord() }
@@ -30,6 +31,11 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
         context.coordinator.host = host
         context.coordinator.parent = self
         context.coordinator.size = size
+        context.coordinator.cmd = CmdZoom.install(on: sv, apply: { [weak sv, weak c = context.coordinator] k, p in
+            guard let sv else { return }
+            sv.zoom(by: k, at: p)
+            if let par = c?.parent { DispatchQueue.main.async { par.zoom = sv.zoomScale } }
+        }, blocked: { [weak c = context.coordinator] in c?.parent?.locked ?? false })
         return sv
     }
 
@@ -37,6 +43,8 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
         let c = context.coordinator
         c.parent = self
         c.host?.rootView = content()
+        sv.minimumZoomScale = locked ? zoom : 0.5
+        sv.maximumZoomScale = locked ? zoom : 4
         if c.size != size, let hv = c.host?.view {
             c.size = size
             let z = sv.zoomScale
@@ -59,6 +67,7 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
         var parent: ZoomScroll?
         var host: UIHostingController<Content>?
         var size: CGSize = .zero
+        var cmd: CmdZoom?
 
         func viewForZooming(in s: UIScrollView) -> UIView? { host?.view }
         func scrollViewDidZoom(_ s: UIScrollView) { center(s) }

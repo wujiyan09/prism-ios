@@ -155,12 +155,14 @@ struct PPSchoolPaper: View {
     private var title: String { "\(info.yr) \(info.fm) \(info.sj) \(info.ak)" + (info.pp.isEmpty ? "" : " " + info.pp) }
     private var review: Bool { ReviewStore.shared.inReview(sheet) || info.p.isEmpty }
 
+    @State private var vctl = ViewCtl()
     var body: some View {
         WorkSplit(on: splitOn, sheetID: sheet, figs: [], ratio: 0.5) {
             Group {
                 if let d = (showMS && review) ? ms : paper ?? ms {
                     PDFKitView(doc: d, onPage: { page = $0 }, ink: ink, inkKey: "pp:" + info.id + (d === ms ? "-ms" : ""),
-                               inkTitle: title + (d === ms ? " · 评分标准" : "")).id(showMS)
+                               inkTitle: title + (d === ms ? " · 评分标准" : ""), ctl: vctl).id(showMS)
+                        .overlay(alignment: .topTrailing) { ViewHUD(ctl: vctl) }
                 } else {
                     DownloadOverlay()
                 }

@@ -551,6 +551,7 @@ struct NoteDocView: View {
     @State private var store = NoteStore.shared
     @State private var zoom: CGFloat = 1
     @State private var jump: CGFloat?
+    @State private var vctl = ViewCtl()
     @State private var current: String?
     @State private var selected: String?
     @State private var editing: NoteItem?
@@ -577,10 +578,22 @@ struct NoteDocView: View {
                     GeometryReader { geo in
                         let base = min(1000, max(200, geo.size.width - 32))
                         ZoomScroll(size: CGSize(width: base + 32, height: contentHeight(doc, base)), zoom: $zoom, jump: $jump,
-                                   onScroll: { y in pageAt(doc, base, y) }) {
+                                   onScroll: { y in pageAt(doc, base, y) }, locked: vctl.locked) {
                             pagesStack(doc, base)
                         }
-                        .overlay(alignment: .bottomTrailing) { zoomBadge }
+                        .overlay(alignment: .topTrailing) { ViewHUD(ctl: vctl) }
+                        .onAppear {
+                            vctl.goPage = { i in
+                                guard let d = NoteStore.shared.docs[id], d.pages.indices.contains(i) else { return }
+                                current = d.pages[i].id; jump = offset(d, base, d.pages[i].id)
+                            }
+                        }
+                        .onChange(of: base) { _, b in
+                            vctl.goPage = { i in
+                                guard let d = NoteStore.shared.docs[id], d.pages.indices.contains(i) else { return }
+                                current = d.pages[i].id; jump = offset(d, b, d.pages[i].id)
+                            }
+                        }
                         .onChange(of: showPages) { _, v in if !v, let c = current { jump = offset(doc, base, c) } }
                         .onReceive(NotificationCenter.default.publisher(for: .padPage)) { n in
                             guard (n.object as? String) == "note-" + id, let i = n.userInfo?["i"] as? Int, doc.pages.indices.contains(i) else { return }
@@ -597,7 +610,17 @@ struct NoteDocView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .deepSeek(ctx)
+        .onChange(of: zoom) { _, z in vctl.report(zoom: z) }
+        .onChange(of: pageIndex) { _, i in vctl.report(page: i, of: doc?.pages.count ?? 1) }
         .onAppear {
+            vctl.setZoom = { z in zoom = z }
+            vctl.thumb = { i in
+                guard let d = NoteStore.shared.docs[id], d.pages.indices.contains(i) else { return nil }
+                return NoteRender.background(id, d.pages[i], width: 180)
+            }
+            vctl.bind(key: "note-" + id)
+            vctl.report(page: pageIndex, of: doc?.pages.count ?? 1)
+            vctl.report(zoom: zoom)
             if current == nil { current = doc?.pages.first?.id }
             if let s = PadSources.note(id) { PadHub.shared.activate(s, index: pageIndex) }
         }
@@ -943,7 +966,7 @@ struct NoteCanvas: UIViewRepresentable {
         v.isUserInteractionEnabled = enabled
         if v.bounds.width > 10 && context.coordinator.loadedWidth != v.bounds.width { context.coordinator.load() }
         if v.window != nil {
-            if enabled && tools { context.coordinator.picker?.colorUserInterfaceStyle = .light }
+            if enabled && tools { context.coordinator.picker?.colorUserInterfaceStyle = .light; context.coordinator.picker?.overrideUserInterfaceStyle = .light }
             context.coordinator.picker?.setVisible(enabled && tools, forFirstResponder: v)
             if !enabled && v.isFirstResponder { v.resignFirstResponder() }
         }
@@ -953,6 +976,7 @@ struct NoteCanvas: UIViewRepresentable {
         coordinator.save()
         coordinator.picker?.removeObserver(v)
         coordinator.picker?.colorUserInterfaceStyle = .unspecified
+        coordinator.picker?.overrideUserInterfaceStyle = .unspecified
     }
 
     final class Coord: NSObject, PKCanvasViewDelegate {

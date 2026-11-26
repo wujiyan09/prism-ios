@@ -36,6 +36,7 @@ struct ICTApp: App {
         .commands {
             SectionCommands()
             PagerCommands()
+            ZoomCommands()
         }
         // 手写板: opened on the iPad screen while Prism runs on an external display. Never receives URLs.
         WindowGroup("手写板", id: "pad") {

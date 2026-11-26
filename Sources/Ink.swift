@@ -78,6 +78,7 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
         let c = PKCanvasView()
         c.overrideUserInterfaceStyle = .light   // PDF pages are white: keep ink colours true in dark mode
         picker.colorUserInterfaceStyle = .light
+        picker.overrideUserInterfaceStyle = .light
         c.backgroundColor = .clear
         c.isOpaque = false
         c.drawingPolicy = .default
