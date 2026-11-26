@@ -556,8 +556,6 @@ struct MathItemView: View {
     @State private var current: String?
     @AppStorage("math.split.on") private var splitOn = true
     @AppStorage("math.practice.wrongOnly") private var wrongOnly = false
-    @State private var confirmHandIn = false
-    @State private var confirmDone = false
     @State private var dsOffer: String?
     private let lib = MathLibrary.shared
 
@@ -570,7 +568,7 @@ struct MathItemView: View {
             WorkSplit(on: split, sheetID: "ch-" + c.id, figs: split ? figs(c, it) : [], ratio: 0.45) {
                 Group {
                     if it.isPractice {
-                        SplitPractice(chapter: c, item: it, splitOn: split, review: ReviewStore.shared.inReview("ch-" + c.id))
+                        SplitPractice(chapter: c, item: it, splitOn: split)
                     } else {
                         ExampleView(chapter: c, item: it, splitOn: split)
                     }
@@ -585,15 +583,6 @@ struct MathItemView: View {
             .navigationTitle(it.l)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if it.isPractice {
-                    ToolbarItem(placement: .confirmationAction) {
-                        if ReviewStore.shared.inReview("ch-" + c.id) {
-                            Button(T("Done", "完成")) { confirmDone = true }.bold()
-                        } else {
-                            Button(T("Submit", "交卷")) { confirmHandIn = true }
-                        }
-                    }
-                }
                 if !c.isZh {
                 ToolbarItem(placement: .primaryAction) {
                     Button { withAnimation { splitOn.toggle() } } label: {
@@ -603,19 +592,10 @@ struct MathItemView: View {
                 }
                 }
             }
-            .confirmationDialog(T("Hand in this chapter's practice?", "确定交卷？"), isPresented: $confirmHandIn, titleVisibility: .visible) {
-                Button(T("Submit", "交卷")) {
-                    ReviewStore.shared.handIn("ch-" + c.id, title: (c.isZh ? c.t : "Ch\(c.n) \(c.t)") + T(" · practice", " · 练习"), route: "item:" + it.id)
-                }
-                Button(T("Cancel", "取消"), role: .cancel) {}
-            } message: { Text(T("Then answers and solutions open so you can mark each question ✓ or ✗. Your scratch sheet stays until you tap Done.", "交卷后可以看答案和解析，逐题标 ✓ / ✗。草稿纸会保留到你按「完成」。")) }
-            .confirmationDialog(T("Finish self-marking?", "自评完成？"), isPresented: $confirmDone, titleVisibility: .visible) {
-                Button(T("Done", "完成")) { DSSnap.capture(sheet: "ch-" + c.id, chapter: c.id); ReviewStore.shared.finish("ch-" + c.id); withAnimation { dsOffer = c.id } }
-                Button(T("Cancel", "取消"), role: .cancel) {}
-            } message: { Text(T("The scratch sheet will be deleted.", "草稿纸会被删除。")) }
             .deepSeek(dsContext(c, it, split: split))
             .dsAnalysisOffer($dsOffer)
             .workingSession("ch-" + c.id)
+            .onDisappear { ScratchStore.shared.clear("ch-" + c.id, force: true); ReviewStore.shared.finish("ch-" + c.id) }
             .noteRecent(.mathItem(it.id), (c.isZh ? c.t : "Ch\(c.n)") + " · \(it.l)", it.sk ?? "")
         } else if let c = lib.chapters.first(where: { itemID.hasPrefix(String($0.id.dropFirst(2)) + "-") }) {
             DownloadOverlay().task { await MathContent.shared.ensure(c.id) }
@@ -629,7 +609,7 @@ struct MathItemView: View {
     }
 
     private func dsContext(_ c: MChapter, _ it: MItem, split: Bool) -> DSContext {
-        let review = it.isPractice && ReviewStore.shared.inReview("ch-" + c.id)
+        let review = it.isPractice
         var imgs = figs(c, it)
         if !it.hasText { imgs = (it.q ?? []).compactMap { PDFRegions.image(c.pdf, $0) } + imgs }
         let page = (it.sk.map { $0 + "\n" } ?? "") + (it.hasText ? (it.qt ?? "") : "（题目见附图）")
@@ -702,54 +682,42 @@ struct SplitPractice: View {
     let chapter: MChapter
     let item: MItem
     var splitOn = false
-    var review = false
     @Environment(\.tr) private var T
-    @State private var showAnswer = false
 
-    var body: some View { question }
-
-    private var question: some View {
+    var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header(item, T)
                 if item.hasText {
                     MathText(text: item.qt ?? "", size: 18)
                     if !splitOn { FigureStack(images: item.figImages) }
-                    if let a = item.at, !a.isEmpty {
-                        if review {
-                            VStack(alignment: .leading, spacing: 12) {
-                                MathText(text: a, size: 17)
-                                if let x = item.sx, !x.isEmpty {
-                                    Divider()
-                                    Text(T("Worked solution", "解析")).font(.subheadline.bold()).foregroundStyle(.secondary)
-                                    MathText(text: x, size: 17)
-                                }
-                            }
-                            .card()
+                } else {
+                    RegionStack(pdf: chapter.pdf, regions: item.q ?? [])
+                }
+                AnswerReveal(title: T("Answer", "答案")) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if item.hasText, let a = item.at, !a.isEmpty {
+                            MathText(text: a, size: 17)
+                        } else if !item.hasText, !(item.a ?? []).isEmpty {
+                            RegionStack(pdf: chapter.pdf, regions: item.a ?? [])
+                        } else {
+                            Text(T("No printed answer.", "书上没有印答案。")).font(.footnote).foregroundStyle(.secondary)
                         }
-                    } else if review {
-                        Text(T("No printed answer.", "书上没有印答案。")).font(.footnote).foregroundStyle(.secondary)
+                        if let x = item.sx, !x.isEmpty {
+                            Divider()
+                            Text(T("Worked solution", "解析")).font(.subheadline.bold()).foregroundStyle(.secondary)
+                            MathText(text: x, size: 17)
+                        }
+                        MarkControl(key: MathItemKey.key(chapter, item)).padding(.top, 6)
                     }
-                } else {
-                RegionStack(pdf: chapter.pdf, regions: item.q ?? [])
-                if !(item.a ?? []).isEmpty {
-                    if review { RegionStack(pdf: chapter.pdf, regions: item.a ?? []) }
-                } else if let s = item.as, !s.isEmpty {
-                    Text(T("No printed answer.", "书上没有印答案。")).font(.footnote).foregroundStyle(.secondary)
                 }
-                }
-                if review {
-                    MarkControl(key: MathItemKey.key(chapter, item)).padding(.top, 6)
-                } else {
-                    Text(T("Answers and self-marking open after 交卷.", "交卷后才能看答案和自评。")).font(.footnote).foregroundStyle(.secondary)
-                }
+                .card()
             }
             .padding(.vertical)
             .readingMargin()
         }
         .softEdges()
     }
-
 }
 
 // MARK: - Scratch drafts: autosaved, last 3 visited questions kept
