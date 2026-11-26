@@ -401,6 +401,17 @@ final class DSDock {
     var pinned = UserDefaults.standard.bool(forKey: "ds.pinned") { didSet { UserDefaults.standard.set(pinned, forKey: "ds.pinned") } }
     var visible = UserDefaults.standard.object(forKey: "ds.pinned.visible") as? Bool ?? true { didSet { UserDefaults.standard.set(visible, forKey: "ds.pinned.visible") } }
     var width = max(320, UserDefaults.standard.double(forKey: "ds.pinned.width")) { didSet { UserDefaults.standard.set(width, forKey: "ds.pinned.width") } }
+
+    /// If the last session didn't end cleanly (crash) while pinned, fall back to sheet mode.
+    init() {
+        let d = UserDefaults.standard
+        if d.bool(forKey: "ds.pinned") && d.object(forKey: "ds.cleanExit") as? Bool == false { pinned = false }
+        d.set(false, forKey: "ds.cleanExit")
+        for n in [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification] {
+            NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { _ in d.set(true, forKey: "ds.cleanExit") }
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in d.set(false, forKey: "ds.cleanExit") }
+    }
 }
 
 /// Per-screen entry. Everything stays inside the screen: no state at the root, no nested NavigationStack when pinned.
@@ -411,7 +422,7 @@ struct DeepSeekEntry: ViewModifier {
     @Environment(\.horizontalSizeClass) private var hsc
     private var dock: DSDock { DSDock.shared }
     /// Pinned mode is off until it has been verified on device.
-    static let pinEnabled = false
+    static let pinEnabled = true
     private var showPinned: Bool { Self.pinEnabled && hsc == .regular && dock.pinned && dock.visible }
 
     func body(content: Content) -> some View {
