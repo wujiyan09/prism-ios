@@ -1,0 +1,74 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull latest content from ict-portal
+        run: |
+          git clone --depth 1 https://github.com/wujiyan09/ict-portal.git /tmp/ictdata || exit 0
+          cp /tmp/ictdata/data/book-*.json /tmp/ictdata/data/dse-*.json /tmp/ictdata/data/manifest.json Resources/data/ || true
+
+      - name: Write secrets file
+        env:
+          CONTENT_KEY: ${{ secrets.CONTENT_KEY }}
+          PORTAL_URL: ${{ secrets.PORTAL_URL }}
+        run: |
+          python3 - <<'PY'
+          import os, json
+          k = json.dumps(os.environ["CONTENT_KEY"]); u = json.dumps(os.environ["PORTAL_URL"])
+          open("Sources/Secrets.swift", "w").write(f"enum Secrets {{\n    static let contentKey = {k}\n    static let portalURL = {u}\n}}\n")
+          PY
+          test -s Sources/Secrets.swift
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen >/dev/null
+          xcodegen generate
+
+      - name: Build
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild archive \
+            -project ICT.xcodeproj -scheme ICT \
+            -archivePath build/ICT.xcarchive \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO > build/log.txt 2>&1 || true
+          grep -E "error:|BUILD|ARCHIVE" build/log.txt | grep -v "Secrets.swift" || true
+          test -d build/ICT.xcarchive/Products/Applications/ICT.app
+
+      - name: Package IPA
+        id: pkg
+        run: |
+          N=$(( ${{ github.run_number }} + 44 ))
+          echo "n=$N" >> "$GITHUB_OUTPUT"
+          cd build && mkdir -p Payload
+          cp -R ICT.xcarchive/Products/Applications/ICT.app Payload/
+          zip -qry "Prism-build-$N.ipa" Payload
+
+      - name: Release to private repo
+        if: github.ref == 'refs/heads/main' && github.repository == 'wujiyan09/prism-ios'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          N: ${{ steps.pkg.outputs.n }}
+        run: |
+          gh release create "build-$N" "build/Prism-build-$N.ipa" \
+            --repo wujiyan09/ict-portal-ios \
+            --title "Prism build $N" \
+            --notes "Built from wujiyan09/prism-ios@${GITHUB_SHA::7}"
+
+      - name: Remove build output
+        if: always()
+        run: rm -rf build Sources/Secrets.swift
