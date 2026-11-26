@@ -217,6 +217,12 @@ struct DSContext {
     var grade: DSGradeSpec? = nil
     var scopeNote: String? = nil  // 笔记: what DeepSeek sees; shows the 全文/本页 switch in the panel
 
+    /// The one conversation key for every surface. 设置 › 换题时 = 继续 → one running thread per set
+    /// (or per subject for cards / notes); 开新对话 → one thread per question/card/page.
+    static func chatKey(_ c: DSContext) -> String {
+        UserDefaults.standard.bool(forKey: "ds.keepThread") ? "thread-" + (c.sheetID ?? c.subject) : c.key
+    }
+
     static func subjectName(_ s: String) -> String {
         switch s {
         case "ict": return "ICT"
@@ -454,10 +460,9 @@ struct DeepSeekEntry: ViewModifier {
             .safeAreaInset(edge: .trailing, spacing: 0) {
                 if showPinned {
                     // Floating Liquid Glass panel, inset from the edges like the iOS 26 sidebar.
-                    let k = make()?.key ?? "none"   // follows the current page; each question keeps its own thread
-                    DSLazyPanel(make: make, embedded: true, close: { withAnimation(.smooth(duration: 0.35)) { dock.visible = false } },
+                    // Stable identity: the panel follows the page by swapping its context, never by being rebuilt.
+                    DSLazyPanel(make: make, live: make(), embedded: true, close: { withAnimation(.smooth(duration: 0.35)) { dock.visible = false } },
                                 togglePin: { withAnimation(.smooth(duration: 0.35)) { dock.pinned = false; open = true } })
-                        .id(k)
                         .frame(width: liveWidth ?? dock.width)
                         .frame(maxHeight: .infinity)
                         .transaction { if liveWidth != nil { $0.animation = nil } }
@@ -481,7 +486,7 @@ struct DeepSeekEntry: ViewModifier {
                 }
             }
             .sheet(isPresented: $open) {
-                DSLazyPanel(make: make, embedded: false, close: { open = false },
+                DSLazyPanel(make: make, live: make(), embedded: false, close: { open = false },
                             togglePin: Self.pinEnabled && hsc == .regular ? {
                                 open = false
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -497,6 +502,7 @@ struct DeepSeekEntry: ViewModifier {
 /// Builds the page context when shown; if the page content is still downloading, waits and retries.
 struct DSLazyPanel: View {
     let make: () -> DSContext?
+    var live: DSContext? = nil
     var embedded = false
     var close: () -> Void
     var togglePin: (() -> Void)? = nil
@@ -505,7 +511,7 @@ struct DSLazyPanel: View {
     var body: some View {
         Group {
             if let ctx {
-                DeepSeekPanel(ctx: ctx, embedded: embedded, close: close, togglePin: togglePin).id(ctx.key)
+                DeepSeekPanel(ctx: ctx, embedded: embedded, close: close, togglePin: togglePin)
             } else if gaveUp {
                 ContentUnavailableView("这一页暂时没有内容可以问", systemImage: "sparkles")
             } else {
@@ -519,6 +525,9 @@ struct DSLazyPanel: View {
             }
             if let c = make() { ctx = c } else { gaveUp = true }
         }
+        .onChange(of: live?.key) { _, _ in
+            if let c = live, !c.page.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(live?.images.isEmpty ?? true) { ctx = c; gaveUp = false }
+        }
     }
 }
 
@@ -531,6 +540,7 @@ struct DeepSeekPanel: View {
     var togglePin: (() -> Void)? = nil
     @State private var msgs: [DSMessage] = []
     @State private var input = ""
+    @State private var loadedKey = ""
     @State private var task: Task<Void, Never>?
     @State private var error: String?
     @State private var usePage = true
@@ -641,7 +651,15 @@ struct DeepSeekPanel: View {
                 }
             }
         }
-        .onAppear { msgs = DSStore.shared.chats[chatKey]?.msgs ?? []; grade = DSStore.shared.history(ctx.key, "grade").first.flatMap { DSGradeResult.parse($0.body, max: ctx.grade?.maxMarks ?? 0) }; useScratch = false }
+        .onAppear { msgs = DSStore.shared.chats[chatKey]?.msgs ?? []; loadedKey = chatKey; grade = DSStore.shared.history(ctx.key, "grade").first.flatMap { DSGradeResult.parse($0.body, max: ctx.grade?.maxMarks ?? 0) }; useScratch = false }
+        .onChange(of: ctx.key) { _, _ in
+            // New question: swap only what belongs to it. Input text stays; with 继续 the thread (same key) stays as is.
+            grade = DSStore.shared.history(ctx.key, "grade").first.flatMap { DSGradeResult.parse($0.body, max: ctx.grade?.maxMarks ?? 0) }
+            guard chatKey != loadedKey else { return }
+            task?.cancel(); task = nil
+            msgs = DSStore.shared.chats[chatKey]?.msgs ?? []
+            loadedKey = chatKey; error = nil
+        }
         .onDisappear { task?.cancel() }
     }
 
@@ -747,9 +765,7 @@ struct DeepSeekPanel: View {
     }
 
     /// 设置 › 换题时: per-question chat (default) or one running chat for the set/subject.
-    private var chatKey: String {
-        UserDefaults.standard.bool(forKey: "ds.keepThread") && !ctx.isCard ? "thread-" + (ctx.sheetID ?? ctx.subject) : ctx.key
-    }
+    private var chatKey: String { DSContext.chatKey(ctx) }
 
     private func contextPart() -> DSPart {
         var s = "科目：\(DSContext.subjectName(ctx.subject))\n"
