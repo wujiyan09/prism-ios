@@ -56,7 +56,8 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
     var title = ""
     private var canvases: [Int: PKCanvasView] = [:]
     private var links: [Int: PadLink] = [:]
-    private let picker = PKToolPicker()
+    deinit { ToolSync.shared.unregister(picker) }
+    private let picker: PKToolPicker = { let p = PKToolPicker(); ToolSync.shared.register(p); return p }()
     var enabled = false { didSet { canvases.values.forEach(apply) } }
 
     override init() {

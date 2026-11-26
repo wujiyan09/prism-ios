@@ -1043,7 +1043,7 @@ struct CanvasRep: UIViewRepresentable {
         link.onScroll = { [weak v, weak co] y, w in
             guard let v else { return }
             co?.padDriven = true
-            if w > 10, !(ctl?.locked ?? false) {
+            if w > 10, PadHub.syncZoom, !(ctl?.locked ?? false) {
                 let z = min(v.maximumZoomScale, max(v.minimumZoomScale, v.bounds.width / w))
                 if abs(z - v.zoomScale) > 0.002 { v.zoomScale = z }
             }
@@ -1094,7 +1094,7 @@ struct CanvasRep: UIViewRepresentable {
         v.resignFirstResponder()
     }
 
-    static let sharedPicker = PKToolPicker()
+    static let sharedPicker: PKToolPicker = { let p = PKToolPicker(); ToolSync.shared.register(p); return p }()
 
     final class Coord: NSObject, PKCanvasViewDelegate, PKToolPickerObserver, UIContextMenuInteractionDelegate {
         var shown = true

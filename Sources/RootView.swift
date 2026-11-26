@@ -538,6 +538,7 @@ struct SettingsView: View {
             if UIDevice.current.userInterfaceIdiom == .pad {
                 Section {
                     PadButton()
+                    PadSyncPicker()
                 } header: { Text("外接显示器") } footer: {
                     Text("Prism 放在外接显示器上，iPad 屏幕打开「手写板」窗口：在 iPad 上写，大屏的草稿纸、笔记或 PDF 实时同步；手写板底部可切题、选 A–D、问 DeepSeek。")
                 }
@@ -657,5 +658,16 @@ struct SubjectOrderView: View {
         .environment(\.editMode, .constant(.active))
         .appList()
         .navigationTitle(T("Subject order", "学科顺序"))
+    }
+}
+
+/// 设置 › 外接显示器 › 同步范围.
+struct PadSyncPicker: View {
+    @AppStorage("pad.syncZoom") private var zoom = true
+    var body: some View {
+        Picker("同步范围", selection: $zoom) {
+            Text("页码 + 上下位置").tag(false)
+            Text("页码 + 上下位置 + 缩放").tag(true)
+        }
     }
 }

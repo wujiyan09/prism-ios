@@ -119,6 +119,11 @@ final class PadHub {
     // The pad drives position; the main window follows while 主窗口跟随 is on.
     var mainFollows = true
     @ObservationIgnored var navOwner: UUID?
+    /// Last time a window applied the other's viewport (echo guard).
+    @ObservationIgnored var padApplied = Date.distantPast
+    @ObservationIgnored var mainApplied = Date.distantPast
+    /// 同步范围: true = 页码 + 上下位置 + 缩放 (default), false = 页码 + 上下位置.
+    static var syncZoom: Bool { UserDefaults.standard.object(forKey: "pad.syncZoom") as? Bool ?? true }
     /// Page the pad shows (paged sources); main window follows.
     var padIndex = 0
     @ObservationIgnored private var posListeners: [String: [(id: ObjectIdentifier, f: (CGFloat, CGFloat) -> Void)]] = [:]
@@ -285,6 +290,9 @@ extension Notification.Name {
     static let padState = Notification.Name("padState")
     /// Pad turned the page (object = source owner, userInfo["i"]); main window follows when 主窗口跟随 is on.
     static let padPage = Notification.Name("padPage")
+    /// Viewport of a paged page, object = channel, userInfo["r"] = visible rect in page units (top-left origin).
+    static let padViewport = Notification.Name("padViewport")
+    static let mainViewport = Notification.Name("mainViewport")
 }
 
 /// Main-window canvases: everything pad-related is installed only while the 手写板 scene is open.
@@ -296,6 +304,7 @@ final class PadLink {
     var isOn: Bool { on }
     private var obs: NSObjectProtocol?
     var applying = false
+    private let eraseTap = NSObject()
     var host: () -> CALayer? = { nil }
     /// Main-canvas units per logical unit.
     var k: () -> CGFloat = { 1 }
@@ -315,11 +324,29 @@ final class PadLink {
             self.applying = true; c.drawing = s == 1 ? d : d.transformed(using: CGAffineTransform(scaleX: s, y: s)); self.applying = false
         }
         live.attach(channel, k: { [weak self] in self?.k() ?? 1 }, host: { [weak self] in self?.host() })
+        // Live vector erase: remove strokes the pad's eraser passes over, before the commit arrives.
+        PadHub.shared.listenLive(channel, eraseTap) { [weak self] l in
+            guard let self, let l, l.kind == .eraser, let c = self.canvas, let p = l.points.last else { return }
+            let s = self.k()
+            let q = CGPoint(x: p.x * s, y: p.y * s)
+            let r = max(6, l.width * s / 2)
+            let box = CGRect(x: q.x - r, y: q.y - r, width: r * 2, height: r * 2)
+            let old = c.drawing.strokes
+            let keep = old.filter { st in
+                guard st.renderBounds.intersects(box) else { return true }
+                for pt in st.path.interpolatedPoints(by: .distance(3)) {
+                    let a = pt.location.applying(st.transform)
+                    if hypot(a.x - q.x, a.y - q.y) <= r + pt.size.width / 2 { return false }
+                }
+                return true
+            }
+            if keep.count != old.count { self.applying = true; c.drawing = PKDrawing(strokes: keep); self.applying = false }
+        }
         PadHub.shared.listenPos(channel, self) { [weak self] y, w in self?.onScroll?(y, w) }
     }
     func tearDown() {
         guard on else { return }; on = false
-        PadHub.shared.stop(self); PadHub.shared.stopPos(self); live.detach()
+        PadHub.shared.stop(self); PadHub.shared.stopPos(self); PadHub.shared.stopLive(eraseTap); live.detach()
     }
     /// Main canvas changed (finger/pencil on the main window): mirror to the pad.
     func changed(_ d: PKDrawing) {
@@ -401,6 +428,8 @@ struct PadView: View {
     @Environment(\.scenePhase) private var phase
     @State private var zoom: CGFloat = 1
     @State private var zlock = false
+    @State private var jumpCtl = ViewCtl()
+    @State private var jumping = false
 
     private var pageIndex: Int {
         guard let s = hub.source, !s.pages.isEmpty else { return 0 }
@@ -464,7 +493,13 @@ struct PadView: View {
                 glass {
                     HStack(spacing: 2) {
                         Button { hub.padIndex = max(0, pageIndex - 1) } label: { Label("上一页", systemImage: "chevron.up") }.disabled(pageIndex == 0)
-                        Text("\(pageIndex + 1)/\(s.pages.count)").font(.subheadline.monospacedDigit()).padding(.horizontal, 6)
+                        Button {
+                            jumpCtl.count = s.pages.count; jumpCtl.page = pageIndex
+                            jumpCtl.goPage = { i in hub.padIndex = min(max(0, i), s.pages.count - 1) }
+                            jumpCtl.thumb = { i in s.pages.indices.contains(i) ? s.pages[i].background() : nil }
+                            jumping = true
+                        } label: { Text("\(pageIndex + 1)/\(s.pages.count)").font(.subheadline.monospacedDigit()).padding(.horizontal, 6) }
+                        .popover(isPresented: $jumping) { PageJump(ctl: jumpCtl) { jumping = false }.padding().frame(minWidth: 320) }
                         Button { hub.padIndex = min(s.pages.count - 1, pageIndex + 1) } label: { Label("下一页", systemImage: "chevron.down") }.disabled(pageIndex >= s.pages.count - 1)
                     }
                 }
@@ -547,6 +582,9 @@ struct PadCanvas: UIViewRepresentable {
         v.insertSubview(under, at: 0)
         c.under = under
         c.refreshFigures()
+        c.vpObs = NotificationCenter.default.addObserver(forName: .mainViewport, object: page.channel, queue: .main) { [weak c] n in
+            if PadHub.shared.mainFollows, let r = n.userInfo?["r"] as? CGRect { c?.mainMoved(r) }
+        }
         c.figObs = NotificationCenter.default.addObserver(forName: .scratchSaved, object: nil, queue: .main) { [weak c] _ in c?.refreshFigures() }
         c.canvas = v
         v.delegate = c
@@ -594,7 +632,7 @@ struct PadCanvas: UIViewRepresentable {
             v.maximumZoomScale = locked ? v.zoomScale : c.base * 4
         }
         let target = c.base * zoom
-        if let w = followW, w > 10, continuous, !locked, !v.isZooming, abs(w - c.lastW) > 1, v.bounds.width > 10 {
+        if let w = followW, w > 10, continuous, !locked, PadHub.syncZoom, !v.isZooming, abs(w - c.lastW) > 1, v.bounds.width > 10 {
             c.lastW = w
             c.following = true
             v.zoomScale = min(v.maximumZoomScale, max(v.minimumZoomScale, v.bounds.width / w))
@@ -624,7 +662,7 @@ struct PadCanvas: UIViewRepresentable {
         var figObs: NSObjectProtocol?
         private var figViews: [UIImageView] = []
         private var figSig = ""
-        deinit { if let figObs { NotificationCenter.default.removeObserver(figObs) } }
+        deinit { if let figObs { NotificationCenter.default.removeObserver(figObs) }; if let vpObs { NotificationCenter.default.removeObserver(vpObs) }; ToolSync.shared.unregister(picker) }
         func refreshFigures() {
             guard let under else { return }
             let figs = parent.page.figures()
@@ -638,12 +676,25 @@ struct PadCanvas: UIViewRepresentable {
                 under.addSubview(iv); return iv
             }
         }
-        let picker = PKToolPicker()
+        let picker: PKToolPicker = { let p = PKToolPicker(); ToolSync.shared.register(p); return p }()
         var base: CGFloat = 1
         var fittedWidth: CGFloat = 0
         var lastFollow: CGFloat = -1
         var lastW: CGFloat = -1
         var penFed = false
+        var vpObs: NSObjectProtocol?
+        /// Main window moved/zoomed a PDF page: follow it (same page only).
+        func mainMoved(_ r: CGRect) {
+            guard let v = canvas, !parent.continuous, r.width > 1, v.bounds.width > 1 else { return }
+            PadHub.shared.padApplied = Date()
+            following = true; defer { following = false }
+            if PadHub.syncZoom, !parent.locked {
+                v.zoomScale = min(v.maximumZoomScale, max(v.minimumZoomScale, v.bounds.width / r.width))
+            }
+            let z = v.zoomScale
+            let maxY = max(0, v.contentSize.height - v.bounds.height), maxX = max(0, v.contentSize.width - v.bounds.width)
+            v.contentOffset = CGPoint(x: PadHub.syncZoom ? min(maxX, max(0, r.minX * z)) : v.contentOffset.x, y: min(maxY, max(0, r.minY * z)))
+        }
         private var dpts: [CGPoint] = []
         @objc func drawing(_ g: UIGestureRecognizer) {
             guard let v = canvas else { return }
@@ -715,7 +766,14 @@ struct PadCanvas: UIViewRepresentable {
             }
         }
         func scrollViewDidScroll(_ v: UIScrollView) {
-            guard parent.continuous, v.zoomScale > 0, !following else { return }
+            guard v.zoomScale > 0, !following else { return }
+            if !parent.continuous {
+                guard Date().timeIntervalSince(PadHub.shared.padApplied) > 0.35 else { return }
+                let z = v.zoomScale
+                NotificationCenter.default.post(name: .padViewport, object: parent.page.channel,
+                    userInfo: ["r": CGRect(x: v.contentOffset.x / z, y: v.contentOffset.y / z, width: v.bounds.width / z, height: v.bounds.height / z)])
+                return
+            }
             PadHub.shared.padMoved(parent.page.channel, max(0, v.contentOffset.y) / v.zoomScale, v.bounds.width / v.zoomScale)
         }
         func scrollViewDidEndZooming(_ v: UIScrollView, with view: UIView?, atScale s: CGFloat) {
@@ -769,5 +827,23 @@ final class QuietCanvas: PKCanvasView {
         let n = NSStringFromSelector(action).lowercased()
         if action == #selector(selectAll(_:)) || n.contains("insertspace") || n.contains("insertspacing") || n.contains("selectall") { return false }
         return super.canPerformAction(action, withSender: sender)
+    }
+}
+
+/// Keeps the pad's and the main window's tool pickers on the same tool (type, colour, width, eraser).
+final class ToolSync: NSObject, PKToolPickerObserver {
+    static let shared = ToolSync()
+    private var pickers: [PKToolPicker] = []
+    private var busy = false
+    func register(_ p: PKToolPicker) {
+        guard !pickers.contains(where: { $0 === p }) else { return }
+        pickers.append(p); p.addObserver(self)
+        if let other = pickers.first(where: { $0 !== p }) { busy = true; p.selectedTool = other.selectedTool; busy = false }
+    }
+    func unregister(_ p: PKToolPicker) { p.removeObserver(self); pickers.removeAll { $0 === p } }
+    func toolPickerSelectedToolDidChange(_ src: PKToolPicker) {
+        guard !busy, PadHub.shared.padOpen else { return }
+        busy = true; defer { busy = false }
+        for p in pickers where p !== src { p.selectedTool = src.selectedTool }
     }
 }
