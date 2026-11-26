@@ -66,7 +66,7 @@ enum DSClient {
     规则：
     - 默认用简体中文回答；英文专业名词、课本术语、程序代码保留英文。学生用英文提问就用英文答。
     - 跟课本和 DSE 评分标准的方法走，不要用超纲方法；步骤清楚、简洁，不要客套话。
-    - 所有数学内容一律用 LaTeX：行内用 $...$，独立一行用 $$...$$。哪怕只是一个变量、一个数字带单位、一个简单分数或次方都要包在 $ 里，例如写 $x^2+3x-4=0$、$\\frac{1}{2}$、$\\sqrt{3}$、$5\\,\\text{cm}$、$\\theta$；绝不能写成 x^2、sqrt(3)、1/2、√3、x² 这种纯文字或 Unicode 数学。不要用 \\( \\) 或 \\[ \\]。代码用 ``` 代码块。
+    - 所有数学内容一律用 LaTeX：行内用 $...$，独立一行用 $$...$$。哪怕只是一个变量、一个数字带单位、一个简单分数或次方都要包在 $ 里，例如写 $x^2+3x-4=0$、$\\frac{1}{2}$、$\\sqrt{3}$、$5\\,\\text{cm}$、$\\theta$；绝不能写成 x^2、sqrt(3)、1/2、√3、x² 这种纯文字或 Unicode 数学。不要用 \\( \\) 或 \\[ \\]。$...$ 里面绝对不要写中文（包括 \\text{中文}）：用字母代表事件或量，例如 $P(A\\mid B)$，再在正文里用中文说明 A、B 是什么。代码用 ``` 代码块。
     - 学生只要提示时，只给下一步的提示，绝对不要给出答案或完整解法。
     - 如果没有给你答案或评分标准，不要假装知道官方答案。
     """
@@ -552,8 +552,8 @@ struct DeepSeekPanel: View {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         if !DSKey.has { noKey }
                         if msgs.isEmpty && grade == nil { intro }
-                        if let g = grade { DSGradeCard(result: g, spec: ctx.grade) }
                         ForEach(msgs) { m in DSBubble(msg: m).id(m.id) }
+                        if let g = grade { DSGradeCard(result: g, spec: ctx.grade).id("grade") }
                         if let e = error {
                             Label(e, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red)
                         }
@@ -564,6 +564,7 @@ struct DeepSeekPanel: View {
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: msgs.last?.text) { proxy.scrollTo("end", anchor: .bottom) }
                 .onChange(of: msgs.count) { proxy.scrollTo("end", anchor: .bottom) }
+                .onChange(of: grade?.summary) { _, v in if v != nil { withAnimation { proxy.scrollTo("grade", anchor: .top) } } }
             }
             Divider()
             composer
@@ -960,14 +961,62 @@ struct DSMarkdown: View {
         // Odd number of parts = balanced. Even = one unclosed $: join the tail back as plain text.
         var tail = ""
         if parts.count % 2 == 0, let last = parts.popLast() { tail = last }
-        let pat = #"(\\(?:frac|dfrac|sqrt|times|div|pm|le|ge|leq|geq|neq|approx|alpha|beta|gamma|theta|pi|sigma|lambda|mu|Delta|infty|cdot|sin|cos|tan|log|ln|vec|overline|angle|degree)\b(?:\[[^\]]*\])?(?:\{[^{}$]*\})*|[A-Za-z0-9)]\^\{[^{}$]*\}|[A-Za-z0-9)]_\{[^{}$]*\})"#
-        let re = try? NSRegularExpression(pattern: pat)
-        for i in stride(from: 0, to: parts.count, by: 2) where parts[i].contains("\\") || parts[i].contains("^{") || parts[i].contains("_{") {
-            guard let re else { break }
-            let ns = parts[i] as NSString
-            parts[i] = re.stringByReplacingMatches(in: parts[i], range: NSRange(location: 0, length: ns.length), withTemplate: "\\$$1\\$")
+        for i in stride(from: 0, to: parts.count, by: 2) where parts[i].contains("\\") || parts[i].contains("^") || parts[i].contains("_") {
+            parts[i] = parts[i].components(separatedBy: "\n").map(wrapLine).joined(separator: "\n")
         }
         return parts.joined(separator: "$") + tail
+    }
+
+    private static let texChars = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\^_{}!,=+-/()[]|.<>'* ")
+    /// A word that is clearly maths: a \command, ^ or _, or an = / operator between numbers.
+    private static func texWord(_ w: Substring) -> Bool {
+        if w.contains("\\") || w.contains("^") || w.contains("_") { return true }
+        return w.range(of: #"^[A-Za-z0-9()]+[=+*/<>][A-Za-z0-9()]+"#, options: .regularExpression) != nil
+    }
+    private static func connector(_ w: Substring) -> Bool {
+        w.range(of: #"^([=+\-*/<>(),!]|[0-9.]+|[A-Za-z])$"#, options: .regularExpression) != nil
+    }
+    /// Wraps maximal runs of TeX (bounded by CJK / other text) in $…$. Markdown list markers stay outside.
+    private static func wrapLine(_ line: String) -> String {
+        var out = ""
+        var chunk = ""
+        func flush() {
+            guard !chunk.isEmpty else { return }
+            defer { chunk = "" }
+            guard chunk.contains("\\") || chunk.contains("^") || chunk.contains("_") || chunk.contains("=") else { out += chunk; return }
+            let lead = chunk.prefix { $0 == " " }
+            var body = chunk.dropFirst(lead.count)
+            var marker = ""
+            if out.trimmingCharacters(in: .whitespaces).isEmpty, let m = body.range(of: #"^([-*•]|\d+[.)])\s+"#, options: .regularExpression) {
+                marker = String(body[m]); body = body[m.upperBound...]
+            }
+            let words = body.split(separator: " ", omittingEmptySubsequences: false)
+            var res: [String] = []
+            var run: [Substring] = []
+            var pend: [Substring] = []
+            func endRun() {
+                if !run.isEmpty {
+                    var r = run.map(String.init).joined(separator: " ")
+                    var trail = ""
+                    while let l = r.last, ",.".contains(l) { trail = String(l) + trail; r.removeLast() }
+                    res.append("$" + r + "$" + trail)
+                }
+                res += pend.map(String.init); run = []; pend = []
+            }
+            for w in words {
+                if texWord(w) { run += pend; pend = []; run.append(w) }
+                else if !run.isEmpty && connector(w) { pend.append(w) }
+                else { endRun(); res.append(String(w)) }
+            }
+            endRun()
+            out += String(lead) + marker + res.joined(separator: " ")
+        }
+        for ch in line {
+            if ch.unicodeScalars.allSatisfy({ texChars.contains($0) }) { chunk.append(ch) }
+            else { flush(); out.append(ch) }
+        }
+        flush()
+        return out
     }
 
     var body: some View {

@@ -136,6 +136,8 @@ struct MathText: View {
                     inline(s)
                         .lineSpacing(line)
                         .fixedSize(horizontal: false, vertical: true)
+                case .display(let tex) where CJKMath.has(tex):
+                    inline("$" + tex + "$").fixedSize(horizontal: false, vertical: true)
                 case .display(let tex):
                     DisplayMath(tex: tex, size: size + 1, color: uiColor)
                 case .table(let rows):
@@ -211,7 +213,9 @@ struct MathText: View {
             if ch == "$", let close = s[s.index(after: i)...].firstIndex(of: "$") {
                 flush()
                 let tex = String(s[s.index(after: i)..<close])
-                if let r = TeX.render(tex, size: size, color: color, display: false) {
+                if CJKMath.has(tex) {
+                    result = result + CJKMath.text(tex, size: size, color: color, serif: serif)
+                } else if let r = TeX.render(tex, size: size, color: color, display: false) {
                     result = result + Text(Image(uiImage: r.image)).baselineOffset(-r.descent)
                 } else {
                     result = result + Text(tex).font(.system(size: size, design: .serif)).italic()
@@ -306,5 +310,33 @@ struct MathTable: View {
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.secondary.opacity(0.35), lineWidth: 0.5))
         }
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+    }
+}
+
+/// Maths with Chinese inside (e.g. $P(\text{两人都在}\mid\text{至少一人})$): SwiftMath drops CJK,
+/// so the formula is split — maths pieces as images, Chinese as ordinary text.
+enum CJKMath {
+    static let cjk = try! NSRegularExpression(pattern: #"\\(?:text|mathrm|textbf|mbox|operatorname)\s*\{([^{}]*)\}|([\p{Han}\x{3000}-\x{303F}\x{FF00}-\x{FFEF}]+)"#)
+    static func has(_ t: String) -> Bool { t.range(of: #"\p{Han}"#, options: .regularExpression) != nil }
+
+    static func text(_ tex: String, size: CGFloat, color: UIColor, serif: Bool) -> Text {
+        var result = Text("")
+        let ns = tex as NSString
+        var last = 0
+        func math(_ m: String) {
+            let t = m.trimmingCharacters(in: .whitespaces)
+            guard !t.isEmpty else { return }
+            if let r = TeX.render(t, size: size, color: color, display: false) { result = result + Text(Image(uiImage: r.image)).baselineOffset(-r.descent) }
+            else { result = result + Text(t).font(.system(size: size, design: .serif)).italic() }
+        }
+        for m in cjk.matches(in: tex, range: NSRange(location: 0, length: ns.length)) {
+            let inner = m.range(at: 1).location != NSNotFound ? ns.substring(with: m.range(at: 1)) : ns.substring(with: m.range)
+            if m.range(at: 1).location != NSNotFound && !has(inner) { continue }   // plain \text{abc}: leave to the maths engine
+            if m.range.location > last { math(ns.substring(with: NSRange(location: last, length: m.range.location - last))) }
+            result = result + Text(inner).font(Reading.font(size, serif: serif)).foregroundColor(Color(uiColor: color))
+            last = m.range.location + m.range.length
+        }
+        if last < ns.length { math(ns.substring(from: last)) }
+        return result
     }
 }
