@@ -190,6 +190,8 @@ struct RouteView: View {
         case .mathQuiz(let s): MathQuizRunner(spec: s)
         case .daily(let d): DailyDayView(date: d)
         case .dailyRun(let d): DailyRunner(date: d)
+        case .mathPaper(let id): OfficialRoute(id: id, set: false)
+        case .ppSet(let id): OfficialRoute(id: id, set: true)
         }
     }
 }

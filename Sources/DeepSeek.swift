@@ -66,7 +66,7 @@ enum DSClient {
     规则：
     - 默认用简体中文回答；英文专业名词、课本术语、程序代码保留英文。学生用英文提问就用英文答。
     - 跟课本和 DSE 评分标准的方法走，不要用超纲方法；步骤清楚、简洁，不要客套话。
-    - 数学式一律用 LaTeX：行内用 $...$，独立一行用 $$...$$。代码用 ``` 代码块。
+    - 所有数学内容一律用 LaTeX：行内用 $...$，独立一行用 $$...$$。哪怕只是一个变量、一个数字带单位、一个简单分数或次方都要包在 $ 里，例如写 $x^2+3x-4=0$、$\\frac{1}{2}$、$\\sqrt{3}$、$5\\,\\text{cm}$、$\\theta$；绝不能写成 x^2、sqrt(3)、1/2、√3、x² 这种纯文字或 Unicode 数学。不要用 \\( \\) 或 \\[ \\]。代码用 ``` 代码块。
     - 学生只要提示时，只给下一步的提示，绝对不要给出答案或完整解法。
     - 如果没有给你答案或评分标准，不要假装知道官方答案。
     """
@@ -209,7 +209,8 @@ struct DSContext {
     var title: String
     var page: String              // question / card text
     var images: [UIImage] = []    // figures on this page
-    var revealed: String? = nil   // answer / solution — only pass when already shown
+    var revealed: String? = nil   // answer / solution the student has already seen
+    var answer: String? = nil     // answer / scheme not yet shown: sent to DeepSeek, which must not reveal it unasked
     var chapter: String? = nil    // chapter title + card summaries
     var sheetID: String? = nil    // scratch sheet for this set
     var isCard = false
@@ -238,10 +239,13 @@ struct DSContext {
     }
 
     /// Maths/中文 chapter: title + card titles/summaries, trimmed to a budget.
-    static func mathChapter(_ c: MChapter, budget: Int = 6000) -> String {
+    static func mathChapter(_ c: MChapter, budget: Int? = nil) -> String {
+        // 中文: the 範文 notes/cards in full (bigger budget); maths: titles + short summaries.
+        let budget = budget ?? (c.isZh ? 14000 : 6000)
         var s = c.label + "\n"
         for k in c.cards {
-            let line = "- " + (k.t ?? "") + ((k.s ?? "").isEmpty ? "" : "：" + String((k.s ?? "").prefix(160)))
+            let body = [k.s, k.ex, k.rem, k.wo].compactMap { $0 }.filter { !$0.isEmpty }
+            let line = "- " + (k.t ?? "") + (body.isEmpty ? "" : "：" + (c.isZh ? body.joined(separator: "；") : String((k.s ?? "").prefix(160))))
             if s.count + line.count > budget { s += "…"; break }
             s += line + "\n"
         }
@@ -280,7 +284,11 @@ struct DSContext {
         }
         var ch: String?
         if let id = it.chapterID, let c = Library.shared.chapter(id), !c.isStub { ch = ictChapter(c) }
-        return DSContext(key: "ict-q-" + it.key, subject: "ict", title: title, page: page, images: imgs, chapter: ch)
+        var ans = ""
+        if it.a >= 0, it.a < it.o.count { ans += "答案：" + L[min(it.a, 5)] + "\n" }
+        let ex = plain(it.ez.isEmpty ? it.e : it.ez)
+        if !ex.isEmpty { ans += "解析：" + ex }
+        return DSContext(key: "ict-q-" + it.key, subject: "ict", title: title, page: page, images: imgs, answer: ans.isEmpty ? nil : ans, chapter: ch)
     }
 
     static func mathCard(_ c: MChapter, _ i: Int) -> DSContext {
@@ -329,6 +337,7 @@ struct DeepSeekSettingsView: View {
     @State private var key = DSKey.get() ?? ""
     @AppStorage("ds.model") private var model = DSModel.flash.rawValue
     @AppStorage("ds.thinking") private var thinking = false
+    @AppStorage("ds.keepThread") private var keepThread = false
     @State private var status: String?
     @State private var testing = false
     @State private var reveal = false
@@ -367,6 +376,10 @@ struct DeepSeekSettingsView: View {
                     Text("deepseek-v4-pro（更强，只看文字）").tag(DSModel.pro.rawValue)
                 }
                 Toggle("思考模式", isOn: $thinking)
+                Picker("换题时", selection: $keepThread) {
+                    Text("开新对话（不保留上一题）").tag(false)
+                    Text("继续同一个对话").tag(true)
+                }
             } footer: {
                 Text("flash 能读题目图片和草稿纸；pro 推理更强但不能看图，图片会被略过。思考模式更准但更慢、更贵。")
             }
@@ -572,7 +585,7 @@ struct DeepSeekPanel: View {
             Button { showHistory = true } label: { Label("历史", systemImage: "clock") }
             Button { showSettings = true } label: { Label("DeepSeek 设置", systemImage: "gearshape") }
             Divider()
-            Button(role: .destructive) { task?.cancel(); msgs = []; grade = nil; DSStore.shared.chats[ctx.key] = nil } label: {
+            Button(role: .destructive) { task?.cancel(); msgs = []; grade = nil; DSStore.shared.chats[chatKey] = nil } label: {
                 Label("清空这题的对话", systemImage: "trash")
             }
         } label: { Label("选项", systemImage: "ellipsis.circle") }
@@ -611,7 +624,7 @@ struct DeepSeekPanel: View {
                 }
             }
         }
-        .onAppear { msgs = DSStore.shared.chats[ctx.key]?.msgs ?? []; grade = DSStore.shared.history(ctx.key, "grade").first.flatMap { DSGradeResult.parse($0.body, max: ctx.grade?.maxMarks ?? 0) }; useScratch = false }
+        .onAppear { msgs = DSStore.shared.chats[chatKey]?.msgs ?? []; grade = DSStore.shared.history(ctx.key, "grade").first.flatMap { DSGradeResult.parse($0.body, max: ctx.grade?.maxMarks ?? 0) }; useScratch = false }
         .onDisappear { task?.cancel() }
     }
 
@@ -628,7 +641,7 @@ struct DeepSeekPanel: View {
     private var intro: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(ctx.title).font(.headline)
-            Text(ctx.revealed == nil && !ctx.isCard ? "这一页的答案还没显示，不会发给 DeepSeek。" : (ctx.revealed != nil && !ctx.isCard ? "会附上本页内容和答案 / 解答。" : "会附上本页内容。"))
+            Text("会附上本页内容。")
                 .font(.footnote).foregroundStyle(.secondary)
         }
     }
@@ -716,6 +729,11 @@ struct DeepSeekPanel: View {
         .controlSize(.small)
     }
 
+    /// 设置 › 换题时: per-question chat (default) or one running chat for the set/subject.
+    private var chatKey: String {
+        UserDefaults.standard.bool(forKey: "ds.keepThread") && !ctx.isCard ? "thread-" + (ctx.sheetID ?? ctx.subject) : ctx.key
+    }
+
     private func contextPart() -> DSPart {
         var s = "科目：\(DSContext.subjectName(ctx.subject))\n"
         var imgs: [UIImage] = []
@@ -723,7 +741,9 @@ struct DeepSeekPanel: View {
         if usePage {
             s += "\n【本页：\(ctx.title)】\n" + ctx.page + "\n"
             if let r = ctx.revealed { s += "\n【答案 / 解析（学生已看到）】\n" + r + "\n" }
-            else if !ctx.isCard { s += "\n（学生还没交卷，你没有答案；不要直接给出最终答案，除非学生明确要求。）\n" }
+            else if let a = ctx.answer, !a.isEmpty {
+                s += "\n【参考答案 / 评分标准 / 解析（学生还没看到。只用来判断对错和给提示；除非学生明确要求看答案，否则绝不能说出答案、选项字母或完整解法，提示只给下一步）】\n" + a + "\n"
+            }
             imgs += ctx.images
         }
         if useScratch, let img = DSContext.scratchImage(ctx.sheetID) {
@@ -764,7 +784,7 @@ struct DeepSeekPanel: View {
                 self.error = (error as? DSError)?.errorDescription ?? error.localizedDescription
             }
             if let l = msgs.last, l.role == "assistant", l.text.isEmpty { msgs.removeLast() }
-            DSStore.shared.chats[ctx.key] = msgs.isEmpty ? nil : DSChat(title: ctx.title, t: Date().timeIntervalSince1970, msgs: msgs)
+            DSStore.shared.chats[chatKey] = msgs.isEmpty ? nil : DSChat(title: ctx.title, t: Date().timeIntervalSince1970, msgs: msgs)
             task = nil
         }
     }
@@ -908,7 +928,12 @@ struct DSMarkdown: View {
             if i % 2 == 1 {
                 var lines = p.components(separatedBy: "\n")
                 let lang = lines.isEmpty ? "" : lines.removeFirst().trimmingCharacters(in: .whitespaces)
-                out.append(.code(lang, lines.joined(separator: "\n").trimmingCharacters(in: .newlines)))
+                let body = lines.joined(separator: "\n").trimmingCharacters(in: .newlines)
+                if ["latex", "tex", "math", "katex"].contains(lang.lowercased()) {
+                    out.append(.text("$$" + body.replacingOccurrences(of: "$", with: "") + "$$"))
+                } else {
+                    out.append(.code(lang, body))
+                }
             } else if !p.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 out.append(.text(normalize(p)))
             }
@@ -924,7 +949,25 @@ struct DSMarkdown: View {
         t = t.replacingOccurrences(of: "(?m)^(\\s*)[-*]\\s+", with: "$1• ", options: .regularExpression)
         t = t.replacingOccurrences(of: "(?m)^---+\\s*$", with: "", options: .regularExpression)
         t = t.replacingOccurrences(of: "`([^`\\n]+)`", with: "$1", options: .regularExpression)
+        t = wrapBareTeX(t)
         return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Outside $…$: wrap obvious bare TeX (\frac{..}{..}, \sqrt{..}, x^{..}, \alpha …) in $; while streaming,
+    /// an unclosed trailing $ is shown as plain text until its closing $ arrives.
+    static func wrapBareTeX(_ s: String) -> String {
+        var parts = s.components(separatedBy: "$")
+        // Odd number of parts = balanced. Even = one unclosed $: join the tail back as plain text.
+        var tail = ""
+        if parts.count % 2 == 0, let last = parts.popLast() { tail = last }
+        let pat = #"(\\(?:frac|dfrac|sqrt|times|div|pm|le|ge|leq|geq|neq|approx|alpha|beta|gamma|theta|pi|sigma|lambda|mu|Delta|infty|cdot|sin|cos|tan|log|ln|vec|overline|angle|degree)\b(?:\[[^\]]*\])?(?:\{[^{}$]*\})*|[A-Za-z0-9)]\^\{[^{}$]*\}|[A-Za-z0-9)]_\{[^{}$]*\})"#
+        let re = try? NSRegularExpression(pattern: pat)
+        for i in stride(from: 0, to: parts.count, by: 2) where parts[i].contains("\\") || parts[i].contains("^{") || parts[i].contains("_{") {
+            guard let re else { break }
+            let ns = parts[i] as NSString
+            parts[i] = re.stringByReplacingMatches(in: parts[i], range: NSRange(location: 0, length: ns.length), withTemplate: "\\$$1\\$")
+        }
+        return parts.joined(separator: "$") + tail
     }
 
     var body: some View {

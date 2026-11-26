@@ -97,7 +97,7 @@ struct YearView: View {
                             Label(T("Paper 1B long questions (\(Y.lq.count))", "卷一 B 长题（\(Y.lq.count) 题）"), systemImage: "square.and.pencil")
                         }
                     }
-                    if let p = Y.paper { Link(destination: p) { Label(T("Paper PDF", "试卷 PDF"), systemImage: "doc.richtext") } }
+                    if let p = Y.paper { NavigationLink(value: Route.pdf(p, Y.label + " ICT Paper 1")) { Label(T("Paper PDF", "试卷 PDF"), systemImage: "doc.richtext") } }
                     if let m = Y.ms { Link(destination: m) { Label("Marking scheme", systemImage: "checkmark.seal") } }
                     ForEach(lib.paper2.filter { $0.year == y }) { p in
                         NavigationLink(value: Route.pdf(p.paper, "DSE \(y) Paper 2\(p.code)")) {

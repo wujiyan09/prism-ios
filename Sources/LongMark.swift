@@ -12,6 +12,9 @@ struct LongMarkCard: View {
     var sheetID: String? = nil
     let max: Int?                // nil = paper doesn't say
     @Binding var score: Int?
+    var points: [LMPoint]? = nil       // pre-split points (中文 評分準則); nil = parse `scheme`
+    var answerText: String? = nil      // typed answer, sent to DeepSeek instead of / with the scratch image
+    var context: String? = nil         // e.g. 本章 範文 content
 
     @Environment(\.tr) private var T
     @State private var pts: [LMPoint] = []
@@ -134,7 +137,10 @@ struct LongMarkCard: View {
         error = nil; grading = true
         var imgs = images
         if let s = DSContext.scratchImage(sheetID) { imgs.append(s) }
-        let spec = DSGradeSpec(question: question, scheme: scheme, maxMarks: full, images: imgs)
+        var q = question
+        if let c = context, !c.isEmpty { q = c + "\n\n【题目】\n" + q }
+        if let a = answerText, !a.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { q += "\n\n【学生作答（打字，以此为准）】\n" + a }
+        let spec = DSGradeSpec(question: q, scheme: scheme, maxMarks: full, images: imgs)
         Task {
             do {
                 let r = try await DSGrader.grade(spec)
@@ -158,7 +164,7 @@ struct LongMarkCard: View {
 
     private func load() {
         if let d = UserDefaults.standard.data(forKey: "lm." + key), let p = try? JSONDecoder().decode([LMPoint].self, from: d), !p.isEmpty { pts = p }
-        else { pts = LMPoint.split(scheme) }
+        else { pts = points ?? LMPoint.split(scheme) }
     }
     private func save(keepScore: Bool = false) {
         if let d = try? JSONEncoder().encode(pts) { UserDefaults.standard.set(d, forKey: "lm." + key) }

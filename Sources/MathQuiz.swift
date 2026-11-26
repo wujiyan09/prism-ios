@@ -44,6 +44,10 @@ final class MathMC {
     static var allInfo: [(String, MSetInfo)] { MathLibrary.shared.chapters.flatMap { c in c.sets.map { (c.id, $0) } } }
     static var totalQuestions: Int { allInfo.reduce(0) { $0 + $1.1.n } }
     func sets(_ chapter: String) -> [MCSet] { byChapter[chapter] ?? [] }
+    /// Chapter a question belongs to (for DeepSeek 本章 context in mixed sets).
+    func chapter(of qid: String) -> String? {
+        byChapter.first { $0.value.contains { $0.qs.contains { $0.id == qid } } }?.key
+    }
     func set(_ id: String) -> MCSet? { sets.first { $0.id == id } }
     static func key(_ q: MCQ) -> String { "math:" + q.id }
     static func key(_ id: String) -> String { "math:" + id }
@@ -254,8 +258,11 @@ struct MathQuizRunner: View {
         if let ch = picked[it.id], let pos = it.order.firstIndex(of: it.v.a), let mine = it.order.firstIndex(of: ch) {
             rev = "正确答案：\(L[min(pos, 5)])；学生选了 \(L[min(mine, 5)])。\n" + it.v.so.joined(separator: "\n")
         }
+        var ans: String?
+        if rev == nil, let pos = it.order.firstIndex(of: it.v.a) { ans = "正确答案：\(L[min(pos, 5)])\n" + it.v.so.joined(separator: "\n") }
+        let ch = MathMC.shared.chapter(of: it.q.id).flatMap { MathLibrary.shared.chapter($0) }.map { DSContext.mathChapter($0) }
         return DSContext(key: "m-mc-" + it.id, subject: isZh ? "zh" : "math", title: title + " · Q\(index + 1)",
-                         page: it.v.st + "\n\n" + opts, images: figImages(it), revealed: rev,
+                         page: it.v.st + "\n\n" + opts, images: figImages(it), revealed: rev, answer: ans, chapter: ch,
                          sheetID: split ? "quiz-\(spec)" : nil)
     }
 

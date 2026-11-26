@@ -338,6 +338,14 @@ struct MathChapterView: View {
                     .listRowInsets(EdgeInsets())
                 }
                 if tab == 0 { cards(c) } else { practice(c) }
+                if c.isZh {
+                    Section {
+                        NavigationLink { ZhLongSetView(chapterID: c.id) } label: {
+                            Label(T("Long-answer questions", "長答題（短答 / 長答）"), systemImage: "text.alignleft")
+                        }
+                    }
+                    .listRowBackground(Color.cardBackground)
+                }
                 DSMasterySection(chapterID: c.id)
                 Section {
                     Button {
@@ -621,7 +629,8 @@ struct MathItemView: View {
             if revealed == nil, !(it.a ?? []).isEmpty { imgs += (it.a ?? []).compactMap { PDFRegions.image(c.pdf, $0) }; revealed = "（答案见附图）" }
         }
         var ctx = DSContext(key: "m-item-" + it.id, subject: c.isZh ? "zh" : "math", title: (c.isZh ? c.t : "Ch\(c.n)") + " · " + it.l,
-                            page: page, images: imgs, revealed: revealed, chapter: DSContext.mathChapter(c),
+                            page: page, images: imgs, revealed: review ? nil : revealed, answer: review ? revealed : nil,
+                            chapter: DSContext.mathChapter(c),
                             sheetID: split ? "ch-" + c.id : nil)
         if review, let r = revealed {
             let key = MathItemKey.key(c, it)

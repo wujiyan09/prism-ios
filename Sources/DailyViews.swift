@@ -422,17 +422,16 @@ struct DailyRunner: View {
         if let o = q.options { page += "\n" + o.enumerated().map { "\(L[min($0.offset, 5)]). " + $0.element }.joined(separator: "\n") }
         for p in q.parts ?? [] { page += "\n(\(p.label)) " + p.text + "（\(p.marks) 分）" }
         var rev: String?
-        if r.submitted || (q.isMC && r.mc[q.id] != nil) {
-            var s = ""
-            if let a = q.answer, !a.isEmpty { s += "答案：" + a + "\n" }
-            if let c = r.mc[q.id] { s += "学生选了 " + c + "\n" }
-            for p in q.parts ?? [] { s += "(\(p.label)) " + p.answer + "\n" }
-            if let x = q.solution, !x.isEmpty { s += "解答：" + x }
-            rev = s.isEmpty ? nil : s
-        }
+        var all = ""
+        if let a = q.answer, !a.isEmpty { all += "答案：" + a + "\n" }
+        if let c = r.mc[q.id] { all += "学生选了 " + c + "\n" }
+        for p in q.parts ?? [] { all += "(\(p.label)) " + p.answer + "\n" }
+        if let x = q.solution, !x.isEmpty { all += "解答：" + x }
+        let shown = r.submitted || (q.isMC && r.mc[q.id] != nil)
+        if shown { rev = all.isEmpty ? nil : all }
         let imgs = [store.image(q.figure)].compactMap { $0 }
         var ctx = DSContext(key: "daily-\(date)-\(q.id)", subject: d.subject, title: "\(DailySubject.name(d.subject, T)) \(date) · Q\(q.n)",
-                            page: page, images: imgs, revealed: rev,
+                            page: page, images: imgs, revealed: rev, answer: shown ? nil : (all.isEmpty ? nil : all),
                             chapter: d.keyPoints.isEmpty ? nil : (d.scope.map { $0 + "\n" } ?? "") + d.keyPoints.map { "- " + $0 }.joined(separator: "\n"),
                             sheetID: (d.scratch ?? false) ? "daily-" + date : nil)
         if r.submitted, !q.isMC, let s = rev {

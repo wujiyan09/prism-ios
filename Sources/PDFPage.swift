@@ -9,6 +9,8 @@ struct PDFPage: View {
     @State private var doc: PDFDocument?
     @State private var failed = false
     @State private var pageIndex = 0
+    @State private var ink = InkProvider()
+    @State private var inkOn = false
 
     private var file: URL {
         let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("papers", isDirectory: true)
@@ -20,7 +22,7 @@ struct PDFPage: View {
     var body: some View {
         Group {
             if let doc {
-                PDFKitView(doc: doc, onPage: { pageIndex = $0 }).ignoresSafeArea(edges: .bottom)
+                PDFKitView(doc: doc, onPage: { pageIndex = $0 }, ink: ink, inkKey: "pdf:" + url.absoluteString, inkTitle: title).ignoresSafeArea(edges: .bottom)
             } else if failed {
                 ContentUnavailableView {
                     Label(T("Couldn't load the paper", "试卷下载失败"), systemImage: "wifi.exclamationmark")
@@ -38,12 +40,14 @@ struct PDFPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if doc != nil {
+                ToolbarItem(placement: .primaryAction) { InkToggle(on: $inkOn) }
                 ToolbarItem(placement: .primaryAction) {
                     ShareLink(item: file) { Label(T("Share", "分享"), systemImage: "square.and.arrow.up") }
                 }
             }
         }
         .deepSeek(doc.map { DSContext.pdfPage($0, pageIndex, title: title, url: url) })
+        .onChange(of: inkOn) { _, v in ink.enabled = v }
         .task { await load() }
     }
 
@@ -67,6 +71,9 @@ struct PDFPage: View {
 struct PDFKitView: UIViewRepresentable {
     let doc: PDFDocument
     var onPage: ((Int) -> Void)? = nil
+    var ink: InkProvider? = nil
+    var inkKey = ""
+    var inkTitle = ""
     final class Coord: NSObject {
         var onPage: ((Int) -> Void)?
         @objc func changed(_ n: Notification) {
@@ -84,6 +91,11 @@ struct PDFKitView: UIViewRepresentable {
         v.displayMode = .singlePageContinuous
         v.displayDirection = .vertical
         v.backgroundColor = UIColor(Color.appBackground)
+        if let ink {
+            ink.reset(key: inkKey, title: inkTitle)
+            v.pageOverlayViewProvider = ink
+            v.isInMarkupMode = true
+        }
         v.document = doc
         return v
     }

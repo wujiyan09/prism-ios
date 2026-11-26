@@ -142,6 +142,9 @@ struct PPSchoolPaper: View {
     @State private var showMS = false
     @State private var confirmHandIn = false
     @State private var confirmDone = false
+    @State private var page = 0
+    @State private var ink = InkProvider()
+    @State private var inkOn = false
     private var sheet: String { "pp-" + info.id }
     private var title: String { "\(info.yr) \(info.fm) \(info.sj) \(info.ak)" + (info.pp.isEmpty ? "" : " " + info.pp) }
     private var review: Bool { ReviewStore.shared.inReview(sheet) || info.p.isEmpty }
@@ -150,7 +153,8 @@ struct PPSchoolPaper: View {
         WorkSplit(on: splitOn, sheetID: sheet, figs: [], ratio: 0.5) {
             Group {
                 if let d = (showMS && review) ? ms : paper ?? ms {
-                    PDFKitView(doc: d, onPage: { _ in }).id(showMS)
+                    PDFKitView(doc: d, onPage: { page = $0 }, ink: ink, inkKey: "pp:" + info.id + (d === ms ? "-ms" : ""),
+                               inkTitle: title + (d === ms ? " · 评分标准" : "")).id(showMS)
                 } else {
                     DownloadOverlay()
                 }
@@ -159,7 +163,10 @@ struct PPSchoolPaper: View {
         .appScreen()
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .deepSeek(pdfContext)
+        .onChange(of: inkOn) { _, v in ink.enabled = v }
         .toolbar {
+            ToolbarItem(placement: .primaryAction) { InkToggle(on: $inkOn) }
             if review, !info.ms.isEmpty, !info.p.isEmpty {
                 ToolbarItem(placement: .principal) {
                     Picker("", selection: $showMS) {
@@ -198,6 +205,35 @@ struct PPSchoolPaper: View {
     }
 }
 
+extension PPSchoolPaper {
+    /// Current PDF page (text + image); the marking scheme text goes along as the hidden answer.
+    var pdfContext: DSContext? {
+        let showing = (showMS && review) ? ms : paper ?? ms
+        guard let d = showing else { return nil }
+        let isMS = d === ms
+        var ans: String?
+        if !isMS, let m = ms { ans = DSStudy.cut(m.string ?? "", 12000) }
+        let u = d.documentURL ?? URL(fileURLWithPath: info.id)
+        var c = DSContext.pdfPage(d, page, title: title + (isMS ? " · Marking scheme" : ""), url: u, subject: "math", answer: ans)
+        c.sheetID = splitOn ? sheet : nil
+        return c
+    }
+}
+
+enum PPDS {
+    static func ctx(_ q: PPQ, title: String, review: Bool, picked: Int?, sheet: String?) -> DSContext {
+        let L = ["A", "B", "C", "D", "E", "F"]
+        var page = q.ref + (q.mk.map { "（\($0) 分）" } ?? "") + "\n" + q.q
+        if let o = q.o { page += "\n" + o.enumerated().map { "\(L[min($0.offset, 5)]). " + $0.element }.joined(separator: "\n") }
+        var s = "答案：" + q.a
+        if let p = picked, q.o != nil { s += "\n学生选了 " + L[min(p, 5)] }
+        if !q.ms.isEmpty { s += "\n解析 / 评分标准：\n" + q.ms }
+        let ch = (q.ch ?? []).compactMap { MathLibrary.shared.chapter($0) }.first.map { DSContext.mathChapter($0) }
+        return DSContext(key: "pp-q-" + q.id, subject: "math", title: title + " · " + q.ref, page: page, images: q.figImages,
+                         revealed: review ? s : nil, answer: review ? nil : s, chapter: ch, sheetID: sheet)
+    }
+}
+
 /// HKCEE by-topic set: all questions on one sheet; 交卷 → answers + ✓/✗ → 完成.
 struct PPSetView: View {
     let info: PPIndex.CE
@@ -218,6 +254,7 @@ struct PPSetView: View {
                 WorkSplit(on: splitOn, sheetID: sheet, figs: splitOn ? q.figImages : [], ratio: 0.45) {
                     PPQuestionView(q: q, label: set.al, splitOn: splitOn, review: review, picked: Binding(get: { picked[q.id] }, set: { picked[q.id] = $0 }), sheetID: sheet)
                         .id(q.id)
+                        .deepSeek(PPDS.ctx(q, title: info.t, review: review, picked: picked[q.id], sheet: splitOn ? sheet : nil))
                 } bar: {
                     PageCluster(index: index, count: set.qs.count,
                                 prev: index > 0 ? { index -= 1 } : nil,

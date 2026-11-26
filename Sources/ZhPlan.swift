@@ -42,6 +42,9 @@ extension Planner {
                 main.append(queues[q].tasks[idx[q]]); idx[q] += 1; left = true
             }
         }
+        let of = OfficialPlan.tasks(e)
+        if !of.mid.isEmpty { let at = main.count / 2; main.insert(contentsOf: of.mid, at: at) }
+        main += of.late
         let n = days(until: e.date)
         let finalDays = n >= 6 ? 2 : (n >= 2 ? 1 : 0)
         let final = (0..<finalDays).flatMap { d in

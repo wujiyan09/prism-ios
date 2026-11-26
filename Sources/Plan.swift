@@ -228,6 +228,7 @@ enum Planner {
 
     static func title(_ t: PlanTask, _ lib: Library, _ T: Tr) -> String {
         if let x = DSPlan.title(t) { return x }
+        if let x = OfficialPlan.title(t) { return x }
         if let id = t.chapterID, lib.chapter(id) == nil, MathLibrary.shared.chapter(id) != nil { return zhTitle(t) }
         let c = t.chapterID.flatMap { lib.chapter($0) }
         let ch = c.map { "\($0.bookID) Ch\($0.n) \($0.t)" } ?? ""
@@ -437,6 +438,7 @@ struct TaskRow: View {
 
     private func start() {
         if DSPlan.start(task, exam, scene, store, lib) { return }
+        if OfficialPlan.start(task, exam, scene, store) { return }
         if exam.usesMathLib { Planner.zhStart(task, exam, scene, store, prog); return }
         let pt: (UUID, String) = (exam.id, task.id)
         let c = task.chapterID.flatMap { lib.chapter($0) }

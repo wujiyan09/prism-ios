@@ -854,14 +854,14 @@ extension DSContext {
     }
 
     /// Past-paper PDF: text and a picture of the page being viewed.
-    static func pdfPage(_ doc: PDFDocument, _ i: Int, title: String, url: URL) -> DSContext {
+    static func pdfPage(_ doc: PDFDocument, _ i: Int, title: String, url: URL, subject: String = "ict", answer: String? = nil) -> DSContext {
         let idx = min(max(0, i), max(0, doc.pageCount - 1))
         let p = doc.page(at: idx)
         let text = DSStudy.cut(p?.string ?? "", 6000)
         let img = p?.thumbnail(of: CGSize(width: 1400, height: 1800), for: .mediaBox)
         let isMS = title.localizedCaseInsensitiveContains("marking")
-        return DSContext(key: "pdf-" + url.lastPathComponent + "-\(idx)", subject: "ict", title: "\(title) · 第 \(idx + 1) 页",
+        return DSContext(key: "pdf-" + url.lastPathComponent + "-\(idx)", subject: subject, title: "\(title) · 第 \(idx + 1) 页",
                          page: text.isEmpty ? "（这一页没有文字层，见附图）" : text, images: [img].compactMap { $0 },
-                         revealed: isMS ? "（这一页本身就是评分标准）" : nil)
+                         revealed: isMS ? "（这一页本身就是评分标准）" : nil, answer: isMS ? nil : answer)
     }
 }

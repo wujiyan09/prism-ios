@@ -35,6 +35,7 @@ struct QuizBuilderView: View {
             Section {
                 scopeToggle("comp", T("All compulsory", "全部必修"))
                 scopeToggle("elec", T("All electives", "全部选修"))
+                ForEach(lib.books.filter(\.elective)) { b in scopeToggle("b:" + b.id, T("Elective · ", "选修 · ") + b.name) }
                 ForEach(Topics.order, id: \.self) { t in scopeToggle("t:" + t, Topics.name(t)) }
                 NavigationLink(value: Route.chapterPicker) {
                     HStack {
@@ -126,20 +127,29 @@ struct QuizBuilderView: View {
         let chs = lib.chapters.filter { c in
             let t = Topics.bookTopic[c.bookID] ?? c.bookID
             return scope.isEmpty || scope.contains("c:" + c.id) || (scope.contains("comp") && !c.elective)
-                || (scope.contains("elec") && c.elective) || scope.contains("t:" + t)
+                || (scope.contains("elec") && c.elective) || scope.contains("t:" + t) || scope.contains("b:" + c.bookID)
         }
         var tps = Set(chs.map { Topics.bookTopic[$0.bookID] ?? $0.bookID })
         scope.filter { $0.hasPrefix("t:") }.forEach { tps.insert(String($0.dropFirst(2))) }
-        let orig = chs.flatMap { c in
-            (type.contains("mc") ? c.mc : []) + (type.contains("sq") ? c.sq : []) + (type.contains("pr") ? c.pr : [])
-        }
         func inScope(_ k: String) -> Bool { scope.isEmpty || tps.contains(lib.items[k]?.topic ?? "") }
         let real = (type.contains("mc") ? lib.dseMC.filter(inScope) : [])
             + ((type.contains("lq") || type.contains("sq")) ? lib.dseLQ.filter(inScope) : [])
-        var nr = Int((Double(n) * q.mix / 100).rounded())
-        if orig.isEmpty { nr = n }
-        if real.isEmpty { nr = 0 }
-        let pick = Array(prog.prioritised(real).prefix(nr)) + Array(prog.prioritised(orig).prefix(n - min(nr, real.count)))
+        // Chapter lists can contain the same DSE questions; keep the two pools disjoint so 0% really means none.
+        let realSet = Set(lib.dseMC + lib.dseLQ)
+        let orig = chs.flatMap { c in
+            (type.contains("mc") ? c.mc : []) + (type.contains("sq") ? c.sq : []) + (type.contains("pr") ? c.pr : [])
+        }.filter { !realSet.contains($0) }
+        let mix = min(100, max(0, q.mix))
+        var nr = Int((Double(n) * mix / 100).rounded())
+        if mix > 0 && nr == 0 { nr = 1 }
+        if mix < 100 && nr == n && n > 1 { nr = n - 1 }
+        // Only top up from the other pool when one pool runs short, never across 0% / 100%.
+        var takeReal = min(nr, real.count)
+        var takeOrig = min(n - nr, orig.count)
+        if mix > 0, takeOrig < n - nr { takeReal = min(real.count, n - takeOrig) }
+        if mix < 100, takeReal < nr { takeOrig = min(orig.count, n - takeReal) }
+        let pick = Array(prog.prioritised(real).prefix(takeReal)) + Array(prog.prioritised(orig).prefix(takeOrig))
+        guard !pick.isEmpty else { noType = true; return }
         scene.start(T("Quiz", "测验") + " · \(pick.count) " + T("Qs", "题"), pick.shuffled())
     }
 }

@@ -190,6 +190,8 @@ enum Route: Hashable {
     case mathQuiz(MathQuizSpec)
     case daily(String)
     case dailyRun(String)
+    case mathPaper(String)
+    case ppSet(String)
 }
 
 enum ToolKind: String, CaseIterable, Hashable, Identifiable {

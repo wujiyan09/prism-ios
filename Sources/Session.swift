@@ -139,6 +139,8 @@ struct SessionView: View {
     @State private var confirmSubmit = false
     @State private var confirmQuit = false
     @FocusState private var typing: Bool
+    @AppStorage("math.split.on") private var splitOn = true
+    private var sheetKey: String { "ict-s-" + session.id.uuidString }
 
     var body: some View {
         NavigationStack {
@@ -146,15 +148,17 @@ struct SessionView: View {
                 if session.submitted {
                     ResultView(session: session)
                 } else {
-                    questionPage
-                        .pageNav {
-                            PageCluster(index: session.index, count: session.keys.count,
-                                        prev: session.index > 0 ? { go(-1) } : nil,
-                                        next: session.index < session.keys.count - 1 ? { go(1) } : nil)
-                            if session.index == session.keys.count - 1 {
-                                Button(T("Submit", "交卷")) { trySubmit() }.glassButton(prominent: true)
-                            }
+                    // Same question | scratch split as Maths; one sheet per session, cleared when it closes.
+                    WorkSplit(on: splitOn, sheetID: sheetKey, figs: []) {
+                        questionPage
+                    } bar: {
+                        PageCluster(index: session.index, count: session.keys.count,
+                                    prev: session.index > 0 ? { go(-1) } : nil,
+                                    next: session.index < session.keys.count - 1 ? { go(1) } : nil)
+                        if session.index == session.keys.count - 1 {
+                            Button(T("Submit", "交卷")) { trySubmit() }.glassButton(prominent: true)
                         }
+                    }
                 }
             }
             .navigationTitle(session.title)
@@ -171,6 +175,10 @@ struct SessionView: View {
                     .keyboardShortcut(.cancelAction)
                 }
                 if !session.submitted {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { withAnimation { splitOn.toggle() } } label: { Image(systemName: splitOn ? "rectangle.split.2x1.fill" : "rectangle.split.2x1") }
+                            .accessibilityLabel(T("Scratch paper", "草稿纸"))
+                    }
                     ToolbarItem(placement: .principal) { jumpMenu }
                     ToolbarItem(placement: .confirmationAction) {
                         Button(T("Submit", "交卷")) { trySubmit() }
@@ -184,6 +192,7 @@ struct SessionView: View {
                 Button(T("Submit anyway", "仍然交卷")) { session.submit(lib, prog) }
             }
         }
+        .workingSession(sheetKey)
         .focusedSceneValue(\.pager, actions)
         .keyPager(actions)
         .hardTopEdge()
@@ -240,7 +249,7 @@ struct SessionView: View {
             if let it = lib.items[session.keys[i]] {
                 QuestionForm(item: it, index: i, session: session, typing: $typing)
                     .id(i)
-                    .deepSeek(DSContext.ictItem(it, title: session.title + " · Q\(i + 1)"))
+                    .deepSeek({ var c = DSContext.ictItem(it, title: session.title + " · Q\(i + 1)"); c.sheetID = splitOn ? sheetKey : nil; return c }())
             }
         }
     }
