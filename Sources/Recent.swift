@@ -54,7 +54,7 @@ final class RecentStore {
     /// Which subject a target belongs to (nil = not subject-specific).
     static func subject(of t: RecentTarget) -> String? {
         func m(_ chapterID: String) -> String {
-            MathLibrary.shared.chapter(chapterID)?.subjectID ?? (chapterID.hasPrefix("z-") ? "zh" : (chapterID.hasPrefix("chem-") ? "chem" : "math"))
+            MathLibrary.shared.chapter(chapterID)?.subjectID ?? (chapterID.hasPrefix("z-") ? "zh" : (chapterID.hasPrefix("c-") ? "chem" : "math"))
         }
         switch t {
         case .cards, .chapter, .practical, .year, .paper2: return "ict"
@@ -64,7 +64,7 @@ final class RecentStore {
             return nil
         case .mathQuiz(let spec):
             switch spec {
-            case .set(let id): return id.lowercased().hasPrefix("z-") ? "zh" : (id.lowercased().hasPrefix("chem-") ? "chem" : "math")
+            case .set(let id): return id.lowercased().hasPrefix("z-") ? "zh" : (id.lowercased().hasPrefix("c-") ? "chem" : "math")
             case .custom(let ids, _, _): return ids.first.map { m(String($0.split(separator: ":").first ?? "")) }
             }
         default: return nil

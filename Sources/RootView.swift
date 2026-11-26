@@ -173,7 +173,7 @@ struct RouteView: View {
         case .subject(.learn, "chem"): MathBookListView(subj: "chem")
         case .subject(.quiz, "chem"): MathQuizHome(subj: "chem")
         case .subject(.progress, "chem"): MathStatsView(subj: "chem")
-        case .subject(.dse, "chem"): MathPapersHome(subj: "chem")
+        case .subject(.dse, "chem"): ChemPapersHome()
         case .subject(let sec, _):
             switch sec {
             case .learn: BookListView()

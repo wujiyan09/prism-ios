@@ -91,7 +91,7 @@ struct MChapter: Codable, Hashable, Identifiable {
     }
     /// Chinese 範文 chapters have no chapter number in their title.
     var isZh: Bool { id.hasPrefix("z-") }
-    var isChem: Bool { id.hasPrefix("chem-") }
+    var isChem: Bool { id.hasPrefix("c-") }
     /// Subject id for DeepSeek / recents ("math", "zh", "chem").
     var subjectID: String { isZh ? "zh" : (isChem ? "chem" : "math") }
     var label: String { isZh ? t : "Ch\(n) \(t)" }
@@ -352,10 +352,10 @@ struct MathChapterView: View {
                     .listRowInsets(EdgeInsets())
                 }
                 if tab == 0 { cards(c) } else { practice(c) }
-                if c.isZh {
+                if c.isZh || c.isChem {
                     Section {
                         NavigationLink { ZhLongSetView(chapterID: c.id) } label: {
-                            Label(T("Long-answer questions", "長答題（短答 / 長答）"), systemImage: "text.alignleft")
+                            Label(c.isChem ? T("Long questions", "长题（结构 / 论述）") : T("Long-answer questions", "長答題（短答 / 長答）"), systemImage: "text.alignleft")
                         }
                     }
                     .listRowBackground(Color.cardBackground)

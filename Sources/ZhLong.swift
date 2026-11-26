@@ -15,6 +15,8 @@ struct ZLQ: Codable, Hashable, Identifiable {
     let note: String?
     let lbl: String?
     let also: String?
+    let fi: [String]?
+    var figImages: [UIImage] { (fi ?? []).compactMap { MathLibrary.resource($0, "fig").flatMap { UIImage(contentsOfFile: $0.path) } } }
 
     var schemeText: String {
         var s = (pts ?? []).map { $0.t + (($0.mk ?? 0) > 0 ? "（\($0.mk!) 分）" : "") + ($0.lv == true ? "［等級］" : "") }.joined(separator: "\n")
@@ -40,7 +42,7 @@ struct ZLFile: Codable { let v: Int; let ch: String; let qs: [ZLQ] }
 
 enum ZhLong {
     static func load(_ ch: String) -> ZLFile? {
-        MathContent.shared.local("zhlong/\(ch).json").flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(ZLFile.self, from: $0) }
+        MathContent.shared.local((ch.hasPrefix("c-") ? "chemlong/" : "zhlong/") + "\(ch).json").flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(ZLFile.self, from: $0) }
     }
     static func typed(_ id: String) -> String { UserDefaults.standard.string(forKey: "zl.t." + id) ?? "" }
 }
@@ -63,7 +65,7 @@ struct ZhLongSetView: View {
                 let q = f.qs[min(index, f.qs.count - 1)]
                 WorkSplit(on: splitOn && ZLInput.mode(q.id) == "hand", sheetID: sheet, figs: [], ratio: 0.5) {
                     ZhLongQuestion(q: q, chapter: chapter, review: review, sheetID: sheet).id(q.id)
-                        .environment(\.zhSerif, true)
+                        .environment(\.zhSerif, chapter?.isZh ?? true)
                         .deepSeek(ctx(q))
                 } bar: {
                     PageCluster(index: index, count: f.qs.count,
@@ -77,7 +79,7 @@ struct ZhLongSetView: View {
             }
         }
         .appScreen()
-        .navigationTitle((chapter?.t ?? "") + " · 長答")
+        .navigationTitle((chapter?.t ?? "") + ((chapter?.isChem ?? false) ? " · Long questions" : " · 長答"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -117,7 +119,7 @@ struct ZhLongSetView: View {
         let typed = ZhLong.typed(q.id)
         if !typed.isEmpty { page += "\n\n【學生打字作答】\n" + typed }
         let s = q.schemeText
-        return DSContext(key: "zl-" + q.id, subject: "zh", title: (chapter?.t ?? "") + " · " + (q.l ?? "長答"), page: page,
+        return DSContext(key: "zl-" + q.id, subject: chapter?.subjectID ?? "zh", title: (chapter?.t ?? "") + " · " + (q.l ?? "長答"), page: page,
                          revealed: review ? s : nil, answer: review ? nil : s,
                          chapter: chapter.map { DSContext.mathChapter($0) }, sheetID: ZLInput.mode(q.id) == "hand" ? sheet : nil)
     }
@@ -155,6 +157,7 @@ struct ZhLongQuestion: View {
                         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                 }
                 MathText(text: q.q, size: 18)
+                FigureStack(images: q.figImages)
                 Picker("", selection: $mode) {
                     Text("打字").tag("type")
                     Text("手寫").tag("hand")
@@ -162,7 +165,7 @@ struct ZhLongQuestion: View {
                 .pickerStyle(.segmented).frame(maxWidth: 240)
                 if mode == "type" {
                     TextEditor(text: $text)
-                        .font(Reading.font(17, serif: true))
+                        .font(Reading.font(17, serif: chapter?.isZh ?? true))
                         .frame(minHeight: 180)
                         .scrollContentBackground(.hidden)
                         .padding(8)
