@@ -3,11 +3,11 @@ import SwiftUI
 /// Official materials in exam plans: school papers for the same assessment, HKCEE sets on the exam's chapters.
 enum OfficialPlan {
     static func tasks(_ e: Exam) -> (mid: [PlanTask], late: [PlanTask]) {
-        guard e.subject == "math", let idx = PP.index() else { return ([], []) }
+        guard e.subject == "math" || e.subject == "chem", let idx = PP.index() else { return ([], []) }
         let chs = Set(e.chapters)
         let m2 = e.chapters.contains { $0.hasPrefix("m-m2") }
         let name = e.name.uppercased().replacingOccurrences(of: " ", with: "")
-        let sj = m2 ? "M2" : "MA"
+        let sj = e.subject == "chem" ? "CHEM" : (m2 ? "M2" : "MA")
         let school = idx.school.filter { !$0.p.isEmpty && $0.sj == sj }
         func score(_ s: PPIndex.School) -> Int {
             let ak = s.ak.uppercased().replacingOccurrences(of: " ", with: "")
@@ -16,7 +16,7 @@ enum OfficialPlan {
         let ranked = school.sorted { (score($0), $0.yr) > (score($1), $1.yr) }
         let matched = ranked.filter { score($0) >= 4 }
         let papers = Array((matched.isEmpty ? ranked : matched).prefix(matched.isEmpty ? 1 : 3))
-        let ce = idx.ce.filter { !Set($0.chs).isDisjoint(with: chs) }.prefix(4)
+        let ce = e.subject == "chem" ? [] : idx.ce.filter { !Set($0.chs).isDisjoint(with: chs) }.prefix(4)
         let mid = ce.map { PlanTask(id: "of-ce-" + $0.id, kind: .practice, chapterID: nil, topic: $0.id, minutes: 30) }
         // Oldest first so the most recent (most similar) paper lands closest to the exam.
         let late = papers.reversed().map { PlanTask(id: "of-sp-" + $0.id, kind: .mock, chapterID: nil, topic: $0.id, minutes: 60) }

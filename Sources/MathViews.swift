@@ -91,6 +91,9 @@ struct MChapter: Codable, Hashable, Identifiable {
     }
     /// Chinese 範文 chapters have no chapter number in their title.
     var isZh: Bool { id.hasPrefix("z-") }
+    var isChem: Bool { id.hasPrefix("chem-") }
+    /// Subject id for DeepSeek / recents ("math", "zh", "chem").
+    var subjectID: String { isZh ? "zh" : (isChem ? "chem" : "math") }
     var label: String { isZh ? t : "Ch\(n) \(t)" }
     var examples: [MItem] { items.filter { !$0.isPractice } }
     var practice: [MItem] { items.filter { $0.isPractice } }
@@ -122,6 +125,10 @@ final class MathLibrary {
             if let zu = MathContent.shared.local("zh.json"), let zd = try? Data(contentsOf: zu), let zf = try? JSONDecoder().decode(MFile.self, from: zd) {
                 all += zf.books.map { var b = $0; b.subj = "zh"; return b }
             }
+            // Chemistry uses the same pipeline (chem.json + ch/chem-*.json + mc/chem-*.json).
+            if let cu = MathContent.shared.local("chem.json"), let cd = try? Data(contentsOf: cu), let cf = try? JSONDecoder().decode(MFile.self, from: cd) {
+                all += cf.books.map { var b = $0; b.subj = "chem"; return b }
+            }
             books = all
             let l = loaded; loaded = []
             for g in l { reloadChapter(g) }
@@ -149,6 +156,13 @@ final class MathLibrary {
         loaded.remove(id)
     }
     var chapters: [MChapter] { books.flatMap { $0.chs } }
+    static func title(_ subj: String, _ T: Tr) -> String {
+        switch subj {
+        case "zh": return T("Chinese", "中文")
+        case "chem": return T("Chemistry", "化学")
+        default: return T("Maths", "数学")
+        }
+    }
     func books(_ subject: String) -> [MBook] { books.filter { $0.subject == subject } }
     func chapters(_ subject: String) -> [MChapter] { books(subject).flatMap { $0.chs } }
     func chapter(_ id: String) -> MChapter? { chapters.first { $0.id == id } }
@@ -252,7 +266,7 @@ struct MathBookListView: View {
         }
         .listStyle(.insetGrouped)
         .appList()
-        .navigationTitle(subj == "zh" ? T("Chinese", "中文") : T("Maths", "数学"))
+        .navigationTitle(MathLibrary.title(subj, T))
     }
 }
 
@@ -628,7 +642,7 @@ struct MathItemView: View {
             if revealed?.isEmpty == true { revealed = nil }
             if revealed == nil, !(it.a ?? []).isEmpty { imgs += (it.a ?? []).compactMap { PDFRegions.image(c.pdf, $0) }; revealed = "（答案见附图）" }
         }
-        var ctx = DSContext(key: "m-item-" + it.id, subject: c.isZh ? "zh" : "math", title: (c.isZh ? c.t : "Ch\(c.n)") + " · " + it.l,
+        var ctx = DSContext(key: "m-item-" + it.id, subject: c.subjectID, title: (c.isZh ? c.t : "Ch\(c.n)") + " · " + it.l,
                             page: page, images: imgs, revealed: review ? nil : revealed, answer: review ? revealed : nil,
                             chapter: DSContext.mathChapter(c),
                             sheetID: split ? "ch-" + c.id : nil)

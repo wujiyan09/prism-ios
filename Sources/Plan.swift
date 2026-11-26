@@ -40,7 +40,7 @@ struct Exam: Codable, Identifiable, Hashable {
 
 extension Exam {
     /// Maths and 中文 plans use chapters from MathLibrary.
-    var usesMathLib: Bool { subject == "zh" || subject == "math" }
+    var usesMathLib: Bool { subject == "zh" || subject == "math" || subject == "chem" }
 }
 
 enum TaskKind: String, Codable {

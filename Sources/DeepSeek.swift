@@ -305,7 +305,7 @@ struct DSContext {
         for v in k.vis ?? [] {
             if let f = v.img, let u = MathLibrary.resource(f, "vis"), let im = UIImage(contentsOfFile: u.path) { imgs.append(im) }
         }
-        return DSContext(key: "m-card-\(c.id)-\(i)", subject: c.isZh ? "zh" : "math", title: k.t ?? c.label,
+        return DSContext(key: "m-card-\(c.id)-\(i)", subject: c.subjectID, title: k.t ?? c.label,
                          page: parts.filter { !$0.isEmpty }.joined(separator: "\n\n"), images: imgs,
                          chapter: mathChapter(c), isCard: true)
     }

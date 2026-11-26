@@ -126,7 +126,7 @@ struct MathQuizHome: View {
         }
         .listStyle(.insetGrouped)
         .appList()
-        .navigationTitle(subj == "zh" ? T("Chinese", "中文") : T("Maths", "数学"))
+        .navigationTitle(MathLibrary.title(subj, T))
     }
 
     private var pickedHere: [String] { let ids = Set(lib.chapters(subj).map(\.id)); return pickedSet.filter { ids.contains($0) }.sorted() }
@@ -261,7 +261,7 @@ struct MathQuizRunner: View {
         var ans: String?
         if rev == nil, let pos = it.order.firstIndex(of: it.v.a) { ans = "正确答案：\(L[min(pos, 5)])\n" + it.v.so.joined(separator: "\n") }
         let ch = MathMC.shared.chapter(of: it.q.id).flatMap { MathLibrary.shared.chapter($0) }.map { DSContext.mathChapter($0) }
-        return DSContext(key: "m-mc-" + it.id, subject: isZh ? "zh" : "math", title: title + " · Q\(index + 1)",
+        return DSContext(key: "m-mc-" + it.id, subject: isZh ? "zh" : (MathMC.shared.chapter(of: it.q.id).map { $0.hasPrefix("chem-") ? "chem" : "math" } ?? "math"), title: title + " · Q\(index + 1)",
                          page: it.v.st + "\n\n" + opts, images: figImages(it), revealed: rev, answer: ans, chapter: ch,
                          sheetID: split ? "quiz-\(spec)" : nil)
     }

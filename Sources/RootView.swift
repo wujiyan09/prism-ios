@@ -170,6 +170,10 @@ struct RouteView: View {
         case .subject(.learn, "zh"): MathBookListView(subj: "zh")
         case .subject(.quiz, "zh"): MathQuizHome(subj: "zh")
         case .subject(.progress, "zh"): MathStatsView(subj: "zh")
+        case .subject(.learn, "chem"): MathBookListView(subj: "chem")
+        case .subject(.quiz, "chem"): MathQuizHome(subj: "chem")
+        case .subject(.progress, "chem"): MathStatsView(subj: "chem")
+        case .subject(.dse, "chem"): MathPapersHome(subj: "chem")
         case .subject(let sec, _):
             switch sec {
             case .learn: BookListView()
@@ -206,7 +210,7 @@ struct SubjectListView: View {
     @State private var editing: EditMode = .inactive
     private var subjects: [Subject] {
         _ = orderRaw
-        return Subject.ordered.filter { section == .learn || section == .quiz || section == .progress || !$0.bundled || $0.id == "math" }
+        return Subject.ordered.filter { section == .learn || section == .quiz || section == .progress || !$0.bundled || $0.id == "math" || $0.id == "chem" }
     }
     var body: some View {
         List {

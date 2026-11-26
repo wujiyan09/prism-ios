@@ -395,7 +395,7 @@ struct MathStatsView: View {
         }
         .listStyle(.insetGrouped)
         .appList()
-        .navigationTitle(subj == "zh" ? T("Chinese Progress", "中文 进度") : T("Maths Progress", "数学 进度"))
+        .navigationTitle(MathLibrary.title(subj, T) + T(" Progress", " 进度"))
     }
 
     @ViewBuilder private func pills(_ s: (done: Int, correct: Int, total: Int), _ learned: Int, _ read: Int) -> some View {

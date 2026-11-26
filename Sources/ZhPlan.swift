@@ -4,7 +4,7 @@ import SwiftUI
 
 extension Planner {
     static func zhChapters(_ e: Exam) -> [MChapter] {
-        MathLibrary.shared.chapters(e.subject == "math" ? "math" : "zh").filter { e.chapters.contains($0.id) }
+        MathLibrary.shared.chapters(e.subject == "math" || e.subject == "chem" ? e.subject : "zh").filter { e.chapters.contains($0.id) }
     }
 
     static func zhMastery(_ c: MChapter, _ prog: ProgressStore) -> Int {
@@ -106,7 +106,7 @@ struct ZhExamSections: View {
     }
 
     var body: some View {
-        let subj = exam.subject == "math" ? "math" : "zh"
+        let subj = exam.subject == "math" || exam.subject == "chem" ? exam.subject : "zh"
         let books = lib.books(subj)
         Section {
             if books.isEmpty {

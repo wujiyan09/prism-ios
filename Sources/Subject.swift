@@ -22,7 +22,9 @@ struct Subject: Identifiable, Hashable {
 
     static let zh = Subject(id: "zh", name: "Chinese", nameZh: "中文", icon: "character.book.closed", base: "", cacheName: "math", bundled: true)
 
-    static let all: [Subject] = [.ict, .math, .zh]
+    static let chem = Subject(id: "chem", name: "Chemistry", nameZh: "化学", icon: "flask", base: "", cacheName: "math", bundled: true)
+
+    static let all: [Subject] = [.ict, .math, .zh, .chem]
     static func find(_ id: String) -> Subject { all.first { $0.id == id } ?? .ict }
 
     /// Subjects in the order Sam chose (Settings / Edit on the subject list).

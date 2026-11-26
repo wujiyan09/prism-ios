@@ -34,6 +34,7 @@ enum PP {
 }
 
 struct MathPapersHome: View {
+    var subj = "math"
     @Environment(\.tr) private var T
     @State private var idx: PPIndex?
     @State private var failed = false
@@ -41,6 +42,8 @@ struct MathPapersHome: View {
         List {
             Section { ImportLibraryLink() }.listRowBackground(Color.cardBackground)
             if let idx {
+                let school = idx.school.filter { subj == "chem" ? $0.sj.uppercased() == "CHEM" : $0.sj.uppercased() != "CHEM" }
+                if subj == "math" {
                 let dse = idx.dse ?? []
                 if dse.isEmpty {
                     Section {
@@ -73,11 +76,13 @@ struct MathPapersHome: View {
                     Text(T("Answers are worked out, not official.", "答案为推导答案，非官方。"))
                 }
                 .listRowBackground(Color.cardBackground)
-                let years = Array(Set(idx.school.map { $0.yr })).sorted(by: >)
+                }
+                let years = Array(Set(school.map { $0.yr })).sorted(by: >)
                 Section(T("School papers", "学校卷")) {
+                    if years.isEmpty { Text(T("No school papers yet.", "还没有学校卷。")).foregroundStyle(.secondary) }
                     ForEach(years, id: \.self) { y in
-                        NavigationLink { PPSchoolYear(year: y, items: idx.school.filter { $0.yr == y }) } label: {
-                            LabeledContent("20" + y.prefix(2) + "–" + y.suffix(2), value: T("\(idx.school.filter { $0.yr == y }.count) papers", "\(idx.school.filter { $0.yr == y }.count) 份"))
+                        NavigationLink { PPSchoolYear(year: y, items: school.filter { $0.yr == y }) } label: {
+                            LabeledContent("20" + y.prefix(2) + "–" + y.suffix(2), value: T("\(school.filter { $0.yr == y }.count) papers", "\(school.filter { $0.yr == y }.count) 份"))
                         }
                     }
                 }
@@ -90,7 +95,7 @@ struct MathPapersHome: View {
         }
         .listStyle(.insetGrouped)
         .appList()
-        .navigationTitle(T("Maths Past Papers", "数学真题"))
+        .navigationTitle(subj == "chem" ? T("Chemistry Past Papers", "化学真题") : T("Maths Past Papers", "数学真题"))
         .task {
             idx = PP.index()
             if idx == nil { await MathContent.shared.ensure("meta"); idx = PP.index(); failed = idx == nil }
@@ -105,10 +110,10 @@ struct PPSchoolYear: View {
     var body: some View {
         List {
             ForEach(["S5", "S4"], id: \.self) { f in
-                ForEach(["MA", "M2"], id: \.self) { sj in
+                ForEach(["MA", "M2", "CHEM"], id: \.self) { sj in
                     let xs = items.filter { $0.fm == f && $0.sj == sj }
                     if !xs.isEmpty {
-                        Section(f + " " + (sj == "MA" ? T("Maths", "数学") : "M2")) {
+                        Section(f + " " + (sj == "MA" ? T("Maths", "数学") : (sj == "CHEM" ? T("Chemistry", "化学") : "M2"))) {
                             ForEach(xs) { s in
                                 NavigationLink { PPSchoolPaper(info: s) } label: {
                                     VStack(alignment: .leading, spacing: 3) {
