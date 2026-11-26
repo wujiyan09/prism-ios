@@ -441,7 +441,8 @@ enum NoteTool: String { case pen, select }
 struct NoteDocView: View {
     let id: String
     @State private var store = NoteStore.shared
-    @State private var tool: NoteTool = .pen
+    @State private var zoom: CGFloat = 1
+    @State private var pinch: CGFloat = 1
     @State private var current: String?
     @State private var selected: String?
     @State private var editing: NoteItem?
@@ -455,6 +456,8 @@ struct NoteDocView: View {
     @State private var rename = false
     @State private var field = ""
     @AppStorage("notes.tools") private var showTools = true
+    /// 笔盘 shown = drawing; hidden = scroll / select.
+    private var tool: NoteTool { showTools ? .pen : .select }
 
     private var doc: NoteDoc? { store.docs[id] }
     private var pageIndex: Int { doc?.pages.firstIndex { $0.id == current } ?? 0 }
@@ -464,8 +467,10 @@ struct NoteDocView: View {
             if let doc {
                 VStack(spacing: 0) {
                     contextBar(doc)
+                    GeometryReader { geo in
+                    let base = min(1000, max(200, geo.size.width - 32))
                     ScrollViewReader { proxy in
-                        ScrollView {
+                        ScrollView([.vertical, .horizontal]) {
                             LazyVStack(spacing: 18) {
                                 ForEach(Array(doc.pages.enumerated()), id: \.element.id) { i, p in
                                     VStack(spacing: 4) {
@@ -477,13 +482,28 @@ struct NoteDocView: View {
                                 }
                             }
                             .scrollTargetLayout()
+                            .frame(width: base * zoom)
+                            .scaleEffect(pinch, anchor: .center)
                             .padding(.horizontal, 16).padding(.vertical, 12)
-                            .frame(maxWidth: 1000)
-                            .frame(maxWidth: .infinity)
+                            .frame(minWidth: geo.size.width)
                         }
                         .scrollPosition(id: $current, anchor: .center)
-                        .scrollDisabled(false)
+                        .simultaneousGesture(MagnifyGesture()
+                            .onChanged { v in pinch = min(4 / zoom, max(0.5 / zoom, v.magnification)) }
+                            .onEnded { v in
+                                let z = min(4, max(0.5, zoom * v.magnification))
+                                var t = Transaction(); t.disablesAnimations = true
+                                withTransaction(t) { zoom = z; pinch = 1 }
+                                if let c = current { DispatchQueue.main.async { proxy.scrollTo(c, anchor: .center) } }
+                            })
+                        .overlay(alignment: .bottomTrailing) {
+                            if zoom != 1 {
+                                Button { zoom = 1 } label: { Text("\(Int(zoom * 100))%").font(.caption.monospacedDigit()) }
+                                    .glassButton().padding(12)
+                            }
+                        }
                         .onChange(of: showPages) { _, v in if !v, let c = current { proxy.scrollTo(c, anchor: .top) } }
+                    }
                     }
                 }
             } else {
@@ -499,7 +519,7 @@ struct NoteDocView: View {
             try? await Task.sleep(for: .milliseconds(600))
             if !Task.isCancelled { ctx = makeContext() }
         }
-        .onChange(of: tool) { _, _ in selected = nil }
+        .onChange(of: showTools) { _, _ in selected = nil }
         .sheet(isPresented: $showPages) { NavigationStack { NotePagesSheet(id: id, current: $current) } }
         .sheet(item: $editing) { it in NavigationStack { NoteTextEditor(docID: id, item: it) } }
         .sheet(item: $share) { s in ActivitySheet(url: s.url) }
@@ -561,13 +581,13 @@ struct NoteDocView: View {
         let p = doc.pages[pageIndex]
         let item = NoteItem(kind: "image", x: 0.25, y: min(0.2, max(0, p.aspect - h)), w: w, h: h, file: f)
         store.update(id) { $0.pages[pageIndex].items.append(item) }
-        tool = .select; selected = item.id
+        showTools = false; selected = item.id
     }
     private func addText() {
         guard let doc, doc.pages.indices.contains(pageIndex) else { return }
         let item = NoteItem(kind: "text", x: 0.1, y: 0.15, w: 0.6, h: 0.15, text: "")
         store.update(id) { $0.pages[pageIndex].items.append(item) }
-        tool = .select; selected = item.id; editing = item
+        showTools = false; selected = item.id; editing = item
     }
     private func addPage(style: String? = nil) {
         guard let doc else { return }
@@ -579,11 +599,9 @@ struct NoteDocView: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
-            Picker("", selection: $tool) {
-                Image(systemName: "pencil.tip").tag(NoteTool.pen)
-                Image(systemName: "hand.point.up.left").tag(NoteTool.select)
+            Button { showTools.toggle() } label: {
+                Label(showTools ? "隐藏笔盘" : "笔盘", systemImage: showTools ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
             }
-            .pickerStyle(.segmented).frame(width: 96)
             Menu {
                 Button { addText() } label: { Label("文本框", systemImage: "textformat") }
                 Button { imgSource = .photos } label: { Label("照片", systemImage: "photo") }
@@ -596,7 +614,6 @@ struct NoteDocView: View {
             } label: { Image(systemName: "plus.circle") }
             Button { showPages = true } label: { Image(systemName: "square.grid.2x2") }.accessibilityLabel("页面")
             Menu {
-                Button { showTools.toggle() } label: { Label(showTools ? "隐藏笔盘" : "显示笔盘", systemImage: "pencil.tip.crop.circle") }
                 Button { field = doc?.title ?? ""; rename = true } label: { Label("重命名", systemImage: "pencil") }
                 Section("导出") {
                     Button { share = NoteExport.flattened(id).map { ShareItem(url: $0) } } label: { Label("PDF（含手写、图片和文本框）", systemImage: "doc.richtext") }
@@ -773,8 +790,9 @@ struct NoteCanvas: UIViewRepresentable {
         context.coordinator.parent = self
         v.isUserInteractionEnabled = enabled
         if v.bounds.width > 10 && context.coordinator.loadedWidth != v.bounds.width { context.coordinator.load() }
-        if enabled && tools && v.window != nil {
-            context.coordinator.picker?.setVisible(true, forFirstResponder: v)
+        if v.window != nil {
+            context.coordinator.picker?.setVisible(enabled && tools, forFirstResponder: v)
+            if !enabled && v.isFirstResponder { v.resignFirstResponder() }
         }
     }
     static func dismantleUIView(_ v: PKCanvasView, coordinator: Coord) {
