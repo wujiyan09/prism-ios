@@ -354,8 +354,11 @@ struct MathChapterView: View {
                 if tab == 0 { cards(c) } else { practice(c) }
                 if c.isZh || c.isChem {
                     Section {
-                        NavigationLink { ZhLongSetView(chapterID: c.id) } label: {
-                            Label(c.isChem ? T("Long questions", "长题（结构 / 论述）") : T("Long-answer questions", "長答題（短答 / 長答）"), systemImage: "text.alignleft")
+                        if c.isChem { ChemLongRows(chapterID: c.id) }
+                        else {
+                            NavigationLink { ZhLongSetView(chapterID: c.id) } label: {
+                                Label(T("Long-answer questions", "長答題（短答 / 長答）"), systemImage: "text.alignleft")
+                            }
                         }
                     }
                     .listRowBackground(Color.cardBackground)

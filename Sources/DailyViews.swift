@@ -504,7 +504,7 @@ struct DailyRunner: View {
         let letters = ["A", "B", "C", "D", "E", "F"]
         ForEach(Array((q.options ?? []).enumerated()), id: \.offset) { i, opt in
             let L = letters[min(i, 5)]
-            let isAns = L == q.answer
+            let isAns = L == (q.answer ?? "").trimmingCharacters(in: CharacterSet.letters.inverted).uppercased().prefix(1).description
             Button {
                 guard chosen == nil, !r.submitted else { return }
                 binding { $0.mc[q.id] = L }

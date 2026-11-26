@@ -8,9 +8,13 @@ struct ICTApp: App {
     @State private var exams = ExamStore.shared
     @Environment(\.scenePhase) private var phase
 
+    init() { UserDefaults.standard.register(defaults: ["autoNext": true]) }
+    @AppStorage("appearance") private var appearance = "system"
+
     var body: some Scene {
         WindowGroup {
             RootView()
+                .preferredColorScheme(appearance == "light" ? .light : (appearance == "dark" ? .dark : nil))
                 .environment(library)
                 .environment(progress)
                 .environment(exams)
@@ -53,15 +57,15 @@ extension Color {
     static var appBackground: Color {
         let th = AppTheme.current
         return Color(uiColor: UIColor { t in
-            guard t.userInterfaceStyle == .dark, let c = th.colors else { return .systemGroupedBackground }
-            return c.bg
+            if t.userInterfaceStyle != .dark { return th.light?.bg ?? .systemGroupedBackground }
+            return th.colors?.bg ?? .systemGroupedBackground
         })
     }
     static var cardBackground: Color {
         let th = AppTheme.current
         return Color(uiColor: UIColor { t in
-            guard t.userInterfaceStyle == .dark, let c = th.colors else { return .secondarySystemGroupedBackground }
-            return c.card
+            if t.userInterfaceStyle != .dark { return th.light?.card ?? .secondarySystemGroupedBackground }
+            return th.colors?.card ?? .secondarySystemGroupedBackground
         })
     }
     static let good = Color.green
@@ -318,6 +322,17 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .graphite: return (Self.rgb(0x141518), Self.rgb(0x25272C))
         case .forest: return (Self.rgb(0x07180F), Self.rgb(0x13301F))
         case .plum: return (Self.rgb(0x170B22), Self.rgb(0x2A1840))
+        case .system: return nil
+        }
+    }
+    /// Light-mode counterparts.
+    var light: (bg: UIColor, card: UIColor)? {
+        switch self {
+        case .navy: return (Self.rgb(0xF5F7FB), Self.rgb(0xFFFFFF))
+        case .black: return (Self.rgb(0xF2F2F7), Self.rgb(0xFFFFFF))
+        case .graphite: return (Self.rgb(0xF1F2F4), Self.rgb(0xFFFFFF))
+        case .forest: return (Self.rgb(0xF1F7F3), Self.rgb(0xFFFFFF))
+        case .plum: return (Self.rgb(0xF7F3FA), Self.rgb(0xFFFFFF))
         case .system: return nil
         }
     }

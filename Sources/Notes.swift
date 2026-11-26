@@ -775,6 +775,7 @@ struct NoteCanvas: UIViewRepresentable {
     func makeUIView(context: Context) -> PKCanvasView {
         let v = PKCanvasView()
         v.backgroundColor = .clear; v.isOpaque = false
+        v.overrideUserInterfaceStyle = .light   // white paper: ink colours stay true in dark mode
         v.drawingPolicy = .default
         v.isScrollEnabled = false
         v.delegate = context.coordinator
@@ -791,6 +792,7 @@ struct NoteCanvas: UIViewRepresentable {
         v.isUserInteractionEnabled = enabled
         if v.bounds.width > 10 && context.coordinator.loadedWidth != v.bounds.width { context.coordinator.load() }
         if v.window != nil {
+            if enabled && tools { context.coordinator.picker?.colorUserInterfaceStyle = .light }
             context.coordinator.picker?.setVisible(enabled && tools, forFirstResponder: v)
             if !enabled && v.isFirstResponder { v.resignFirstResponder() }
         }
@@ -798,6 +800,7 @@ struct NoteCanvas: UIViewRepresentable {
     static func dismantleUIView(_ v: PKCanvasView, coordinator: Coord) {
         coordinator.save()
         coordinator.picker?.removeObserver(v)
+        coordinator.picker?.colorUserInterfaceStyle = .unspecified
     }
 
     final class Coord: NSObject, PKCanvasViewDelegate {

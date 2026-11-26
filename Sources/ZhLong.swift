@@ -16,6 +16,7 @@ struct ZLQ: Codable, Hashable, Identifiable {
     let lbl: String?
     let also: String?
     let fi: [String]?
+    let src: String?
     var figImages: [UIImage] { (fi ?? []).compactMap { MathLibrary.resource($0, "fig").flatMap { UIImage(contentsOfFile: $0.path) } } }
 
     var schemeText: String {
@@ -49,13 +50,14 @@ enum ZhLong {
 
 struct ZhLongSetView: View {
     let chapterID: String
+    var src: String? = nil
     @Environment(\.tr) private var T
     @AppStorage("math.split.on") private var splitOn = true
     @State private var file: ZLFile?
     @State private var index = 0
     @State private var confirmHandIn = false
     @State private var confirmDone = false
-    private var sheet: String { "zl-" + chapterID }
+    private var sheet: String { "zl-" + chapterID + (src.map { "-" + $0 } ?? "") }
     private var review: Bool { ReviewStore.shared.inReview(sheet) }
     private var chapter: MChapter? { MathLibrary.shared.chapter(chapterID) }
 
@@ -101,7 +103,8 @@ struct ZhLongSetView: View {
         .workingSession(sheet)
         .task {
             await MathContent.shared.ensure(chapterID)
-            file = ZhLong.load(chapterID) ?? ZLFile(v: 1, ch: chapterID, qs: [])
+            let f = ZhLong.load(chapterID) ?? ZLFile(v: 1, ch: chapterID, qs: [])
+            file = src == nil ? f : ZLFile(v: f.v, ch: f.ch, qs: f.qs.filter { ChemKind.key($0.src) == src })
         }
     }
 
@@ -201,5 +204,41 @@ struct ZhLongQuestion: View {
             .readingMargin()
         }
         .softEdges()
+    }
+}
+
+/// Chemistry source groups: 校内 / 公开试真题 / Award Scheme (unknown kinds → 其他).
+enum ChemKind {
+    static let order = ["school", "pastpaper", "award", "other"]
+    static func key(_ k: String?) -> String { let k = (k ?? "school").lowercased(); return order.contains(k) ? k : "other" }
+    static func name(_ k: String) -> String {
+        switch k { case "school": return "校内"; case "pastpaper": return "公开试真题"; case "award": return "Award Scheme"; default: return "其他" }
+    }
+    static func groups<T>(_ xs: [T], chem: Bool, kind: KeyPath<T, String>) -> [(String, [T])] {
+        guard chem else { return [("", xs)] }
+        return order.compactMap { k in
+            let g = xs.filter { key($0[keyPath: kind]) == k }
+            return g.isEmpty ? nil : (name(k), g)
+        }
+    }
+}
+
+/// Long-question rows for a Chem chapter, one per source group present.
+struct ChemLongRows: View {
+    let chapterID: String
+    @State private var srcs: [String] = []
+    var body: some View {
+        Group {
+            if srcs.isEmpty {
+                NavigationLink { ZhLongSetView(chapterID: chapterID) } label: { Label("长题（结构 / 论述）", systemImage: "text.alignleft") }
+            }
+            ForEach(srcs, id: \.self) { k in
+                NavigationLink { ZhLongSetView(chapterID: chapterID, src: k) } label: { Label("长题 · " + ChemKind.name(k), systemImage: "text.alignleft") }
+            }
+        }
+        .task {
+            let qs = ZhLong.load(chapterID)?.qs ?? []
+            srcs = ChemKind.order.filter { k in qs.contains { ChemKind.key($0.src) == k } }
+        }
     }
 }

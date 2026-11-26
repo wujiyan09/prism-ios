@@ -448,7 +448,8 @@ struct SettingsView: View {
     @Environment(Library.self) private var lib
     @AppStorage("lang") private var lang = "zh"
     @State private var checking = false
-    @AppStorage("autoNext") private var autoNext = false
+    @AppStorage("autoNext") private var autoNext = true
+    @AppStorage("appearance") private var appearance = "system"
     @AppStorage("theme") private var theme = AppTheme.navy.rawValue
     var body: some View {
         let T = Tr(en: lang == "en")
@@ -511,6 +512,15 @@ struct SettingsView: View {
             } header: {
                 Text(T("Order", "顺序"))
             }
+            .listRowBackground(Color.cardBackground)
+            Section {
+                Picker(T("Appearance", "外观"), selection: $appearance) {
+                    Text(T("System", "跟随系统")).tag("system")
+                    Text(T("Light", "浅色")).tag("light")
+                    Text(T("Dark", "深色")).tag("dark")
+                }
+                .pickerStyle(.segmented)
+            } header: { Text(T("Appearance", "外观")) }
             .listRowBackground(Color.cardBackground)
             Section {
                 Picker(selection: $theme) {

@@ -140,7 +140,7 @@ final class SyncManager: NSObject, ASWebAuthenticationPresentationContextProvidi
 /// Maps app data to flat sync records and back.
 @MainActor
 enum SyncRecords {
-    static let settingKeys = ["theme", "lang", "subject.order", "sidebar.order", "sidebar.hidden", "autoNext"] + Reading.keys
+    static let settingKeys = ["theme", "lang", "subject.order", "sidebar.order", "sidebar.hidden", "autoNext", "appearance"] + Reading.keys
     private static let enc: JSONEncoder = { let e = JSONEncoder(); e.outputFormatting = .sortedKeys; return e }()
     private static func j<T: Encodable>(_ x: T) -> String? { (try? enc.encode(x)).flatMap { String(data: $0, encoding: .utf8) } }
     private static func d<T: Decodable>(_ s: String?, _ t: T.Type) -> T? { s.flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode(T.self, from: $0) } }
