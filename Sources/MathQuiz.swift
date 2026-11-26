@@ -16,6 +16,8 @@ struct MCQ: Codable, Hashable, Identifiable {
     let lvl: String?
     let fo: String?
     let v: [MCVariant]
+    var tg: [String]? = nil
+    var asg: String? = nil
 }
 struct MCSet: Codable, Hashable, Identifiable {
     let id: String
@@ -48,7 +50,15 @@ final class MathMC {
     func chapter(of qid: String) -> String? {
         byChapter.first { $0.value.contains { $0.qs.contains { $0.id == qid } } }?.key
     }
-    func set(_ id: String) -> MCSet? { sets.first { $0.id == id } }
+    /// "SETID|filter" = the set limited to a tag (@, #) or assignment (asg) — Chem Award Scheme chips.
+    func set(_ id: String) -> MCSet? {
+        let parts = id.split(separator: "|", maxSplits: 1).map(String.init)
+        guard let s = sets.first(where: { $0.id == parts[0] }) else { return nil }
+        guard parts.count == 2 else { return s }
+        let f = parts[1]
+        let qs = s.qs.filter { ($0.tg ?? []).contains(f) || $0.asg == f }
+        return MCSet(id: id, ch: s.ch, kind: s.kind, l: s.l, t: ChemKind.chip(f), in: s.in, qs: qs)
+    }
     static func key(_ q: MCQ) -> String { "math:" + q.id }
     static func key(_ id: String) -> String { "math:" + id }
 }
@@ -163,6 +173,20 @@ struct MathSetsView: View {
                     }
                 }
                 .listRowBackground(Color.cardBackground)
+                if s.kind == "award", let full = MathMC.shared.set(s.id) {
+                    let fs = ChemKind.filters(full.qs.map { ($0.tg, $0.asg) })
+                    if !fs.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(fs, id: \.self) { f in
+                                    NavigationLink(value: Route.mathQuiz(.set(s.id + "|" + f))) { Text(ChemKind.chip(f)).font(.caption.bold()) }
+                                        .buttonStyle(.bordered).buttonBorderShape(.capsule)
+                                }
+                            }
+                        }
+                        .listRowBackground(Color.cardBackground)
+                    }
+                }
             }
             } header: { if !g.0.isEmpty { Text(g.0) } }
             }
@@ -310,6 +334,7 @@ struct MathQuizRunner: View {
                 HStack {
                     if let f = it.q.fo, !f.isEmpty { Text(f).font(.caption).foregroundStyle(.secondary) }
                     Spacer()
+                    if let a = it.q.asg, !a.isEmpty { Text(a).font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3).background(Color.orange.opacity(0.18), in: Capsule()) }
                     if let l = it.q.lvl, !l.isEmpty { Text("Level \(l)").font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3).background(Color.secondary.opacity(0.15), in: Capsule()) }
                 }
                 MathText(text: it.v.st, size: 18)

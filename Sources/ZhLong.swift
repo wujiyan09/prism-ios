@@ -17,6 +17,9 @@ struct ZLQ: Codable, Hashable, Identifiable {
     let also: String?
     let fi: [String]?
     let src: String?
+    let na: Bool?
+    let tg: [String]?
+    let asg: String?
     var figImages: [UIImage] { (fi ?? []).compactMap { MathLibrary.resource($0, "fig").flatMap { UIImage(contentsOfFile: $0.path) } } }
 
     var schemeText: String {
@@ -24,11 +27,12 @@ struct ZLQ: Codable, Hashable, Identifiable {
         if let a = ans, !a.isEmpty { s += (s.isEmpty ? "" : "\n") + "參考答案：" + a }
         if let n = note, !n.isEmpty { s += "\n評分說明：" + n }
         if let a = also, !a.isEmpty { s += "\n" + a }
+        if na == true { s = "（这题没有官方评分标准。请你根据题目自己定出合理的得分点和分数再批改。）" + (s.isEmpty ? "" : "\n" + s) }
         return s
     }
     /// Ticked points; level/band descriptors become one point whose max is the top band.
     var points: [LMPoint] {
-        guard lbl != "參考答案" else { return [] }
+        guard lbl != "參考答案", na != true else { return [] }
         let p = pts ?? []
         var out = p.filter { $0.lv != true }.map { LMPoint(text: $0.t, max: max(1, $0.mk ?? 1), got: nil) }
         let bands = p.filter { $0.lv == true }
@@ -48,9 +52,18 @@ enum ZhLong {
     static func typed(_ id: String) -> String { UserDefaults.standard.string(forKey: "zl.t." + id) ?? "" }
 }
 
+extension ZhLongSetView {
+    func pick(_ x: String?) {
+        chip = x; index = 0
+        if let f = file { file = ZLFile(v: f.v, ch: f.ch, qs: x == nil ? all : all.filter { ($0.tg ?? []).contains(x!) || $0.asg == x }) }
+    }
+}
+
 struct ZhLongSetView: View {
     let chapterID: String
     var src: String? = nil
+    @State private var chip: String?
+    @State private var all: [ZLQ] = []
     @Environment(\.tr) private var T
     @AppStorage("math.split.on") private var splitOn = true
     @State private var file: ZLFile?
@@ -70,6 +83,13 @@ struct ZhLongSetView: View {
                         .environment(\.zhSerif, chapter?.isZh ?? true)
                         .deepSeek(ctx(q))
                 } bar: {
+                    let fs = src == "award" ? ChemKind.filters(all.map { ($0.tg, $0.asg) }) : []
+                    if !fs.isEmpty {
+                        Menu {
+                            Button("全部") { pick(nil) }
+                            ForEach(fs, id: \.self) { x in Button(ChemKind.chip(x)) { pick(x) } }
+                        } label: { Label(chip.map(ChemKind.chip) ?? "全部", systemImage: "line.3.horizontal.decrease.circle") }
+                    }
                     PageCluster(index: index, count: f.qs.count,
                                 prev: index > 0 ? { index -= 1 } : nil,
                                 next: index < f.qs.count - 1 ? { index += 1 } : nil)
@@ -104,7 +124,8 @@ struct ZhLongSetView: View {
         .task {
             await MathContent.shared.ensure(chapterID)
             let f = ZhLong.load(chapterID) ?? ZLFile(v: 1, ch: chapterID, qs: [])
-            file = src == nil ? f : ZLFile(v: f.v, ch: f.ch, qs: f.qs.filter { ChemKind.key($0.src) == src })
+            all = src == nil ? f.qs : f.qs.filter { ChemKind.key($0.src) == src }
+            file = ZLFile(v: f.v, ch: f.ch, qs: all)
         }
     }
 
@@ -152,6 +173,7 @@ struct ZhLongQuestion: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Text(q.l ?? "").font(.subheadline.bold()).foregroundStyle(.secondary)
+                    if let a = q.asg, !a.isEmpty { Text(a).font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3).background(Color.orange.opacity(0.18), in: Capsule()) }
                     Spacer()
                     if let m = q.mk { Text("\(m) 分").font(.caption).foregroundStyle(.secondary) }
                 }
@@ -193,11 +215,20 @@ struct ZhLongQuestion: View {
                         if let a = q.also, !a.isEmpty { Text(a).font(.footnote).foregroundStyle(.secondary) }
                     }
                     .card()
+                    if q.na == true {
+                        HStack(spacing: 8) {
+                            ForEach([("不会", 0.0), ("部分对", 0.5), ("全对", 1.0)], id: \.0) { o in
+                                let m = q.mk ?? 2
+                                Button(o.0) { ProgressStore.shared.setScore("zl:" + q.id, Int((Double(m) * o.1).rounded()), max: m) }
+                                    .buttonStyle(.bordered)
+                            }
+                        }
+                    }
                     LongMarkCard(key: "zl:" + q.id, question: q.q, scheme: q.schemeText, sheetID: mode == "hand" ? sheetID : nil,
                                  max: q.mk, score: Binding(get: { ProgressStore.shared.scores["zl:" + q.id] },
                                                            set: { ProgressStore.shared.setScore("zl:" + q.id, $0, max: q.mk ?? 0) }),
                                  points: q.points, answerText: mode == "type" ? text : nil,
-                                 context: chapter.map { "【本章範文資料】\n" + DSContext.mathChapter($0) })
+                                 context: chapter.map { ($0.isChem ? "【本章资料】\n" : "【本章範文資料】\n") + DSContext.mathChapter($0) })
                 }
             }
             .padding(.vertical)
@@ -213,6 +244,16 @@ enum ChemKind {
     static func key(_ k: String?) -> String { let k = (k ?? "school").lowercased(); return order.contains(k) ? k : "other" }
     static func name(_ k: String) -> String {
         switch k { case "school": return "校内"; case "pastpaper": return "公开试真题"; case "award": return "Award Scheme"; default: return "其他" }
+    }
+    /// Chip filters present: "@", "#", then assignments in order.
+    static func filters(_ xs: [([String]?, String?)]) -> [String] {
+        var out: [String] = []
+        for t in ["@", "#"] where xs.contains(where: { ($0.0 ?? []).contains(t) }) { out.append(t) }
+        for a in xs.compactMap({ $0.1 }) where !a.isEmpty && !out.contains(a) { out.append(a) }
+        return out
+    }
+    static func chip(_ f: String) -> String {
+        switch f { case "@": return "UT3 Award Scheme (@)"; case "#": return "Ch28–30 (#)"; default: return f }
     }
     static func groups<T>(_ xs: [T], chem: Bool, kind: KeyPath<T, String>) -> [(String, [T])] {
         guard chem else { return [("", xs)] }
