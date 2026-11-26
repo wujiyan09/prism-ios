@@ -73,7 +73,7 @@ struct MathQuizHome: View {
     var body: some View {
         List {
             MathContentBanner()
-            RecentSection(section: .quiz)
+            RecentSection(section: .quiz, subject: subj)
             ForEach(lib.books(subj)) { b in
                 Section(T(b.name, b.nameZh)) {
                     ForEach(b.chs.filter { !$0.sets.isEmpty }) { c in

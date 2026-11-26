@@ -38,12 +38,17 @@ struct RootView: View {
         }
     }
 
+    @AppStorage("sidebar.order") private var sidebarOrder = ""
+    @AppStorage("sidebar.hidden") private var sidebarHidden = ""
+    @State private var sidebarEditing: EditMode = .inactive
+
     private func tabs(_ T: Tr) -> some View {
-        TabView(selection: Binding<String>(
+        let _ = (sidebarOrder, sidebarHidden)
+        return TabView(selection: Binding<String>(
             get: { AppSection.compactTabs.contains(scene.section) ? scene.section.rawValue : "more" },
             set: { v in
                 if let s = AppSection(rawValue: v) { scene.section = s }
-                else if !AppSection.moreSections.contains(scene.section) { scene.section = .tools }
+                else if !AppSection.moreSections.contains(scene.section) { scene.section = AppSection.moreSections.first ?? .settings }
             })) {
             ForEach(AppSection.compactTabs) { s in
                 stack(s)
@@ -59,9 +64,25 @@ struct RootView: View {
     private func split(_ T: Tr) -> some View {
         NavigationSplitView {
             List(selection: Binding<AppSection?>(get: { scene.section }, set: { if let v = $0 { scene.section = v } })) {
+                let _ = (sidebarOrder, sidebarHidden)
                 Section {
-                    ForEach(AppSection.allCases) { s in
+                    ForEach(sidebarEditing.isEditing ? AppSection.ordered : AppSection.visible) { s in
                         Label(s.title(T), systemImage: s.icon).tag(s)
+                            .opacity(AppSection.hidden.contains(s) ? 0.4 : 1)
+                            .contextMenu {
+                                Button { withAnimation { sidebarEditing = .active } } label: { Label(T("Edit sidebar", "编辑侧边栏"), systemImage: "arrow.up.arrow.down") }
+                                if s != .settings {
+                                    Button { withAnimation { AppSection.setHidden(s, true); sidebarHidden = UserDefaults.standard.string(forKey: "sidebar.hidden") ?? "" } } label: {
+                                        Label(T("Hide", "隐藏"), systemImage: "eye.slash")
+                                    }
+                                }
+                            }
+                    }
+                    .onMove { from, to in
+                        var all = AppSection.ordered
+                        all.move(fromOffsets: from, toOffset: to)
+                        AppSection.saveOrder(all)
+                        sidebarOrder = UserDefaults.standard.string(forKey: "sidebar.order") ?? ""
                     }
                 } footer: {
                     let t = lib.totals
@@ -74,6 +95,14 @@ struct RootView: View {
                 }
             }
             .navigationTitle("Prism")
+            .environment(\.editMode, $sidebarEditing)
+            .toolbar {
+                if sidebarEditing.isEditing {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(T("Done", "完成")) { withAnimation { sidebarEditing = .inactive } }
+                    }
+                }
+            }
         } detail: {
             stack(scene.section)
                 .id(scene.section)
@@ -270,9 +299,8 @@ struct MoreRoot: View {
                 .listRowBackground(Color.cardBackground)
 
                 Section(T("Study", "学习")) {
-                    row(.dse, T("DSE past papers and marking schemes", "DSE 历届真题和评分标准"))
-                    row(.progress, T("Accuracy by topic and chapter", "按课题和章节看正确率"))
-                    row(.tools, T("Bases, two's complement, subnets, SQL, tracing", "进制、补码、子网、SQL、追踪表"))
+                    let _ = (sidebarOrder, sidebarHidden)
+                    ForEach(AppSection.moreSections.filter { $0 != .settings }) { s in row(s, sub(s)) }
                 }
                 .listRowBackground(Color.cardBackground)
 
@@ -297,6 +325,20 @@ struct MoreRoot: View {
         }
     }
 
+    @AppStorage("sidebar.order") private var sidebarOrder = ""
+    @AppStorage("sidebar.hidden") private var sidebarHidden = ""
+    private func sub(_ s: AppSection) -> String {
+        switch s {
+        case .dse: return T("DSE past papers and marking schemes", "DSE 历届真题和评分标准")
+        case .progress: return T("Accuracy by topic and chapter", "按课题和章节看正确率")
+        case .tools: return T("Bases, two's complement, subnets, SQL, tracing", "进制、补码、子网、SQL、追踪表")
+        case .daily: return T("Today's practice paper", "今天的练习卷")
+        case .learn: return T("Textbooks and chapters", "课本和章节")
+        case .quiz: return T("MC quizzes by chapter", "按章节做选择题")
+        case .plan: return T("Test-week plans", "测验周计划")
+        case .settings: return ""
+        }
+    }
     private func row(_ s: AppSection, _ sub: String) -> some View {
         NavigationLink(value: Route.section(s)) {
             HStack(spacing: 12) {
@@ -435,10 +477,11 @@ struct SettingsView: View {
                 Text(T("Knowledge points stay in English. EN + 中文 adds Chinese explanations.", "知识点保持英文；EN + 中文 会加上中文讲解。"))
             }
             .listRowBackground(Color.cardBackground)
-            Section(T("Subject", "科目")) {
-                ForEach(Subject.ordered) { s in
-                    Label(T(s.name, s.nameZh), systemImage: s.icon)
-                }
+            Section {
+                NavigationLink { SidebarOrderView() } label: { Label(T("Sidebar", "侧边栏"), systemImage: "sidebar.left") }
+                NavigationLink { SubjectOrderView() } label: { Label(T("Subject order", "学科顺序"), systemImage: "arrow.up.arrow.down") }
+            } header: {
+                Text(T("Order", "顺序"))
             }
             .listRowBackground(Color.cardBackground)
             Section {
@@ -491,5 +534,69 @@ struct SettingsView: View {
         }
         .appList()
         .navigationTitle(T("Settings", "设置"))
+    }
+}
+
+
+/// 设置 › 侧边栏: drag to reorder, switch to hide. ⌘1… and the iPhone tabs (first 4) follow this order.
+struct SidebarOrderView: View {
+    @Environment(\.tr) private var T
+    @AppStorage("sidebar.order") private var orderRaw = ""
+    @AppStorage("sidebar.hidden") private var hiddenRaw = ""
+    var body: some View {
+        let _ = (orderRaw, hiddenRaw)
+        List {
+            Section {
+                ForEach(AppSection.ordered) { s in
+                    HStack(spacing: 12) {
+                        IconTile(symbol: s.icon, color: s.tint)
+                        Text(s.title(T))
+                        Spacer()
+                        if s != .settings {
+                            Toggle("", isOn: Binding(get: { !AppSection.hidden.contains(s) }, set: { v in
+                                AppSection.setHidden(s, !v); hiddenRaw = UserDefaults.standard.string(forKey: "sidebar.hidden") ?? ""
+                            })).labelsHidden()
+                        }
+                    }
+                }
+                .onMove { from, to in
+                    var all = AppSection.ordered
+                    all.move(fromOffsets: from, toOffset: to)
+                    AppSection.saveOrder(all)
+                    orderRaw = UserDefaults.standard.string(forKey: "sidebar.order") ?? ""
+                }
+            } footer: {
+                Text(T("Drag to reorder. ⌘1… and the first four tabs on iPhone follow this order.", "拖动调整顺序，开关可隐藏。⌘1… 和 iPhone 底部前四个标签按这个顺序。"))
+            }
+            .listRowBackground(Color.cardBackground)
+            Section {
+                Button(T("Reset", "恢复默认")) { orderRaw = ""; hiddenRaw = "" }
+            }
+            .listRowBackground(Color.cardBackground)
+        }
+        .environment(\.editMode, .constant(.active))
+        .appList()
+        .navigationTitle(T("Sidebar", "侧边栏"))
+    }
+}
+
+/// 设置 › 学科顺序.
+struct SubjectOrderView: View {
+    @Environment(\.tr) private var T
+    @AppStorage("subject.order") private var orderRaw = ""
+    var body: some View {
+        let _ = orderRaw
+        List {
+            ForEach(Subject.ordered) { s in Label(T(s.name, s.nameZh), systemImage: s.icon) }
+                .onMove { from, to in
+                    var all = Subject.ordered
+                    all.move(fromOffsets: from, toOffset: to)
+                    orderRaw = all.map(\.id).joined(separator: ",")
+                }
+                .listRowBackground(Color.cardBackground)
+        }
+        .environment(\.editMode, .constant(.active))
+        .appList()
+        .navigationTitle(T("Subject order", "学科顺序"))
     }
 }

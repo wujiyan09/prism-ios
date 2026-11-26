@@ -121,8 +121,28 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
         }
     }
     /// Sections that get their own tab in compact width; the rest live under "More".
-    static let compactTabs: [AppSection] = [.daily, .learn, .quiz, .plan]
-    static let moreSections: [AppSection] = [.dse, .tools, .progress, .settings]
+    /// Sidebar order Sam chose (设置 › 侧边栏, or 编辑 in the sidebar). Synced as "sidebar.order".
+    static var ordered: [AppSection] {
+        let ids = (UserDefaults.standard.string(forKey: "sidebar.order") ?? "").split(separator: ",").compactMap { AppSection(rawValue: String($0)) }
+        var out: [AppSection] = []
+        for s in ids where !out.contains(s) { out.append(s) }
+        for s in allCases where !out.contains(s) { out.append(s) }
+        return out
+    }
+    static var hidden: Set<AppSection> {
+        Set((UserDefaults.standard.string(forKey: "sidebar.hidden") ?? "").split(separator: ",").compactMap { AppSection(rawValue: String($0)) })
+            .subtracting([.settings])
+    }
+    /// What the sidebar shows, in order (设置 can't be hidden).
+    static var visible: [AppSection] { ordered.filter { !hidden.contains($0) } }
+    static func saveOrder(_ s: [AppSection]) { UserDefaults.standard.set(s.map(\.rawValue).joined(separator: ","), forKey: "sidebar.order") }
+    static func setHidden(_ s: AppSection, _ h: Bool) {
+        var set = hidden; if h { set.insert(s) } else { set.remove(s) }
+        UserDefaults.standard.set(set.map(\.rawValue).sorted().joined(separator: ","), forKey: "sidebar.hidden")
+    }
+    /// Compact width: the first 4 visible sections get tabs; the rest live under "More".
+    static var compactTabs: [AppSection] { Array(visible.filter { $0 != .settings }.prefix(4)) }
+    static var moreSections: [AppSection] { visible.filter { !compactTabs.contains($0) } }
     /// Sections whose root starts with a subject list.
     var subjectFirst: Bool { [.learn, .dse, .quiz, .progress].contains(self) }
     var tint: Color {
@@ -137,17 +157,11 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
         case .settings: return .gray
         }
     }
-    var shortcut: KeyEquivalent {
-        switch self {
-        case .daily: return "1"
-        case .learn: return "2"
-        case .dse: return "3"
-        case .quiz: return "4"
-        case .plan: return "5"
-        case .tools: return "6"
-        case .progress: return "7"
-        case .settings: return ","
-        }
+    /// ⌘1… follow the sidebar order; 设置 stays ⌘,.
+    var shortcut: KeyEquivalent? {
+        if self == .settings { return "," }
+        guard let i = AppSection.visible.filter({ $0 != .settings }).firstIndex(of: self), i < 9 else { return nil }
+        return KeyEquivalent(Character(String(i + 1)))
     }
 }
 
@@ -259,11 +273,18 @@ struct SectionCommands: Commands {
     @FocusedValue(\.sectionSelection) private var focused
     private var selection: Binding<AppSection>? { focused ?? KeyRouter.shared.section }
     @AppStorage("lang") private var lang = "zh"
+    @AppStorage("sidebar.order") private var orderRaw = ""
+    @AppStorage("sidebar.hidden") private var hiddenRaw = ""
     var body: some Commands {
         CommandMenu(lang == "en" ? "Go" : "前往") {
-            ForEach(AppSection.allCases) { s in
-                Button(s.title(Tr(en: lang == "en"))) { selection?.wrappedValue = s }
-                    .keyboardShortcut(s.shortcut, modifiers: .command)
+            let _ = (orderRaw, hiddenRaw)
+            ForEach(AppSection.visible) { s in
+                if let k = s.shortcut {
+                    Button(s.title(Tr(en: lang == "en"))) { selection?.wrappedValue = s }
+                        .keyboardShortcut(k, modifiers: .command)
+                } else {
+                    Button(s.title(Tr(en: lang == "en"))) { selection?.wrappedValue = s }
+                }
             }
         }
     }

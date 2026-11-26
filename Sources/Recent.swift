@@ -47,10 +47,30 @@ final class RecentStore {
         let e = RecentEntry(target: target, title: title, detail: detail)
         if entries[s.rawValue]?.target == target && entries[s.rawValue]?.title == title && entries[s.rawValue]?.detail == detail { return }
         entries[s.rawValue] = e
+        // Also remember it per subject, so each subject page shows only its own last item.
+        if let subj = Self.subject(of: target) { entries[s.rawValue + "." + subj] = e }
     }
 
-    func entry(_ s: AppSection) -> RecentEntry? {
-        guard let e = entries[s.rawValue] else { return nil }
+    /// Which subject a target belongs to (nil = not subject-specific).
+    static func subject(of t: RecentTarget) -> String? {
+        func m(_ chapterID: String) -> String { (MathLibrary.shared.chapter(chapterID)?.isZh ?? chapterID.hasPrefix("z-")) ? "zh" : "math" }
+        switch t {
+        case .cards, .chapter, .practical, .year, .paper2: return "ict"
+        case .mathCards(let c, _): return m(c)
+        case .mathItem(let id):
+            if let hit = MathLibrary.shared.item(id) { return hit.0.isZh ? "zh" : "math" }
+            return nil
+        case .mathQuiz(let spec):
+            switch spec {
+            case .set(let id): return id.hasPrefix("z-") ? "zh" : "math"
+            case .custom(let ids, _, _): return ids.first.map { m(String($0.split(separator: ":").first ?? "")) }
+            }
+        default: return nil
+        }
+    }
+
+    func entry(_ s: AppSection, subject: String? = nil) -> RecentEntry? {
+        guard let e = entries[subject.map { s.rawValue + "." + $0 } ?? s.rawValue] else { return nil }
         if e.target == .session, sessions[s] == nil { return nil }
         return e
     }
@@ -59,6 +79,7 @@ final class RecentStore {
 /// Top-of-section card that resumes the last thing visited.
 struct RecentSection: View {
     let section: AppSection
+    var subject: String? = nil
     @Environment(SceneModel.self) private var scene
     @Environment(\.tr) private var T
     @State private var store = RecentStore.shared
@@ -67,7 +88,7 @@ struct RecentSection: View {
         if !ReviewStore.shared.pending.isEmpty && (section == .learn || section == .daily) {
             Section(T("Waiting for self-marking", "待自评")) { PendingReviewRows(section: section) }
         }
-        if let e = store.entry(section) {
+        if let e = store.entry(section, subject: subject) {
             Section {
                 Button { resume(e) } label: {
                     HStack(spacing: 12) {

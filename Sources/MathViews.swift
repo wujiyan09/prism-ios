@@ -231,7 +231,7 @@ struct MathBookListView: View {
     var body: some View {
         List {
             MathContentBanner()
-            RecentSection(section: .learn)
+            RecentSection(section: .learn, subject: subj)
             Section {
                 ForEach(lib.books(subj)) { b in
                     NavigationLink(value: Route.mathBook(b.id)) {
