@@ -34,6 +34,8 @@ final class PadHub {
     var index = 0
     /// Top of the main scratch column, in sheet points (continuous sources).
     var scratchY: CGFloat = 0
+    /// Visible width of the main scratch column, in sheet units (zoom sync).
+    var scratchW: CGFloat = 0
     var mcCount = 0
     var mcSelected: Int?
     var padOpen = false { didSet { if padOpen != oldValue { if !padOpen { latest = [:] }; NotificationCenter.default.post(name: .padState, object: nil) } } }
@@ -80,7 +82,7 @@ final class PadHub {
     func forget(_ ch: String) { latest[ch] = nil }
 
     // Live mid-stroke preview (pad → main), points in logical units. nil points = clear.
-    enum Kind { case pen, pencil, marker, eraser, bitmapEraser, other }
+    enum Kind { case pen, pencil, marker, eraser, bitmapEraser, lasso, other }
     /// width: logical units; forces: 0…1 per point (empty = constant width).
     struct Live { var points: [CGPoint]; var color: UIColor; var width: CGFloat; var forces: [CGFloat] = []; var kind: Kind = .pen }
     static func describe(_ t: PKTool) -> (Kind, UIColor, CGFloat) {
@@ -97,6 +99,7 @@ final class PadHub {
             if #available(iOS 16.4, *) { w = e.width }
             return (e.eraserType == .bitmap ? .bitmapEraser : .eraser, .systemGray, w)
         }
+        if t is PKLassoTool { return (.lasso, .systemBlue, 2) }
         return (.other, .systemGray, 6)
     }
     @ObservationIgnored private var liveListeners: [String: [(id: ObjectIdentifier, f: (Live?) -> Void)]] = [:]
@@ -115,10 +118,11 @@ final class PadHub {
     var mainFollows = true
     /// Page the pad shows (paged sources); main window follows.
     var padIndex = 0
-    @ObservationIgnored private var posListeners: [String: [(id: ObjectIdentifier, f: (CGFloat) -> Void)]] = [:]
+    @ObservationIgnored private var posListeners: [String: [(id: ObjectIdentifier, f: (CGFloat, CGFloat) -> Void)]] = [:]
     /// Pad's top y in logical units (continuous sources).
-    func padMoved(_ ch: String, _ y: CGFloat) { guard padOpen && mainFollows else { return }; for x in posListeners[ch] ?? [] { x.f(y) } }
-    func listenPos(_ ch: String, _ o: AnyObject, _ f: @escaping (CGFloat) -> Void) {
+    /// Pad is the master: the main window always follows the pad's viewport (top y, visible width; sheet units).
+    func padMoved(_ ch: String, _ y: CGFloat, _ w: CGFloat) { guard padOpen else { return }; for x in posListeners[ch] ?? [] { x.f(y, w) } }
+    func listenPos(_ ch: String, _ o: AnyObject, _ f: @escaping (CGFloat, CGFloat) -> Void) {
         let me = ObjectIdentifier(o)
         var ls = (posListeners[ch] ?? []).filter { $0.id != me }
         ls.append((me, f)); posListeners[ch] = ls
@@ -152,7 +156,9 @@ final class LivePreview {
         case .bitmapEraser: colour = paper
         default: break
         }
-        if l.kind == .marker || l.kind == .bitmapEraser || l.forces.count != pts.count {
+        layer.lineDashPattern = l.kind == .lasso ? [6, 5] : nil
+        if l.kind == .lasso { base = 2; colour = .systemBlue }
+        if l.kind == .lasso || l.kind == .marker || l.kind == .bitmapEraser || l.forces.count != pts.count {
             // Constant width: one stroked path.
             let p = UIBezierPath()
             p.move(to: pts[0])
@@ -286,7 +292,7 @@ final class PadLink {
     var host: () -> CALayer? = { nil }
     /// Main-canvas units per logical unit.
     var k: () -> CGFloat = { 1 }
-    var onScroll: ((CGFloat) -> Void)?
+    var onScroll: ((CGFloat, CGFloat) -> Void)?
     init(_ ch: String, canvas: PKCanvasView) {
         channel = ch; self.canvas = canvas
         obs = NotificationCenter.default.addObserver(forName: .padState, object: nil, queue: .main) { [weak self] _ in self?.sync() }
@@ -302,7 +308,7 @@ final class PadLink {
             self.applying = true; c.drawing = s == 1 ? d : d.transformed(using: CGAffineTransform(scaleX: s, y: s)); self.applying = false
         }
         live.attach(channel, k: { [weak self] in self?.k() ?? 1 }, host: { [weak self] in self?.host() })
-        PadHub.shared.listenPos(channel, self) { [weak self] y in self?.onScroll?(y) }
+        PadHub.shared.listenPos(channel, self) { [weak self] y, w in self?.onScroll?(y, w) }
     }
     func tearDown() {
         guard on else { return }; on = false
@@ -392,7 +398,8 @@ struct PadView: View {
             Group {
                 if let s = hub.source, !s.pages.isEmpty {
                     let p = s.pages[s.continuous ? 0 : pageIndex]
-                    PadCanvas(page: p, continuous: s.continuous, followY: hub.mainFollows && s.continuous ? hub.scratchY : nil, zoom: $zoom, locked: zlock)
+                    PadCanvas(page: p, continuous: s.continuous, followY: hub.mainFollows && s.continuous ? hub.scratchY : nil,
+                              followW: hub.mainFollows && s.continuous ? hub.scratchW : nil, zoom: $zoom, locked: zlock)
                         .id(p.channel + "|\(Int(p.size.height))")
                         .ignoresSafeArea(edges: .bottom)
                 } else {
@@ -492,6 +499,7 @@ struct PadCanvas: UIViewRepresentable {
     let page: PadPage
     let continuous: Bool
     let followY: CGFloat?
+    var followW: CGFloat? = nil
     @Binding var zoom: CGFloat
     var locked = false
 
@@ -499,7 +507,7 @@ struct PadCanvas: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PKCanvasView {
         let c = context.coordinator
-        let v = PKCanvasView()
+        let v = QuietCanvas()
         v.drawingPolicy = .default
         v.backgroundColor = .clear
         v.isOpaque = false
@@ -567,9 +575,17 @@ struct PadCanvas: UIViewRepresentable {
             v.maximumZoomScale = locked ? v.zoomScale : c.base * 4
         }
         let target = c.base * zoom
-        if !v.isZooming && abs(v.zoomScale - target) > 0.001 && c.base > 0 { v.setZoomScale(target, animated: true) }
+        if let w = followW, w > 10, continuous, !locked, !v.isZooming, abs(w - c.lastW) > 1, v.bounds.width > 10 {
+            c.lastW = w
+            c.following = true
+            v.zoomScale = min(v.maximumZoomScale, max(v.minimumZoomScale, v.bounds.width / w))
+            c.following = false
+            if c.base > 0 { let z = v.zoomScale / c.base; DispatchQueue.main.async { zoom = z } }
+        } else if !v.isZooming && abs(v.zoomScale - target) > 0.001 && c.base > 0 { v.setZoomScale(target, animated: true) }
         if let y = followY, continuous, abs(y - c.lastFollow) > 1 {
             c.lastFollow = y
+            c.following = true
+            defer { c.following = false }
             let maxY = max(0, v.contentSize.height - v.bounds.height)
             v.setContentOffset(CGPoint(x: v.contentOffset.x, y: min(maxY, max(0, y * v.zoomScale))), animated: true)
         }
@@ -590,6 +606,8 @@ struct PadCanvas: UIViewRepresentable {
         var base: CGFloat = 1
         var fittedWidth: CGFloat = 0
         var lastFollow: CGFloat = -1
+        var lastW: CGFloat = -1
+        var following = false
         var committed = -1
         private var applying = false
         private var pending: DispatchWorkItem?
@@ -614,7 +632,7 @@ struct PadCanvas: UIViewRepresentable {
             v.contentInset = UIEdgeInsets(top: iy, left: ix, bottom: iy, right: ix)
             v.alwaysBounceHorizontal = v.contentSize.width > v.bounds.width + 1
         }
-        func scrollViewDidZoom(_ v: UIScrollView) { layout(v) }
+        func scrollViewDidZoom(_ v: UIScrollView) { layout(v); scrollViewDidScroll(v) }
         @objc func hovered(_ g: UIHoverGestureRecognizer) {
             guard let v = canvas else { return }
             let ch = "hover:" + parent.page.channel
@@ -632,8 +650,8 @@ struct PadCanvas: UIViewRepresentable {
             }
         }
         func scrollViewDidScroll(_ v: UIScrollView) {
-            guard parent.continuous, v.zoomScale > 0 else { return }
-            PadHub.shared.padMoved(parent.page.channel, max(0, v.contentOffset.y) / v.zoomScale)
+            guard parent.continuous, v.zoomScale > 0, !following else { return }
+            PadHub.shared.padMoved(parent.page.channel, max(0, v.contentOffset.y) / v.zoomScale, v.bounds.width / v.zoomScale)
         }
         func scrollViewDidEndZooming(_ v: UIScrollView, with view: UIView?, atScale s: CGFloat) {
             if base > 0 { let z = s / base; DispatchQueue.main.async { self.parent.zoom = z } }
@@ -677,5 +695,14 @@ struct PadMCRegister: ViewModifier {
 extension View {
     func padMC(_ id: String, count: Int, selected: Int?, pick: @escaping (Int) -> Void) -> some View {
         modifier(PadMCRegister(id: id, count: count, selected: selected, pick: pick))
+    }
+}
+
+/// PKCanvasView without the tap edit menu (全选 / 插入空白); lasso actions stay.
+final class QuietCanvas: PKCanvasView {
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        let n = NSStringFromSelector(action).lowercased()
+        if action == #selector(selectAll(_:)) || n.contains("insertspace") || n.contains("insertspacing") || n.contains("selectall") { return false }
+        return super.canPerformAction(action, withSender: sender)
     }
 }

@@ -860,8 +860,10 @@ extension DSContext {
         let text = DSStudy.cut(p?.string ?? "", 6000)
         let img = p?.thumbnail(of: CGSize(width: 1400, height: 1800), for: .mediaBox)
         let isMS = title.localizedCaseInsensitiveContains("marking")
-        return DSContext(key: "pdf-" + url.lastPathComponent + "-\(idx)", subject: subject, title: "\(title) · 第 \(idx + 1) 页",
+        var c = DSContext(key: "pdf-" + url.lastPathComponent + "-\(idx)", subject: subject, title: "\(title) · 第 \(idx + 1) 页",
                          page: text.isEmpty ? "（这一页没有文字层，见附图）" : text, images: [img].compactMap { $0 },
                          revealed: isMS ? "（这一页本身就是评分标准）" : nil, answer: isMS ? nil : answer)
+        c.doc = "pdf-" + url.lastPathComponent
+        return c
     }
 }

@@ -216,11 +216,13 @@ struct DSContext {
     var isCard = false
     var grade: DSGradeSpec? = nil
     var scopeNote: String? = nil  // 笔记: what DeepSeek sees; shows the 全文/本页 switch in the panel
+    var doc: String? = nil        // PDFs / notes: one conversation per document, whatever the page
 
     /// The one conversation key for every surface. 设置 › 换题时 = 继续 → one running thread per set
     /// (or per subject for cards / notes); 开新对话 → one thread per question/card/page.
     static func chatKey(_ c: DSContext) -> String {
-        UserDefaults.standard.bool(forKey: "ds.keepThread") ? "thread-" + (c.sheetID ?? c.subject) : c.key
+        if let d = c.doc { return "doc-" + d }
+        return UserDefaults.standard.bool(forKey: "ds.keepThread") ? "thread-" + (c.sheetID ?? c.subject) : c.key
     }
 
     static func subjectName(_ s: String) -> String {

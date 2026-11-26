@@ -914,7 +914,7 @@ struct ImportEditSheet: View {
         .navigationTitle("编辑题目（\(qs.count)）")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) { EditButton() }
+            ToolbarItem(placement: .cancellationAction) { EditButton().tint(.primary).foregroundStyle(.primary) }
             ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() }.bold() }
             ToolbarItem(placement: .bottomBar) {
                 Button { mutate { $0.qs.append(ImpQ(page: $0.qs.last?.page ?? 0, n: "\($0.qs.count + 1)", text: "")) } } label: { Label("加一题", systemImage: "plus") }

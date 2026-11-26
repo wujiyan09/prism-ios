@@ -728,6 +728,7 @@ struct NoteDocView: View {
         var c = DSContext(key: "note-" + id + (scope == "page" ? "-" + (current ?? "") : ""), subject: "笔记", title: doc.title + (scope == "page" ? " · 第 \(pageIndex + 1) 页" : ""),
                          page: DSStudy.cut(text, 20000), images: imgs)
         c.scopeNote = note
+        c.doc = "note-" + id
         return c
     }
 
@@ -932,7 +933,7 @@ struct NoteCanvas: UIViewRepresentable {
 
     func makeCoordinator() -> Coord { Coord(self) }
     func makeUIView(context: Context) -> PKCanvasView {
-        let v = PKCanvasView()
+        let v = QuietCanvas()
         v.backgroundColor = .clear; v.isOpaque = false
         v.overrideUserInterfaceStyle = .light   // white paper: ink colours stay true in dark mode
         v.drawingPolicy = .default

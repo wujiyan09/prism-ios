@@ -967,7 +967,7 @@ struct CanvasRep: UIViewRepresentable {
     func makeCoordinator() -> Coord { Coord(self) }
 
     func makeUIView(context: Context) -> PKCanvasView {
-        let v = PKCanvasView()
+        let v = QuietCanvas()
         v.drawingPolicy = .default
         v.backgroundColor = .clear
         v.isOpaque = false
@@ -1029,10 +1029,14 @@ struct CanvasRep: UIViewRepresentable {
         let co = context.coordinator
         let link = PadLink("scratch:" + itemID, canvas: v)
         link.host = { [weak co] in co?.under?.layer }
-        link.onScroll = { [weak v, weak co] y in
+        link.onScroll = { [weak v, weak co] y, w in
             guard let v else { return }
-            let maxY = max(0, v.contentSize.height - v.bounds.height)
             co?.padDriven = true
+            if w > 10, !(ctl?.locked ?? false) {
+                let z = min(v.maximumZoomScale, max(v.minimumZoomScale, v.bounds.width / w))
+                if abs(z - v.zoomScale) > 0.002 { v.zoomScale = z }
+            }
+            let maxY = max(0, v.contentSize.height - v.bounds.height)
             v.setContentOffset(CGPoint(x: v.contentOffset.x, y: min(maxY, max(0, y * v.zoomScale))), animated: false)
             co?.padDriven = false
         }
@@ -1100,7 +1104,9 @@ struct CanvasRep: UIViewRepresentable {
             }
             guard !padDriven, let link, link.isOn, PadHub.shared.mainFollows, sv.zoomScale > 0 else { return }
             let y = max(0, sv.contentOffset.y) / sv.zoomScale
+            let w = sv.bounds.width / sv.zoomScale
             if abs(PadHub.shared.scratchY - y) > 2 { PadHub.shared.scratchY = y }
+            if abs(PadHub.shared.scratchW - w) > 2 { PadHub.shared.scratchW = w }
         }
 
         /// Content = pages + room for the 加一页 button under the last page.
@@ -1160,6 +1166,7 @@ struct CanvasRep: UIViewRepresentable {
             u.transform = CGAffineTransform(scaleX: sv.zoomScale, y: sv.zoomScale)
             u.layer.position = .zero
             parent.ctl?.report(zoom: sv.zoomScale)
+            scrollViewDidScroll(sv)
             layoutSelection()
             layoutAdd(sv)
         }

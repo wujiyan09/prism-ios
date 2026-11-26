@@ -256,7 +256,7 @@ struct SubjectListView: View {
         .listStyle(.insetGrouped)
         .appList()
         .environment(\.editMode, $editing)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { EditButton().environment(\.editMode, $editing).foregroundStyle(.primary) } }
+        .toolbar { ToolbarItem(placement: .primaryAction) { EditButton().environment(\.editMode, $editing).tint(.primary).foregroundStyle(.primary) } }
         .navigationTitle(section.title(T))
     }
 
