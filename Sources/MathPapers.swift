@@ -6,8 +6,11 @@ import PDFKit
 struct PPIndex: Codable {
     struct CE: Codable, Hashable, Identifiable { let id: String; let t: String; let pa: String; let yr: String; let n: Int; let mc: Int; let lq: Int; let chs: [String] }
     struct School: Codable, Hashable, Identifiable { let id: String; let yr: String; let fm: String; let sj: String; let ak: String; let pp: String; let p: String; let ms: String; let tp: String? }
+    /// HKDSE papers (Sam's own copies): transcribed set + original PDFs.
+    struct DSE: Codable, Hashable, Identifiable { let id: String; let t: String; let pa: String; let yr: String; let n: Int; let mc: Int; let lq: Int; let al: String; let p: String?; let ms: String? }
     let ce: [CE]
     let school: [School]
+    let dse: [DSE]?
 }
 struct PPQ: Codable, Hashable, Identifiable {
     let id: String; let ref: String; let ty: String; let mk: Int?; let q: String
@@ -37,11 +40,24 @@ struct MathPapersHome: View {
     var body: some View {
         List {
             if let idx {
-                Section {
-                    Label(T("Official DSE papers appear here once added to your Drive folder.", "DSE 历届真题：放进 Drive 文件夹后会出现在这里。"), systemImage: "tray")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                } header: { Text("HKDSE") }
-                .listRowBackground(Color.cardBackground)
+                let dse = idx.dse ?? []
+                if dse.isEmpty {
+                    Section {
+                        Label(T("Official DSE papers appear here once added to your Drive folder.", "DSE 历届真题：放进 Drive 文件夹后会出现在这里。"), systemImage: "tray")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    } header: { Text("HKDSE") }
+                    .listRowBackground(Color.cardBackground)
+                } else {
+                    let ys = dse.map(\.yr).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+                    Section("HKDSE") {
+                        ForEach(ys, id: \.self) { y in
+                            NavigationLink { PPDSEYear(year: y, items: dse.filter { $0.yr == y }) } label: {
+                                LabeledContent(y, value: dse.filter { $0.yr == y }.map(\.pa).joined(separator: " · "))
+                            }
+                        }
+                    }
+                    .listRowBackground(Color.cardBackground)
+                }
                 Section {
                     ForEach(idx.ce) { s in
                         NavigationLink { PPSetView(info: s) } label: {
@@ -117,6 +133,8 @@ struct PPSchoolYear: View {
 /// School paper PDF with the shared scratch sheet. 交卷 opens the marking scheme; 完成 deletes the sheet.
 struct PPSchoolPaper: View {
     let info: PPIndex.School
+    var folder = "papers/school/"
+    var group: String? = nil
     @Environment(\.tr) private var T
     @AppStorage("math.split.on") private var splitOn = true
     @State private var paper: PDFDocument?
@@ -173,9 +191,9 @@ struct PPSchoolPaper: View {
         } message: { Text(T("The scratch sheet will be deleted.", "草稿纸会被删除。")) }
         .workingSession(sheet)
         .task {
-            await MathContent.shared.ensure("pp-s-" + info.id)
-            if !info.p.isEmpty { paper = MathContent.shared.local("papers/school/" + info.p).flatMap { PDFDocument(url: $0) } }
-            if !info.ms.isEmpty { ms = MathContent.shared.local("papers/school/" + info.ms).flatMap { PDFDocument(url: $0) } }
+            await MathContent.shared.ensure(group ?? "pp-s-" + info.id)
+            if !info.p.isEmpty { paper = MathContent.shared.local(folder + info.p).flatMap { PDFDocument(url: $0) } }
+            if !info.ms.isEmpty { ms = MathContent.shared.local(folder + info.ms).flatMap { PDFDocument(url: $0) } }
         }
     }
 }
@@ -304,5 +322,39 @@ struct PPQuestionView: View {
             .readingMargin()
         }
         .softEdges()
+    }
+}
+
+struct PPDSEYear: View {
+    let year: String
+    let items: [PPIndex.DSE]
+    @Environment(\.tr) private var T
+    var body: some View {
+        List {
+            ForEach(items) { d in
+                Section(d.pa == "M2" ? "M2" : (d.pa == "P1" ? T("Paper 1", "卷一") : T("Paper 2 (MC)", "卷二（选择题）"))) {
+                    NavigationLink {
+                        PPSetView(info: PPIndex.CE(id: d.id, t: d.t, pa: d.pa, yr: d.yr, n: d.n, mc: d.mc, lq: d.lq, chs: []))
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(T("Answer here", "做题")).font(.headline)
+                            Text((d.mc > 0 ? T("\(d.mc) MC", "\(d.mc) 道选择") : T("\(d.lq) questions", "\(d.lq) 题")) + " · " + d.al)
+                                .font(.caption).foregroundStyle(d.al == "推导答案" ? .orange : .secondary)
+                        }
+                    }
+                    if let p = d.p, !p.isEmpty {
+                        NavigationLink {
+                            PPSchoolPaper(info: PPIndex.School(id: d.id + "-pdf", yr: d.yr, fm: "DSE", sj: d.pa, ak: "", pp: "", p: p, ms: d.ms ?? "", tp: nil), folder: "papers/dse/", group: "pp-" + d.id + "-pdf")
+                        } label: {
+                            Label(T("Original paper (PDF)", "原卷 PDF") + ((d.ms ?? "").isEmpty ? "" : T(" + marking scheme", " + 评分标准")), systemImage: "doc.richtext")
+                        }
+                    }
+                }
+                .listRowBackground(Color.cardBackground)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .appList()
+        .navigationTitle("HKDSE " + year)
     }
 }
