@@ -410,14 +410,16 @@ struct DeepSeekEntry: ViewModifier {
     @State private var dragStart: Double?
     @Environment(\.horizontalSizeClass) private var hsc
     private var dock: DSDock { DSDock.shared }
-    private var showPinned: Bool { hsc == .regular && dock.pinned && dock.visible }
+    /// Pinned mode is off until it has been verified on device.
+    static let pinEnabled = false
+    private var showPinned: Bool { Self.pinEnabled && hsc == .regular && dock.pinned && dock.visible }
 
     func body(content: Content) -> some View {
         content
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        if hsc == .regular && dock.pinned { withAnimation(.snappy) { dock.visible.toggle() } }
+                        if Self.pinEnabled && hsc == .regular && dock.pinned { withAnimation(.snappy) { dock.visible.toggle() } }
                         else { open = true }
                     } label: { Label("问 DeepSeek", systemImage: "sparkles") }
                         .accessibilityLabel("问 DeepSeek")
@@ -444,7 +446,7 @@ struct DeepSeekEntry: ViewModifier {
             }
             .sheet(isPresented: $open) {
                 DSLazyPanel(make: make, embedded: false, close: { open = false },
-                            togglePin: hsc == .regular ? {
+                            togglePin: Self.pinEnabled && hsc == .regular ? {
                                 open = false
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                                     withAnimation(.snappy) { dock.pinned = true; dock.visible = true }
