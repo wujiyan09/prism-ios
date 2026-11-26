@@ -72,6 +72,108 @@ final class PrismUITests: XCTestCase {
         return false
     }
 
+    // MARK: precise helpers
+    @discardableResult
+    func tapText(_ pred: String, timeout: TimeInterval = 8, _ name: String = "") -> Bool {
+        let q = NSPredicate(format: pred)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            for kind in [app.buttons, app.staticTexts, app.cells] {
+                let all = kind.matching(q).allElementsBoundByIndex.filter { $0.exists && $0.isHittable && (!isPad || $0.frame.minX > 300) }
+                if let e = all.first { e.tap(); usleep(800_000); return true }
+            }
+            usleep(400_000)
+        }
+        XCTFail("not found: \(name.isEmpty ? pred : name)"); snap("missing-\(name.isEmpty ? "x" : name)")
+        return false
+    }
+    func home(_ s: String) { section(s); back(6) }
+    func answerAndHandIn(_ tag: String) {
+        for _ in 0..<4 {
+            let opt = app.buttons.matching(NSPredicate(format: "label MATCHES '^[A-D][.、 ].*' OR label IN {'A','B','C','D'}")).allElementsBoundByIndex.first { $0.isHittable }
+            opt?.tap(); usleep(400_000)
+            if app.buttons["下一题"].exists && app.buttons["下一题"].isHittable { app.buttons["下一题"].tap(); usleep(400_000) }
+        }
+        snap("\(tag)-answering")
+        if app.buttons["交卷"].waitForExistence(timeout: 4) {
+            app.buttons["交卷"].firstMatch.tap(); sleep(1)
+            let confirm = app.alerts.buttons["交卷"].exists ? app.alerts.buttons["交卷"] : app.sheets.buttons["交卷"]
+            if confirm.exists { confirm.tap() } else if app.buttons.matching(identifier: "交卷").count > 1 { app.buttons.matching(identifier: "交卷").element(boundBy: 1).tap() }
+            sleep(2); snap("\(tag)-result"); alive("\(tag) 交卷")
+            if app.buttons["完成"].exists { app.buttons["完成"].firstMatch.tap(); sleep(1); let c = app.alerts.buttons["完成"]; if c.exists { c.tap() } ; snap("\(tag)-done"); alive("\(tag) 完成") }
+        } else { snap("\(tag)-no-handin") }
+    }
+
+    // MARK: precise flows
+    func test10_LearnMaths() {
+        home("课本")
+        tapText("label CONTAINS '数学'", 8, "learn-maths")
+        snap("m-books")
+        guard tapText("label BEGINSWITH 'Ch'", 10, "m-chapter") else { return }
+        sleep(3); snap("m-chapter")
+        if tapText("label CONTAINS '知识卡' OR label CONTAINS '卡'", 4, "m-cards-tab") { sleep(2); snap("m-cards") }
+        app.swipeLeft(); usleep(600_000); snap("m-cards-swipe"); alive("maths cards")
+        if app.buttons["问 DeepSeek"].waitForExistence(timeout: 3) {
+            app.buttons["问 DeepSeek"].tap(); sleep(2); snap("m-ds-sheet"); alive("ds sheet")
+            if isPad, app.buttons["选项"].waitForExistence(timeout: 3) {
+                app.buttons["选项"].tap(); usleep(700_000)
+                if app.buttons["固定到侧边"].waitForExistence(timeout: 2) {
+                    app.buttons["固定到侧边"].tap(); sleep(2); snap("m-ds-pinned"); alive("ds pinned")
+                    XCTAssertTrue(app.buttons["问 DeepSeek"].exists, "chapter screen lost after pin")
+                    app.swipeLeft(); usleep(600_000)
+                    if app.buttons["选项"].exists { app.buttons["选项"].firstMatch.tap(); usleep(700_000); if app.buttons["改为弹出窗口"].exists { app.buttons["改为弹出窗口"].tap(); sleep(2); snap("m-ds-unpinned") } }
+                } else { XCTFail("pin item missing") }
+            }
+            if app.buttons["完成"].exists { app.buttons["完成"].firstMatch.tap(); sleep(1) }
+        } else { XCTFail("no ✨ on maths cards"); snap("m-no-ds") }
+        home("课本")
+        XCTAssertTrue(tapText("label CONTAINS '中文'", 6, "learn-after-ds"), "课本 broken after DeepSeek")
+        snap("after-ds-zh"); alive("after ds")
+    }
+
+    func test11_LearnZhIct() {
+        home("课本"); tapText("label CONTAINS '中文'", 8, "zh")
+        tapText("label CONTAINS '論仁'", 8, "zh-text"); sleep(4); snap("zh-text"); alive("zh text")
+        home("课本"); tapText("label CONTAINS '资讯'", 8, "ict")
+        tapText("label CONTAINS 'Information Processing (1)'", 6, "ict-group"); snap("ict-group")
+        if tapText("label BEGINSWITH 'A' OR label CONTAINS 'Ch'", 4, "ict-ch") { sleep(2); snap("ict-chapter") }
+        alive("ict learn")
+    }
+
+    func test12_QuizIct() {
+        home("测验"); tapText("label CONTAINS '资讯'", 8, "q-ict")
+        if tapText("label CONTAINS '生成测验'", 6, "q-ict-gen") { sleep(2); snap("q-ict-run"); answerAndHandIn("q-ict") }
+    }
+
+    func test13_QuizMaths() {
+        home("测验"); tapText("label CONTAINS '数学'", 8, "q-m")
+        if tapText("label BEGINSWITH 'Ch'", 8, "q-m-set") {
+            sleep(2); snap("q-m-set")
+            if app.buttons.matching(NSPredicate(format: "label BEGINSWITH '开始' OR label BEGINSWITH '開始'")).firstMatch.exists { tapText("label BEGINSWITH '开始' OR label BEGINSWITH '開始'", 3, "q-m-start") }
+            else { tapText("label CONTAINS '套' OR label CONTAINS 'MC' OR label CONTAINS '题'", 4, "q-m-row") }
+            sleep(2); answerAndHandIn("q-m")
+        }
+    }
+
+    func test14_QuizZh() {
+        home("测验"); tapText("label CONTAINS '中文'", 8, "q-zh")
+        for _ in 0..<4 { app.swipeUp() }
+        if app.buttons["全部取消"].exists { app.buttons["全部取消"].tap() }
+        if app.buttons["全選"].exists && !app.buttons["全部取消"].exists { snap("q-zh-none"); alive("zh 0 selected") }
+        for _ in 0..<3 { app.swipeUp() }
+        snap("q-zh-none-bottom"); alive("zh 0 selected bottom")
+        for _ in 0..<6 { app.swipeDown() }
+        if tapText("label BEGINSWITH '開始' OR label BEGINSWITH '开始'", 5, "q-zh-start") { sleep(2); answerAndHandIn("q-zh") }
+    }
+
+    func test15_PapersMaths() {
+        home("真题"); tapText("label CONTAINS '数学'", 8, "p-m"); sleep(2); snap("p-m")
+        if tapText("label CONTAINS 'HKCEE' OR label CONTAINS '会考'", 4, "p-m-cee") { sleep(2); snap("p-m-cee"); alive("hkcee"); if tapText("label BEGINSWITH 'Ch' OR label CONTAINS '19'", 3, "p-m-cee-set") { sleep(2); snap("p-m-cee-set"); answerAndHandIn("p-cee") } }
+        home("真题"); tapText("label CONTAINS '数学'", 8, "p-m2")
+        if tapText("label CONTAINS '学校卷' OR label CONTAINS '20'", 4, "p-m-school") { sleep(2); snap("p-m-school"); alive("school papers") }
+        home("真题"); tapText("label CONTAINS '资讯'", 8, "p-ict"); if tapText("label CONTAINS '2019' OR label CONTAINS '2020'", 5, "p-ict-year") { sleep(2); snap("p-ict-year"); alive("dse year") }
+    }
+
     // MARK: tests
     func test01_Sections() {
         snap("launch")
