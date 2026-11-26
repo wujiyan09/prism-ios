@@ -223,8 +223,7 @@ struct PPSetView: View {
                                 prev: index > 0 ? { index -= 1 } : nil,
                                 next: index < set.qs.count - 1 ? { index += 1 } : nil)
                     if review {
-                        let t = tally(set)
-                        Text(T("\(t.got)/\(t.tot)", "得分 \(t.got)/\(t.tot)") + (t.open > 0 ? T(" · \(t.open) unmarked", " · \(t.open) 题未评分") : ""))
+                        Text(tallyText(set))
                             .font(.subheadline.monospacedDigit().bold())
                             .padding(.horizontal, 12).padding(.vertical, 8)
                             .glassGroup()
@@ -265,10 +264,7 @@ struct PPSetView: View {
                 ReviewStore.shared.finish(sheet); picked = [:]
             }
             Button(T("Cancel", "取消"), role: .cancel) {}
-        } message: {
-            let t = set.map(tally) ?? (0, 0, 0)
-            Text(T("Score \(t.got)/\(t.tot)", "得分 \(t.got)/\(t.tot)") + (t.open > 0 ? T(" (\(t.open) unmarked, not counted)", "（\(t.open) 题未评分，不计入）") : "") + T(". The scratch sheet will be deleted.", "。草稿纸会被删除。"))
-        }
+        } message: { Text(settleText()) }
         .workingSession(sheet)
         .task {
             set = PP.set(info.id)
@@ -276,6 +272,20 @@ struct PPSetView: View {
         }
     }
 
+    private func settleText() -> String {
+        guard let set else { return "" }
+        let t: (got: Int, tot: Int, open: Int) = tally(set)
+        var out: String = T("Score \(t.got)/\(t.tot)", "得分 \(t.got)/\(t.tot)")
+        if t.open > 0 { out += T(" (\(t.open) unmarked, not counted)", "（\(t.open) 题未评分，不计入）") }
+        out += T(". The scratch sheet will be deleted.", "。草稿纸会被删除。")
+        return out
+    }
+    private func tallyText(_ set: PPSet) -> String {
+        let t: (got: Int, tot: Int, open: Int) = tally(set)
+        var out: String = T("\(t.got)/\(t.tot)", "得分 \(t.got)/\(t.tot)")
+        if t.open > 0 { out += T(" · \(t.open) unmarked", " · \(t.open) 题未评分") }
+        return out
+    }
     /// Running total: MC from picks, long questions from self-marks; unmarked ones are left out (not 0).
     private func tally(_ set: PPSet) -> (got: Int, tot: Int, open: Int) {
         var got = 0, tot = 0, open = 0
