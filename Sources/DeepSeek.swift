@@ -419,6 +419,7 @@ struct DeepSeekEntry: ViewModifier {
     let make: () -> DSContext?
     @State private var open = false
     @State private var dragStart: Double?
+    @State private var liveWidth: Double?
     @Environment(\.horizontalSizeClass) private var hsc
     private var dock: DSDock { DSDock.shared }
     /// Pinned mode is off until it has been verified on device.
@@ -443,17 +444,22 @@ struct DeepSeekEntry: ViewModifier {
                     DSLazyPanel(make: make, embedded: true, close: { withAnimation(.smooth(duration: 0.35)) { dock.visible = false } },
                                 togglePin: { withAnimation(.smooth(duration: 0.35)) { dock.pinned = false; open = true } })
                         .id(k)
-                        .frame(width: dock.width)
+                        .frame(width: liveWidth ?? dock.width)
                         .frame(maxHeight: .infinity)
+                        .transaction { if liveWidth != nil { $0.animation = nil } }
                         .dsSidebarGlass()
                         .overlay(alignment: .leading) {
                             Capsule().fill(.secondary.opacity(0.5)).frame(width: 4, height: 36)
                                 .frame(width: 18, height: 120).contentShape(Rectangle())
                                 .offset(x: -9)
-                                .gesture(DragGesture(minimumDistance: 2).onChanged { v in
+                                .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global).onChanged { v in
                                     if dragStart == nil { dragStart = dock.width }
-                                    dock.width = min(640, max(300, (dragStart ?? dock.width) - v.translation.width))
-                                }.onEnded { _ in dragStart = nil })
+                                    var t = Transaction(); t.disablesAnimations = true
+                                    withTransaction(t) { liveWidth = min(640, max(300, (dragStart ?? dock.width) - v.translation.width)) }
+                                }.onEnded { _ in
+                                    if let w = liveWidth { dock.width = w }
+                                    liveWidth = nil; dragStart = nil
+                                })
                                 .accessibilityLabel("调整宽度")
                         }
                         .padding(.vertical, 8).padding(.trailing, 8).padding(.leading, 4)
