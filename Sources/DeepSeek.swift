@@ -411,7 +411,6 @@ final class DSDock {
 struct DeepSeekEntry: ViewModifier {
     let make: () -> DSContext?
     @State private var open = false
-    @State private var ctx: DSContext?
     @State private var me = UUID()
     @Environment(\.horizontalSizeClass) private var hsc
     private var dock: DSDock { DSDock.shared }
@@ -422,7 +421,7 @@ struct DeepSeekEntry: ViewModifier {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         if hsc == .regular && dock.pinned { dock.attach(me, make); dock.visible.toggle() }
-                        else { ctx = make(); open = true }
+                        else { open = true }
                     } label: { Label("问 DeepSeek", systemImage: "sparkles") }
                         .accessibilityLabel("问 DeepSeek")
                 }
@@ -430,21 +429,15 @@ struct DeepSeekEntry: ViewModifier {
             .onAppear { dock.attach(me, make) }
             .onDisappear { dock.detach(me) }
             .sheet(isPresented: $open) {
-                Group {
-                    if let ctx {
-                        DeepSeekPanel(ctx: ctx, close: { open = false })
-                            .overlay(alignment: .topLeading) {
-                                if hsc == .regular {
-                                    Button { open = false; dock.pinned = true; dock.attach(me, make); dock.visible = true } label: {
-                                        Label("固定到侧边", systemImage: "sidebar.right")
-                                    }
-                                    .font(.footnote).buttonStyle(.bordered).padding(10)
-                                }
+                DSLazyPanel(make: make, close: { open = false })
+                    .overlay(alignment: .topLeading) {
+                        if hsc == .regular {
+                            Button { open = false; dock.pinned = true; dock.attach(me, make); dock.visible = true } label: {
+                                Label("固定到侧边", systemImage: "sidebar.right")
                             }
-                    } else {
-                        ContentUnavailableView("这一页暂时没有内容可以问", systemImage: "sparkles")
+                            .font(.footnote).buttonStyle(.bordered).padding(10)
+                        }
                     }
-                }
                 .presentationDetents([.medium, .large])
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
             }
@@ -479,8 +472,8 @@ struct DSDockColumn: View {
                     }
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     Divider()
-                    if let ctx = dock.provider?() {
-                        DeepSeekPanel(ctx: ctx, close: { dock.visible = false }).id(ctx.key)
+                    if let make = dock.provider {
+                        DSLazyPanel(make: make, close: { dock.visible = false }).id(dock.owner)
                     } else {
                         ContentUnavailableView("这一页暂时没有内容可以问", systemImage: "sparkles")
                     }
@@ -489,6 +482,32 @@ struct DSDockColumn: View {
                 .background(Color(uiColor: .systemBackground))
             }
             .transition(.move(edge: .trailing))
+        }
+    }
+}
+
+/// Builds the page context when shown; if the page content is still downloading, waits and retries.
+struct DSLazyPanel: View {
+    let make: () -> DSContext?
+    var close: () -> Void
+    @State private var ctx: DSContext?
+    @State private var gaveUp = false
+    var body: some View {
+        Group {
+            if let ctx {
+                DeepSeekPanel(ctx: ctx, close: close).id(ctx.key)
+            } else if gaveUp {
+                ContentUnavailableView("这一页暂时没有内容可以问", systemImage: "sparkles")
+            } else {
+                ProgressView("正在载入本页内容…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task {
+            for _ in 0..<40 {
+                if let c = make(), !c.page.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !c.images.isEmpty { ctx = c; return }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            if let c = make() { ctx = c } else { gaveUp = true }
         }
     }
 }

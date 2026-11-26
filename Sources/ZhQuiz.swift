@@ -55,7 +55,7 @@ struct ZhSetsView: View {
                         if total > 5 {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("隨機抽 \(n) 題").font(.subheadline)
-                                Slider(value: Binding(get: { Double(n) }, set: { counts[code] = $0.rounded() }), in: 5...Double(total), step: 1)
+                                Slider(value: Binding(get: { Double(min(max(n, 5), total)) }, set: { counts[code] = $0.rounded() }), in: 5...Double(max(total, 6)), step: 1)
                             }
                         }
                         NavigationLink(value: Route.mathQuiz(.custom(["\(chapterID):\(code)"], max(1, min(n, total)), true))) {
@@ -138,7 +138,9 @@ struct ZhCustomSection: View {
             VStack(alignment: .leading, spacing: 4) {
                 let maxN = max(5, min(100, available))
                 Text("\(min(n, maxN)) 題" + (available > 0 ? "（範圍內共 \(available) 題）" : "")).font(.subheadline)
-                Slider(value: Binding(get: { Double(min(n, maxN)) }, set: { n = Int($0.rounded()) }), in: 5...Double(maxN), step: 1)
+                if maxN > 5 {
+                    Slider(value: Binding(get: { Double(min(max(n, 5), maxN)) }, set: { n = Int($0.rounded()) }), in: 5...Double(maxN), step: 1)
+                }
             }
             .listRowBackground(Color.cardBackground)
             NavigationLink(value: Route.mathQuiz(.custom(entries, max(1, min(n, max(available, 1))), true))) {
