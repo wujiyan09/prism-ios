@@ -1,0 +1,83 @@
+name: UI Tests
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  uitest:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [ipad, iphone]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull ICT content
+        run: |
+          git clone --depth 1 https://github.com/wujiyan09/ict-portal.git /tmp/ictdata || exit 0
+          cp /tmp/ictdata/data/book-*.json /tmp/ictdata/data/dse-*.json /tmp/ictdata/data/manifest.json Resources/data/ || true
+
+      - name: Write secrets file
+        env:
+          CONTENT_KEY: ${{ secrets.CONTENT_KEY }}
+          PORTAL_URL: ${{ secrets.PORTAL_URL }}
+        run: |
+          python3 - <<'PY'
+          import os, json
+          k = json.dumps(os.environ.get("CONTENT_KEY", "")); u = json.dumps(os.environ.get("PORTAL_URL", ""))
+          open("Sources/Secrets.swift", "w").write(f"enum Secrets {{\n    static let contentKey = {k}\n    static let portalURL = {u}\n}}\n")
+          PY
+
+      - name: Generate project
+        run: |
+          brew install xcodegen >/dev/null
+          xcodegen generate
+
+      - name: Pick simulator
+        id: sim
+        run: |
+          if [ "${{ matrix.device }}" = "ipad" ]; then PAT="iPad Pro"; else PAT="iPhone 1[5-7] Pro"; fi
+          ID=$(xcrun simctl list devices available | grep -E "$PAT" | grep -v "mini" | head -1 | grep -oE '[0-9A-F-]{36}')
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+          xcrun simctl list devices available | grep "$ID"
+
+      - name: Run UI tests
+        env:
+          TEST_RUNNER_SHOT_DIR: ${{ runner.temp }}/shots
+        run: |
+          mkdir -p "$TEST_RUNNER_SHOT_DIR"
+          set +e
+          xcodebuild test -project ICT.xcodeproj -scheme ICT \
+            -destination "id=${{ steps.sim.outputs.id }}" \
+            -resultBundlePath "${{ runner.temp }}/r.xcresult" \
+            CODE_SIGNING_ALLOWED=NO > "${{ runner.temp }}/test.log" 2>&1
+          CODE=$?
+          grep -E "error:|Test Case .*(passed|failed)|XCTAssert|failed \(|Executed|crash|TEST (SUCCEEDED|FAILED)|BUILD FAILED" "${{ runner.temp }}/test.log" | grep -v "Secrets.swift" | tail -150
+          echo "exit=$CODE"
+          echo "$CODE" > "${{ runner.temp }}/code"
+
+      - name: Save screenshots to private repo
+        if: always() && github.repository == 'wujiyan09/prism-ios'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          cd "${{ runner.temp }}"
+          zip -qr "shots-${{ matrix.device }}.zip" shots test.log || true
+          TAG="uitest-${{ github.run_number }}"
+          gh release view "$TAG" --repo wujiyan09/ict-portal-ios >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo wujiyan09/ict-portal-ios --prerelease --title "UI tests ${{ github.run_number }}" --notes "prism-ios@${GITHUB_SHA::7}" || true
+          gh release upload "$TAG" "shots-${{ matrix.device }}.zip" --repo wujiyan09/ict-portal-ios --clobber
+          rm -rf shots "shots-${{ matrix.device }}.zip"
+
+      - name: Result
+        if: always()
+        run: |
+          rm -f Sources/Secrets.swift
+          exit $(cat "${{ runner.temp }}/code" 2>/dev/null || echo 1)
