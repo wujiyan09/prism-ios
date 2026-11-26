@@ -614,7 +614,8 @@ struct MathItemView: View {
         if !it.hasText { imgs = (it.q ?? []).compactMap { PDFRegions.image(c.pdf, $0) } + imgs }
         let page = (it.sk.map { $0 + "\n" } ?? "") + (it.hasText ? (it.qt ?? "") : "（题目见附图）")
         var revealed: String?
-        if review {
+        // Examples have a worked solution and no 交卷, so it's always sent; practice sends it as well (answers are shown per question).
+        do {
             revealed = [it.at, it.sx].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n解析：")
             if revealed?.isEmpty == true { revealed = nil }
             if revealed == nil, !(it.a ?? []).isEmpty { imgs += (it.a ?? []).compactMap { PDFRegions.image(c.pdf, $0) }; revealed = "（答案见附图）" }

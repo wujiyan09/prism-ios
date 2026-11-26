@@ -628,7 +628,7 @@ struct DeepSeekPanel: View {
     private var intro: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(ctx.title).font(.headline)
-            Text(ctx.revealed == nil && !ctx.isCard ? "还没交卷，答案不会发给 DeepSeek。" : "会附上本页内容。")
+            Text(ctx.revealed == nil && !ctx.isCard ? "这一页的答案还没显示，不会发给 DeepSeek。" : (ctx.revealed != nil && !ctx.isCard ? "会附上本页内容和答案 / 解答。" : "会附上本页内容。"))
                 .font(.footnote).foregroundStyle(.secondary)
         }
     }
@@ -655,24 +655,30 @@ struct DeepSeekPanel: View {
                     if ctx.chapter != nil { chip("本章", on: $useChapter) }
                     if ctx.sheetID != nil { chip("草稿纸", on: $useScratch, icon: "scribble") }
                     if ctx.grade != nil {
-                        Button { runGrade() } label: { Label("DeepSeek 批改", systemImage: "checkmark.seal") }
+                        Button { runGrade() } label: { Label("DeepSeek 批改", systemImage: "checkmark.seal").lineLimit(1).fixedSize() }
                             .glassButton().controlSize(.small).disabled(busy)
                     }
                 }
+                .padding(.horizontal, 2).padding(.vertical, 2)
             }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(quick, id: \.0) { q in
-                        Button(q.0) { send(q.1, shown: q.0) }.glassButton().controlSize(.small).disabled(busy)
+                        Button { send(q.1, shown: q.0) } label: { Text(q.0).lineLimit(1).fixedSize() }
+                            .glassButton().controlSize(.small).disabled(busy)
                     }
                 }
+                .padding(.horizontal, 2).padding(.vertical, 2)
             }
-            HStack(alignment: .bottom, spacing: 6) {
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            HStack(alignment: .center, spacing: 6) {
                 TextField("问点什么…", text: $input, axis: .vertical)
                     .lineLimit(1...5)
                     .focused($focused)
                     .onSubmit { send(input, shown: input) }
-                    .padding(.leading, 16).padding(.vertical, 10)
+                    .padding(.leading, 16).padding(.vertical, 8)
+                    .frame(minHeight: 44)
                 Group {
                     if task != nil {
                         Button { task?.cancel(); task = nil } label: {
@@ -688,7 +694,7 @@ struct DeepSeekPanel: View {
                     }
                 }
                 .glassButton(prominent: true).buttonBorderShape(.circle)
-                .padding(.trailing, 5).padding(.bottom, 5)
+                .padding(.trailing, 6)
             }
             .dsGlassCapsule()
         }
