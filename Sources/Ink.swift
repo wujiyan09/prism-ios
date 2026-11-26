@@ -58,7 +58,7 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
         self.key = key; self.title = title
     }
 
-    func pdfView(_ view: PDFView, overlayViewFor page: PDFPage) -> UIView? {
+    func pdfView(_ view: PDFView, overlayViewFor page: PDFKit.PDFPage) -> UIView? {
         let i = view.document?.index(for: page) ?? 0
         if let c = canvases[i] { return c }
         let c = PKCanvasView()
@@ -74,7 +74,7 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
         return c
     }
 
-    func pdfView(_ pdfView: PDFView, willEndDisplayingOverlayView overlayView: UIView, for page: PDFPage) {
+    func pdfView(_ pdfView: PDFView, willEndDisplayingOverlayView overlayView: UIView, for page: PDFKit.PDFPage) {
         guard let c = overlayView as? PKCanvasView else { return }
         PDFInk.save(key, c.tag, c.drawing, title: title)
         canvases[c.tag] = nil
