@@ -693,7 +693,7 @@ struct ExampleView: View {
                 header(item, T)
                 if item.hasText {
                     MathText(text: item.qt ?? "", size: 18).card()
-                    if !splitOn { FigureStack(images: item.figImages) }
+                    FigureStack(images: item.figImages)
                     if let s = item.stx, !s.isEmpty {
                         AnswerReveal(title: T("Solution", "解答")) {
                             MathText(text: s, size: 17)
@@ -739,7 +739,7 @@ struct SplitPractice: View {
                 header(item, T)
                 if item.hasText {
                     MathText(text: item.qt ?? "", size: 18)
-                    if !splitOn { FigureStack(images: item.figImages) }
+                    FigureStack(images: item.figImages)
                 } else {
                     RegionStack(pdf: chapter.pdf, regions: item.q ?? [])
                 }
@@ -832,8 +832,10 @@ final class ScratchStore {
     }
     func save(_ id: String, _ draft: ScratchDraft) {
         if let d = try? JSONEncoder().encode(draft) { try? d.write(to: url(id), options: .atomic) }
+        NotificationCenter.default.post(name: .scratchSaved, object: id)
     }
 }
+extension Notification.Name { static let scratchSaved = Notification.Name("scratchSaved") }
 
 extension View {
     /// Question-answering screens: hard top edge, and scratch drafts scoped to this session.
@@ -897,26 +899,22 @@ struct ScratchPane: View {
             CanvasRep(itemID: sheetID, paper: paper, tools: tools, placed: $placed, port: port, ctl: vctl)
                 .id(sheetID)
                 .overlay(alignment: .topTrailing) { ViewHUD(ctl: vctl) }
-            if !figs.isEmpty {
+            let right = figs.filter { FigPlacement.shared.mode(FigPlacement.key($0)) == 2 }
+            if !right.isEmpty {
                 VStack(alignment: .trailing, spacing: 8) {
-                    if pinned {
-                        ForEach(Array(figs.enumerated()), id: \.offset) { i, img in
-                            VStack(alignment: .trailing, spacing: 6) {
-                                Image(uiImage: img).resizable().aspectRatio(contentMode: .fit).frame(maxHeight: 220)
-                                HStack {
-                                    Button { pinned = false } label: { Label(T("Hide", "收起"), systemImage: "chevron.up") }
-                                    Spacer()
-                                    Button { place(img) } label: { Label(T("Place on scratch", "置入草稿纸"), systemImage: "square.and.arrow.down.on.square") }
-                                        .glassButton(prominent: true)
-                                }
-                                .font(.subheadline)
+                    ForEach(Array(right.enumerated()), id: \.offset) { _, img in
+                        VStack(alignment: .trailing, spacing: 6) {
+                            Image(uiImage: img).resizable().aspectRatio(contentMode: .fit).frame(maxWidth: 300, maxHeight: 260)
+                                .background(Color.white)
+                            HStack {
+                                Button { FigPlacement.shared.set(FigPlacement.key(img), 0) } label: { Label(T("Close", "关闭"), systemImage: "xmark") }
+                                Spacer()
+                                Button { place(img) } label: { Label(T("Place on scratch", "添加到草稿纸"), systemImage: "square.and.arrow.down.on.square") }
                             }
-                            .padding(10)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .shadow(radius: 4, y: 2)
+                            .font(.subheadline).buttonStyle(.borderless)
                         }
-                    } else {
-                        Button { pinned = true } label: { Label(T("Figure", "图"), systemImage: "photo") }.glassButton()
+                        .padding(10)
+                        .modifier(GlassCard())
                     }
                 }
                 .padding(10)
@@ -924,7 +922,11 @@ struct ScratchPane: View {
             }
         }
         .background(Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .black : .white }))
-        .onChange(of: figKey) { pinned = true }
+        .onAppear { autoPlace() }
+        .onChange(of: figKey) { autoPlace() }
+        .onReceive(NotificationCenter.default.publisher(for: .figToScratch)) { n in
+            if let img = n.object as? UIImage { place(img) }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 PadButton()
@@ -941,7 +943,15 @@ struct ScratchPane: View {
         }
     }
 
+    /// Figures set to 添加到草稿纸 go onto this sheet once.
+    private func autoPlace() {
+        for img in figs where FigPlacement.shared.mode(FigPlacement.key(img)) == 1 {
+            let k = "fig.on." + sheetID + "." + FigPlacement.key(img)
+            if !UserDefaults.standard.bool(forKey: k) { place(img) }
+        }
+    }
     private func place(_ img: UIImage) {
+        UserDefaults.standard.set(true, forKey: "fig.on." + sheetID + "." + FigPlacement.key(img))
         let o = port.visibleOrigin
         withAnimation {
             placed.append(.init(fig: -1, x: o.x, y: o.y + Double(placed.count % 4) * 24, w: min(360, Double(img.size.width)), png: img.pngData()))
@@ -993,7 +1003,8 @@ struct CanvasRep: UIViewRepresentable {
         under.isUserInteractionEnabled = false
         v.insertSubview(under, at: 0)
         context.coordinator.under = under
-        let add = UIButton(configuration: .gray())
+        let add: UIButton
+        if #available(iOS 26.0, *) { add = UIButton(configuration: .glass()) } else { add = UIButton(configuration: .gray()) }
         add.configuration?.title = "加一页"
         add.configuration?.image = UIImage(systemName: "plus")
         add.configuration?.imagePadding = 6
@@ -1481,11 +1492,74 @@ struct FigureStack: View {
     let images: [UIImage]
     var body: some View {
         ForEach(Array(images.enumerated()), id: \.offset) { _, img in
-            Image(uiImage: img).resizable().aspectRatio(contentMode: .fit)
-                .frame(maxWidth: min(img.size.width, 560))
-                .padding(8)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .frame(maxWidth: .infinity)
+            FigureInline(img: img)
+        }
+    }
+}
+
+/// A question figure in the question column, with 只在题目栏显示 / 添加到草稿纸 / 显示在右边.
+struct FigureInline: View {
+    let img: UIImage
+    var maxWidth: CGFloat = 560
+    @State private var fp = FigPlacement.shared
+    var body: some View {
+        let key = FigPlacement.key(img)
+        let mode = fp.mode(key)
+        Image(uiImage: img).resizable().aspectRatio(contentMode: .fit)
+            .frame(maxWidth: min(img.size.width, maxWidth))
+            .padding(8)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                Menu { items(key, mode) } label: {
+                    Image(systemName: "ellipsis").font(.subheadline.bold()).frame(width: 30, height: 30)
+                }
+                .glassButton()
+                .padding(6)
+            }
+            .contextMenu { items(key, mode) }
+            .frame(maxWidth: .infinity)
+    }
+    @ViewBuilder private func items(_ key: String, _ mode: Int) -> some View {
+        Button { fp.set(key, 0) } label: { Label("只在题目栏显示", systemImage: mode == 0 ? "checkmark" : "text.below.photo") }
+        Button { fp.set(key, 1); NotificationCenter.default.post(name: .figToScratch, object: img) } label: {
+            Label("添加到草稿纸", systemImage: mode == 1 ? "checkmark" : "square.and.arrow.down.on.square")
+        }
+        Button { fp.set(key, 2) } label: { Label("显示在右边", systemImage: mode == 2 ? "checkmark" : "sidebar.right") }
+    }
+}
+
+/// Where each question figure goes: 0 题目栏 (default), 1 草稿纸, 2 右边. Remembered per figure.
+@Observable
+final class FigPlacement {
+    static let shared = FigPlacement()
+    private var rev = 0
+    func mode(_ k: String) -> Int { _ = rev; return UserDefaults.standard.integer(forKey: "fig.mode." + k) }
+    func set(_ k: String, _ m: Int) { UserDefaults.standard.set(m, forKey: "fig.mode." + k); rev += 1 }
+    private static var cache: [ObjectIdentifier: String] = [:]
+    /// Stable across launches: FNV-1a over the image's pixels (sampled).
+    static func key(_ img: UIImage) -> String {
+        if let k = cache[ObjectIdentifier(img)] { return k }
+        var h: UInt64 = 1469598103934665603
+        if let cg = img.cgImage, let d = cg.dataProvider?.data, let p = CFDataGetBytePtr(d) {
+            let n = CFDataGetLength(d), step = max(1, n / 4096)
+            var i = 0
+            while i < n { h = (h ^ UInt64(p[i])) &* 1099511628211; i += step }
+            h = (h ^ UInt64(n)) &* 1099511628211
+        }
+        let k = String(h, radix: 36)
+        cache[ObjectIdentifier(img)] = k
+        return k
+    }
+}
+
+extension Notification.Name { static let figToScratch = Notification.Name("figToScratch") }
+
+private struct GlassCard: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        } else {
+            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 }

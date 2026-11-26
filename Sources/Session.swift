@@ -7,13 +7,36 @@ final class Session: Identifiable {
     let title: String
     let keys: [String]
     let started = Date().timeIntervalSince1970
-    var index = 0
-    var mc: [Int: Int] = [:]
-    var text: [Int: [Int: String]] = [:]
-    var code: [Int: String] = [:]
-    var codePass: [Int: Bool] = [:]
-    var selfMarks: [Int: [Int: Int]] = [:]
-    var submitted = false
+    var index = 0 { didSet { persist() } }
+    var mc: [Int: Int] = [:] { didSet { persist() } }
+    var text: [Int: [Int: String]] = [:] { didSet { persist() } }
+    var code: [Int: String] = [:] { didSet { persist() } }
+    var codePass: [Int: Bool] = [:] { didSet { persist() } }
+    var selfMarks: [Int: [Int: Int]] = [:] { didSet { persist() } }
+    var submitted = false { didSet { persist() } }
+    /// Autosave key (set by SceneModel.start); nil while restoring.
+    @ObservationIgnored var resumeKey: String?
+
+    struct Snap: Codable {
+        var index: Int; var mc: [Int: Int]; var text: [Int: [Int: String]]; var code: [Int: String]
+        var codePass: [Int: Bool]; var selfMarks: [Int: [Int: Int]]; var submitted: Bool
+    }
+    func restore(_ s: Snap) {
+        let k = resumeKey; resumeKey = nil
+        index = s.index; mc = s.mc; text = s.text; code = s.code; codePass = s.codePass; selfMarks = s.selfMarks
+        resumeKey = k
+    }
+    private func persist() {
+        guard let k = resumeKey else { return }
+        let st = ResumeStore.shared
+        if submitted {
+            st.clear(k)
+            st.update(k, answered: mc.count + text.count + code.count, status: 1)
+            return
+        }
+        st.save(k, Snap(index: index, mc: mc, text: text, code: code, codePass: codePass, selfMarks: selfMarks, submitted: submitted))
+        st.update(k, answered: Set(mc.keys).union(text.keys).union(code.keys).count)
+    }
     /// Exam-plan task (exam id, task id) to tick when this session is submitted.
     var planTask: (UUID, String)?
 

@@ -10,6 +10,8 @@ struct MCVariant: Codable, Hashable {
     let a: Int
     let so: [String]
     let fig: String?
+    /// true = explanation was derived (not official / teacher's).
+    var sod: Bool? = nil
 }
 struct MCQ: Codable, Hashable, Identifiable {
     let id: String
@@ -218,6 +220,33 @@ struct MathQuizRunner: View {
     @State private var picked: [String: Int] = [:]
     @State private var started = Date().timeIntervalSince1970
     @State private var attempt = UUID().uuidString
+    @State private var resumed = false
+
+    private struct Snap: Codable { var ids: [String]; var variants: [Int]; var orders: [[Int]]; var index: Int; var picked: [String: Int] }
+    private var resumeKey: String { "mq:" + String(describing: spec) }
+    private var subjectID: String { isZh ? "zh" : (title.isEmpty ? "math" : (MathMC.shared.chapter(of: items.first?.q.id ?? "").map { $0.hasPrefix("c-") ? "chem" : "math" } ?? "math")) }
+    private func persist() {
+        guard !items.isEmpty else { return }
+        let st = ResumeStore.shared
+        if index >= items.count {
+            st.clear(resumeKey); st.update(resumeKey, answered: picked.count, total: items.count, status: 1); return
+        }
+        st.save(resumeKey, Snap(ids: items.map(\.q.id), variants: items.map { it in it.q.v.firstIndex(of: it.v) ?? 0 },
+                                orders: items.map(\.order), index: index, picked: picked))
+        st.update(resumeKey, answered: picked.count, total: items.count, status: 0)
+    }
+    private func restore() -> Bool {
+        guard let s = ResumeStore.shared.snapshot(resumeKey, as: Snap.self) else { return false }
+        let byID = Dictionary(MathMC.shared.sets.flatMap { $0.qs }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var out: [MathQuizItem] = []
+        for (i, id) in s.ids.enumerated() {
+            guard let q = byID[id], !q.v.isEmpty else { return false }
+            let v = q.v[min(max(0, s.variants[i]), q.v.count - 1)]
+            out.append(MathQuizItem(q: q, v: v, order: s.orders[i].count == v.c.count ? s.orders[i] : Array(v.c.indices)))
+        }
+        items = out; picked = s.picked; index = min(s.index, out.count - 1)
+        return !out.isEmpty
+    }
 
     /// Chinese 範文 quizzes have no scratch paper.
     private var isZh: Bool {
@@ -275,7 +304,19 @@ struct MathQuizRunner: View {
             }
         }
         .deepSeek(dsContext)
-        .task { if items.isEmpty { await prepare(); build() } }
+        .task {
+            if items.isEmpty {
+                await prepare()
+                if restore() { withAnimation { resumed = true } } else { build() }
+                ResumeStore.shared.touch(Activity(id: resumeKey, title: title, subject: subjectID, target: .mathQuiz(spec),
+                                                  answered: picked.count, total: items.count, status: 0))
+            }
+        }
+        .onChange(of: index) { _, _ in persist() }
+        .onChange(of: picked) { _, _ in persist() }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            ResumedBanner(restart: { picked = [:]; index = 0; build(); persist() }, shown: $resumed)
+        }
         .workingSession("quiz-\(spec)")
         .noteRecent(.mathQuiz(spec), title, isZh ? T("Chinese quiz", "中文测验") : T("Maths quiz", "数学测验"))
     }
@@ -354,10 +395,7 @@ struct MathQuizRunner: View {
                     if let l = it.q.lvl, !l.isEmpty { Text("Level \(l)").font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3).background(Color.secondary.opacity(0.15), in: Capsule()) }
                 }
                 MathText(text: it.v.st, size: 18)
-                if !split, let img = figImages(it).first {
-                    Image(uiImage: img).resizable().aspectRatio(contentMode: .fit).frame(maxWidth: 520)
-                        .padding(6).background(Color.white, in: RoundedRectangle(cornerRadius: 10))
-                }
+                if let img = figImages(it).first { FigureInline(img: img, maxWidth: 520) }
                 ForEach(Array(it.order.enumerated()), id: \.offset) { pos, ci in
                     let c = it.v.c[ci]
                     let isAns = ci == it.v.a
@@ -386,6 +424,10 @@ struct MathQuizRunner: View {
                 if chosen != nil {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(T("Solution", "解答"), systemImage: "text.book.closed").font(.headline)
+                        if it.v.sod == true {
+                            Text("推导解析").font(.caption.bold()).foregroundStyle(.secondary)
+                                .padding(.horizontal, 8).padding(.vertical, 3).background(Color.secondary.opacity(0.15), in: Capsule())
+                        }
                         MathText(text: it.v.so.joined(separator: "\n\n"), size: 16)
                     }
                     .padding(12)

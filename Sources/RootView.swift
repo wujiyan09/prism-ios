@@ -133,6 +133,7 @@ struct SectionRoot: View {
         case .settings: SettingsView()
         case .inbox: InboxView()
         case .notes: NotesLibraryView()
+        case .recent: RecentActivityView()
         case .plan: PlanListView()
         case .daily: DailyListView()
         }
@@ -375,6 +376,7 @@ struct MoreRoot: View {
         case .plan: return T("Test-week plans", "测验周计划")
         case .inbox: return T("Ideas, to-dos and notes", "想法、待办和笔记")
         case .notes: return T("Documents with ink, images and text", "手写、图片和文本框的文档")
+        case .recent: return T("Practice you opened lately", "最近做过的练习、试卷和笔记")
         case .settings: return ""
         }
     }

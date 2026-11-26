@@ -110,7 +110,7 @@ extension View {
 // MARK: - Sections & navigation
 
 enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
-    case daily, learn, dse, quiz, plan, tools, progress, inbox, notes, settings
+    case daily, learn, dse, quiz, plan, tools, progress, inbox, notes, recent, settings
     var id: String { rawValue }
     func title(_ T: Tr) -> String {
         switch self {
@@ -123,6 +123,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
         case .progress: return T("Progress", "进度")
         case .inbox: return T("Inbox", "收件箱")
         case .notes: return T("Notes", "笔记")
+        case .recent: return T("Recent", "最近使用")
         case .settings: return T("Settings", "设置")
         }
     }
@@ -137,6 +138,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
         case .progress: return "chart.bar"
         case .inbox: return "tray"
         case .notes: return "note.text"
+        case .recent: return "clock.arrow.circlepath"
         case .settings: return "gearshape"
         }
     }
@@ -176,6 +178,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
         case .progress: return .teal
         case .inbox: return .brown
         case .notes: return .yellow
+        case .recent: return .purple
         case .settings: return .gray
         }
     }
@@ -272,6 +275,14 @@ final class SceneModel {
         guard !keys.isEmpty else { return }
         let s = Session(title: title, keys: keys)
         s.planTask = planTask
+        let k = "ict:" + title + "|" + keys.joined(separator: ",")
+        if let snap = ResumeStore.shared.snapshot(k, as: Session.Snap.self), !snap.submitted {
+            s.resumeKey = k
+            s.restore(snap)
+        }
+        s.resumeKey = k
+        ResumeStore.shared.touch(Activity(id: k, title: title, subject: "ict", target: nil, ictKeys: keys,
+                                          answered: s.mc.count, total: keys.count, status: 0))
         session = s
     }
 

@@ -12,6 +12,8 @@ struct PadPage {
     let background: () -> UIImage?
     let load: () -> PKDrawing
     let save: (PKDrawing) -> Void
+    /// Images placed on the sheet (scratch figures), in logical units.
+    var figures: () -> [(UIImage, CGRect)] = { [] }
 }
 
 struct PadSource {
@@ -116,6 +118,7 @@ final class PadHub {
 
     // The pad drives position; the main window follows while 主窗口跟随 is on.
     var mainFollows = true
+    @ObservationIgnored var navOwner: UUID?
     /// Page the pad shows (paged sources); main window follows.
     var padIndex = 0
     @ObservationIgnored private var posListeners: [String: [(id: ObjectIdentifier, f: (CGFloat, CGFloat) -> Void)]] = [:]
@@ -136,6 +139,7 @@ final class PadHub {
 /// Main-window side of a live preview: a shape layer that grows with the pad's pen.
 final class LivePreview {
     let layer = CAShapeLayer()
+    private var buckets: [CAShapeLayer] = []
     init() { layer.fillColor = nil; layer.lineCap = .round; layer.lineJoin = .round; layer.zPosition = 100 }
     /// Paper colour for the bitmap-eraser preview.
     var paper: UIColor = .white
@@ -143,7 +147,7 @@ final class LivePreview {
     func show(_ l: PadHub.Live?, k: CGFloat, in host: CALayer, dark: Bool = false) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        guard let l, l.points.count > 0, l.kind != .eraser else { layer.path = nil; return }
+        guard let l, l.points.count > 0, l.kind != .eraser else { layer.path = nil; buckets.forEach { $0.path = nil }; return }
         if layer.superlayer !== host { host.addSublayer(layer) }
         let pts = l.points.map { CGPoint(x: $0.x * k, y: $0.y * k) }
         var colour = l.color
@@ -160,9 +164,17 @@ final class LivePreview {
         if l.kind == .lasso { base = 2; colour = .systemBlue }
         if l.kind == .lasso || l.kind == .marker || l.kind == .bitmapEraser || l.forces.count != pts.count {
             // Constant width: one stroked path.
+            buckets.forEach { $0.path = nil }
+            // Smooth: quad curves through midpoints.
             let p = UIBezierPath()
             p.move(to: pts[0])
-            for q in pts.dropFirst() { p.addLine(to: q) }
+            if pts.count > 2 {
+                for i in 1..<(pts.count - 1) {
+                    let m = CGPoint(x: (pts[i].x + pts[i + 1].x) / 2, y: (pts[i].y + pts[i + 1].y) / 2)
+                    p.addQuadCurve(to: m, controlPoint: pts[i])
+                }
+                p.addLine(to: pts[pts.count - 1])
+            } else { for q in pts.dropFirst() { p.addLine(to: q) } }
             if pts.count == 1 { p.addLine(to: CGPoint(x: pts[0].x + 0.1, y: pts[0].y)) }
             layer.path = p.cgPath
             layer.fillColor = nil
@@ -171,32 +183,27 @@ final class LivePreview {
             layer.lineCap = l.kind == .marker ? .square : .round
             return
         }
-        // Pressure-sensitive (pen / pencil): filled outline of round segments, width from force.
+        // Pressure-sensitive (pen / pencil): continuous round-capped segments, grouped into width buckets
+        // (one sublayer per bucket) so the line never breaks up into dots.
         if l.kind == .pencil { base *= 0.8 }
-        let p = UIBezierPath()
-        func w(_ i: Int) -> CGFloat { max(0.6, base * (0.35 + 0.9 * min(1, l.forces[i]))) / 2 }
-        for i in pts.indices {
-            let r = w(i)
-            p.append(UIBezierPath(ovalIn: CGRect(x: pts[i].x - r, y: pts[i].y - r, width: r * 2, height: r * 2)))
-            if i > 0 {
-                let a = pts[i - 1], b = pts[i], ra = w(i - 1)
-                let dx = b.x - a.x, dy = b.y - a.y, d = max(0.001, hypot(dx, dy))
-                let nx = -dy / d, ny = dx / d
-                let q = UIBezierPath()
-                q.move(to: CGPoint(x: a.x + nx * ra, y: a.y + ny * ra))
-                q.addLine(to: CGPoint(x: b.x + nx * r, y: b.y + ny * r))
-                q.addLine(to: CGPoint(x: b.x - nx * r, y: b.y - ny * r))
-                q.addLine(to: CGPoint(x: a.x - nx * ra, y: a.y - ny * ra))
-                q.close()
-                p.append(q)
-            }
+        func w(_ i: Int) -> CGFloat { max(0.6, base * (0.35 + 0.9 * min(1, l.forces[i]))) }
+        let n = 8
+        while buckets.count < n { let b = CAShapeLayer(); b.fillColor = nil; b.lineCap = .round; b.lineJoin = .round; layer.addSublayer(b); buckets.append(b) }
+        let lo = max(0.6, base * 0.35), hi = max(lo + 0.01, base * 1.25)
+        var paths = (0..<n).map { _ in CGMutablePath() }
+        if pts.count == 1 { paths[0].move(to: pts[0]); paths[0].addLine(to: CGPoint(x: pts[0].x + 0.1, y: pts[0].y)) }
+        for i in pts.indices.dropFirst() {
+            let ww = (w(i - 1) + w(i)) / 2
+            let b = min(n - 1, max(0, Int(((ww - lo) / (hi - lo)) * CGFloat(n))))
+            paths[b].move(to: pts[i - 1]); paths[b].addLine(to: pts[i])
         }
-        p.usesEvenOddFillRule = false
-        layer.path = p.cgPath
-        layer.fillRule = .nonZero
-        layer.fillColor = colour.withAlphaComponent(alpha).cgColor
-        layer.strokeColor = nil
-        layer.lineWidth = 0
+        layer.path = nil
+        let c = colour.withAlphaComponent(alpha).cgColor
+        for (k2, b) in buckets.enumerated() {
+            b.path = paths[k2].isEmpty ? nil : paths[k2]
+            b.strokeColor = c
+            b.lineWidth = lo + (hi - lo) * (CGFloat(k2) + 0.5) / CGFloat(n)
+        }
     }
     /// Pencil hover cursor: a dot at points[0]; width = diameter in logical units.
     func dot(_ l: PadHub.Live?, k: CGFloat, in host: CALayer) {
@@ -333,7 +340,14 @@ enum PadSources {
                                let old = ScratchStore.shared.load(itemID)
                                ScratchStore.shared.save(itemID, ScratchDraft(drawing: d.dataRepresentation(), placed: old?.placed ?? [], height: old?.height))
                            })
-        return PadSource(owner: ch, title: "草稿纸", continuous: true, pages: [page])
+        var pg = page
+        pg.figures = {
+            (ScratchStore.shared.load(itemID)?.placed ?? []).compactMap { f in
+                guard let d = f.png, let img = UIImage(data: d), img.size.width > 0 else { return nil }
+                return (img, CGRect(x: f.x, y: f.y, width: f.w, height: f.w * Double(img.size.height / img.size.width)))
+            }
+        }
+        return PadSource(owner: ch, title: "草稿纸", continuous: true, pages: [pg])
     }
 
     static func note(_ id: String) -> PadSource? {
@@ -532,6 +546,8 @@ struct PadCanvas: UIViewRepresentable {
         }
         v.insertSubview(under, at: 0)
         c.under = under
+        c.refreshFigures()
+        c.figObs = NotificationCenter.default.addObserver(forName: .scratchSaved, object: nil, queue: .main) { [weak c] _ in c?.refreshFigures() }
         c.canvas = v
         v.delegate = c
         c.picker.addObserver(v)
@@ -547,8 +563,11 @@ struct PadCanvas: UIViewRepresentable {
             let (kind, color, width) = PadHub.describe(c.picker.selectedTool)
             guard kind != .other else { return }
             let z = max(v.zoomScale, 0.0001)
+            c.penFed = true
             PadHub.shared.live(c.parent.page.channel, .init(points: pts.map { CGPoint(x: $0.x / z, y: $0.y / z) }, color: color, width: width, forces: fs, kind: kind))
         }
+        // Fallback that always works: follow PencilKit's own drawing recogniser (if the pen watcher gets no touches).
+        v.drawingGestureRecognizer.addTarget(c, action: #selector(Coord.drawing(_:)))
         pen.onEnd = { [weak c] in
             // Preview stays until this stroke's PKStroke commits; fallback if PencilKit drops it (e.g. a tap).
             guard let ch = c?.parent.page.channel else { return }
@@ -602,11 +621,57 @@ struct PadCanvas: UIViewRepresentable {
         var parent: PadCanvas
         weak var canvas: PKCanvasView?
         var under: UIView?
+        var figObs: NSObjectProtocol?
+        private var figViews: [UIImageView] = []
+        private var figSig = ""
+        deinit { if let figObs { NotificationCenter.default.removeObserver(figObs) } }
+        func refreshFigures() {
+            guard let under else { return }
+            let figs = parent.page.figures()
+            let sig = figs.map { "\($0.1)" }.joined()
+            guard sig != figSig else { return }
+            figSig = sig
+            figViews.forEach { $0.removeFromSuperview() }
+            figViews = figs.map { img, r in
+                let iv = UIImageView(image: img); iv.frame = r; iv.contentMode = .scaleAspectFit
+                iv.backgroundColor = .white
+                under.addSubview(iv); return iv
+            }
+        }
         let picker = PKToolPicker()
         var base: CGFloat = 1
         var fittedWidth: CGFloat = 0
         var lastFollow: CGFloat = -1
         var lastW: CGFloat = -1
+        var penFed = false
+        private var dpts: [CGPoint] = []
+        @objc func drawing(_ g: UIGestureRecognizer) {
+            guard let v = canvas else { return }
+            let ch = parent.page.channel
+            switch g.state {
+            case .began:
+                dpts = []
+                if !penFed { PadHub.shared.strokeSeq += 1 }
+                PadHub.shared.live("hover:" + ch, nil)
+                fallthrough
+            case .changed:
+                guard !penFed else { return }
+                let z = max(v.zoomScale, 0.0001)
+                let p = g.location(in: v)
+                dpts.append(CGPoint(x: p.x / z, y: p.y / z))
+                let (kind, color, width) = PadHub.describe(picker.selectedTool)
+                guard kind != .other else { return }
+                PadHub.shared.live(ch, .init(points: dpts, color: color, width: width, kind: kind))
+            case .cancelled, .failed:
+                dpts = []; penFed = false; PadHub.shared.live(ch, nil)
+            default:
+                dpts = []; penFed = false
+                let id = PadHub.shared.strokeSeq
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    if PadHub.shared.strokeSeq == id, self?.committed != id { PadHub.shared.live(ch, nil) }
+                }
+            }
+        }
         var following = false
         var committed = -1
         private var applying = false

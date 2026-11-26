@@ -8,6 +8,13 @@ struct PageCluster<Extra: View>: View {
     let next: (() -> Void)?
     @ViewBuilder var counter: () -> Extra
     @Environment(\.tr) private var T
+    @State private var owner = UUID()
+    private func claim() {
+        let h = PadHub.shared
+        h.navOwner = owner
+        // Re-read state at call time so the pad never holds stale closures.
+        h.prev = prev; h.next = next
+    }
 
     var body: some View {
         let row = HStack(spacing: 2) {
@@ -23,9 +30,11 @@ struct PageCluster<Extra: View>: View {
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 6)
-        .onAppear { PadHub.shared.prev = prev; PadHub.shared.next = next }
-        .onChange(of: index) { _, _ in PadHub.shared.prev = prev; PadHub.shared.next = next }
-        .onDisappear { PadHub.shared.prev = nil; PadHub.shared.next = nil }
+        .onAppear { claim() }
+        .onChange(of: index) { _, _ in claim() }
+        .onChange(of: count) { _, _ in claim() }
+        // Only clear if no newer cluster took over (split/layout changes re-create the bar).
+        .onDisappear { if PadHub.shared.navOwner == owner { PadHub.shared.prev = nil; PadHub.shared.next = nil } }
         if #available(iOS 26.0, *) {
             GlassEffectContainer { row.glassEffect(.regular.interactive(), in: .capsule) }
         } else {

@@ -316,7 +316,17 @@ struct PPSetView: View {
         .task {
             set = PP.set(info.id)
             if set == nil { await MathContent.shared.ensure("pp-" + info.id); set = PP.set(info.id) }
+            if let s = ResumeStore.shared.snapshot("pp:" + info.id, as: PPSnap.self) { index = s.index; picked = s.picked }
+            ResumeStore.shared.touch(Activity(id: "pp:" + info.id, title: info.t, subject: "math", target: .ppSet(info.id),
+                                              answered: picked.count, total: set?.qs.count ?? info.n, status: review ? 1 : 0))
         }
+        .onChange(of: index) { _, _ in ppPersist() }
+        .onChange(of: picked) { _, _ in ppPersist() }
+    }
+    private struct PPSnap: Codable { var index: Int; var picked: [String: Int] }
+    private func ppPersist() {
+        ResumeStore.shared.save("pp:" + info.id, PPSnap(index: index, picked: picked))
+        ResumeStore.shared.update("pp:" + info.id, answered: picked.count, status: review ? 1 : 0)
     }
 
     private func settleText() -> String {
@@ -370,7 +380,7 @@ struct PPQuestionView: View {
                     if let c = q.ch { Text(c.map(PP.chapterName).joined(separator: " · ")).font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3).background(Color.secondary.opacity(0.15), in: Capsule()) }
                 }
                 MathText(text: q.q, size: 18)
-                if !splitOn { FigureStack(images: q.figImages) }
+                FigureStack(images: q.figImages)
                 if let o = q.o {
                     ForEach(Array(o.enumerated()), id: \.offset) { i, t in
                         let correct = review && L[min(i, 5)] == q.a.trimmingCharacters(in: .whitespaces)

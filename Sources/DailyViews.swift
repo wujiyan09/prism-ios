@@ -502,10 +502,7 @@ struct DailyRunner: View {
                     }
                 }
                 DailyText(text: q.stem, size: 18)
-                if inlineFigure, let img = store.image(q.figure) {
-                    Image(uiImage: img).resizable().aspectRatio(contentMode: .fit).frame(maxWidth: 560)
-                        .padding(6).background(Color.white, in: RoundedRectangle(cornerRadius: 10))
-                }
+                if let img = store.image(q.figure) { FigureInline(img: img) }
                 if q.isMC { mc(q, r) } else { written(q, r, revealed) }
             }
             .padding()

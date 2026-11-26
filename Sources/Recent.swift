@@ -15,6 +15,7 @@ enum RecentTarget: Codable, Hashable {
     case mathItem(String)
     case mathQuiz(MathQuizSpec)
     case daily(String)
+    case ppSet(String)
     case session            // a practice session still open in this run of the app
 }
 
@@ -128,6 +129,7 @@ struct RecentSection: View {
         case .mathItem: return "pencil.and.scribble"
         case .mathQuiz: return "checklist"
         case .daily: return "pencil.and.list.clipboard"
+        case .ppSet: return "doc.text"
         case .session: return "play.fill"
         }
     }
@@ -147,6 +149,7 @@ struct RecentSection: View {
         case .mathItem(let i): r = .mathItem(i)
         case .mathQuiz(let q): r = .mathQuiz(q)
         case .daily(let d): r = .daily(d)
+        case .ppSet(let s): r = .ppSet(s)
         case .session:
             if let s = store.sessions[section] { scene.session = s }
             r = nil
@@ -166,7 +169,16 @@ private struct NoteRecent: ViewModifier {
     @Environment(SceneModel.self) private var scene
     func body(content: Content) -> some View {
         content
-            .onAppear { RecentStore.shared.note(scene.section, target, title, detail) }
+            .onAppear {
+                RecentStore.shared.note(scene.section, target, title, detail)
+                switch target {
+                case .mathQuiz, .session, .exam, .tool: break
+                default:
+                    let subj: String
+                    switch target { case .pdf: subj = "pdf"; case .daily: subj = "daily"; default: subj = RecentStore.subject(of: target) ?? "pdf" }
+                    ResumeStore.shared.touch(Activity(id: "t:" + String(describing: target), title: title, subject: subj, target: target))
+                }
+            }
             .onChange(of: target) { _, t in RecentStore.shared.note(scene.section, t, title, detail) }
     }
 }
