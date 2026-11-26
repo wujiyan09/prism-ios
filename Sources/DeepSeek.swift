@@ -447,10 +447,14 @@ struct DeepSeekEntry: ViewModifier {
                                         dock.width = min(640, max(300, (dragStart ?? dock.width) - v.translation.width))
                                     }.onEnded { _ in dragStart = nil })
                             }
+                        // Follows the current page: the context key changes when the pager moves, which rebuilds the panel
+                        // (each question keeps its own saved thread).
+                        let k = make()?.key ?? "none"
                         DSLazyPanel(make: make, embedded: true, close: { withAnimation(.snappy) { dock.visible = false } },
                                     togglePin: { withAnimation(.snappy) { dock.pinned = false; open = true } })
+                            .id(k)
                             .frame(width: dock.width)
-                            .background(Color(uiColor: .systemBackground))
+                            .background(Color.appBackground)
                     }
                     .transition(.move(edge: .trailing))
                 }
@@ -645,7 +649,7 @@ struct DeepSeekPanel: View {
                     if ctx.sheetID != nil { chip("草稿纸", on: $useScratch, icon: "scribble") }
                     if ctx.grade != nil {
                         Button { runGrade() } label: { Label("DeepSeek 批改", systemImage: "checkmark.seal") }
-                            .glassButton(prominent: true).controlSize(.small).disabled(busy)
+                            .glassButton().controlSize(.small).disabled(busy)
                     }
                 }
             }
@@ -656,21 +660,30 @@ struct DeepSeekPanel: View {
                     }
                 }
             }
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 6) {
                 TextField("问点什么…", text: $input, axis: .vertical)
                     .lineLimit(1...5)
-                    .textFieldStyle(.roundedBorder)
                     .focused($focused)
                     .onSubmit { send(input, shown: input) }
-                if task != nil {
-                    Button { task?.cancel(); task = nil } label: { Label("停止", systemImage: "stop.fill") }
-                        .labelStyle(.iconOnly).glassButton().buttonBorderShape(.circle)
-                } else {
-                    Button { send(input, shown: input) } label: { Label("发送", systemImage: "arrow.up") }
-                        .labelStyle(.iconOnly).glassButton(prominent: true).buttonBorderShape(.circle)
+                    .padding(.leading, 16).padding(.vertical, 10)
+                Group {
+                    if task != nil {
+                        Button { task?.cancel(); task = nil } label: {
+                            Image(systemName: "stop.fill").font(.system(size: 13, weight: .bold)).frame(width: 32, height: 32)
+                        }
+                        .accessibilityLabel("停止")
+                    } else {
+                        Button { send(input, shown: input) } label: {
+                            Image(systemName: "arrow.up").font(.system(size: 15, weight: .bold)).frame(width: 32, height: 32)
+                        }
+                        .accessibilityLabel("发送")
                         .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || grading)
+                    }
                 }
+                .glassButton(prominent: true).buttonBorderShape(.circle)
+                .padding(.trailing, 5).padding(.bottom, 5)
             }
+            .dsGlassCapsule()
         }
         .padding(10)
     }
@@ -746,7 +759,7 @@ struct DeepSeekPanel: View {
         if let s = DSContext.scratchImage(ctx.sheetID) { imgs.append(s) }
         let prompt = """
         请按评分标准批改学生的作答（学生作答在附图的草稿纸上，同一张草稿纸可能有其他题目，只看这一题；如果看不到这一题的作答就在 summary 说明并给 0 分）。\(g.maxMarks > 0 ? "满分 \(g.maxMarks) 分。" : "按 DSE 习惯自行定出各评分点和满分。")
-        只输出 JSON，格式：
+        只输出 JSON。数学式用 $...$（行内）或 $$...$$，在 JSON 字符串里反斜杠要写成两个，例如 "$\\\\frac{1}{2}$"、"$x^2\\\\times 3$"。格式：
         {"points":[{"point":"评分点","awarded":0,"max":1,"comment":"简短评语"}],"score":0,"max":\(g.maxMarks > 0 ? g.maxMarks : 4),"summary":"一两句总评，指出最关键的错误"}
 
         【题目】
@@ -784,7 +797,7 @@ struct DSGradeResult {
     static func parse(_ s: String, max: Int) -> DSGradeResult? {
         var t = s.trimmingCharacters(in: .whitespacesAndNewlines)
         if let a = t.firstIndex(of: "{"), let b = t.lastIndex(of: "}") { t = String(t[a...b]) }
-        guard let o = try? JSONSerialization.jsonObject(with: Data(t.utf8)) as? [String: Any] else { return nil }
+        guard let o = DSJSON.object(t) else { return nil }
         func num(_ v: Any?) -> Double { (v as? NSNumber)?.doubleValue ?? Double(v as? String ?? "") ?? 0 }
         let pts = (o["points"] as? [[String: Any]] ?? []).map {
             Point(point: $0["point"] as? String ?? "", awarded: num($0["awarded"]), max: num($0["max"]), comment: $0["comment"] as? String ?? "")
@@ -813,14 +826,14 @@ struct DSGradeCard: View {
                     HStack(alignment: .firstTextBaseline) {
                         Image(systemName: p.awarded >= p.max && p.max > 0 ? "checkmark.circle.fill" : (p.awarded > 0 ? "circle.lefthalf.filled" : "xmark.circle"))
                             .foregroundStyle(p.awarded >= p.max && p.max > 0 ? Color.green : (p.awarded > 0 ? Color.orange : Color.red))
-                        MathText(text: p.point, size: 15)
+                        DSMarkdown(text: p.point)
                         Spacer()
                         Text("\(f(p.awarded))/\(f(p.max))").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
-                    if !p.comment.isEmpty { MathText(text: p.comment, size: 14, color: .secondary).padding(.leading, 26) }
+                    if !p.comment.isEmpty { DSMarkdown(text: p.comment).foregroundStyle(.secondary).padding(.leading, 26) }
                 }
             }
-            if !result.summary.isEmpty { MathText(text: result.summary, size: 15) }
+            if !result.summary.isEmpty { DSMarkdown(text: result.summary) }
             if let a = spec?.apply {
                 Button { a(result.score); applied = true } label: {
                     Label(applied ? "已填入自评（可以再改）" : "采用这个分数作自评", systemImage: applied ? "checkmark" : "square.and.arrow.down")
@@ -904,5 +917,33 @@ struct DSMarkdown: View {
                 }
             }
         }
+    }
+}
+
+
+extension View {
+    /// iOS 26 Messages-style glass input capsule; material capsule before iOS 26.
+    @ViewBuilder func dsGlassCapsule() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        } else {
+            self.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+    }
+}
+
+
+/// JSON from the model with LaTeX inside strings: repairs single backslashes (\frac → \\frac) before parsing,
+/// so \f, \t, \b, \n, \r at the start of a LaTeX command aren't eaten as JSON escapes.
+enum DSJSON {
+    static func repair(_ t: String) -> String {
+        // A backslash (not already escaped) followed by 2+ letters is a LaTeX command, except a real \n / \t before CJK etc.
+        let re = try! NSRegularExpression(pattern: #"(?<!\\)\\(?=[A-Za-z]{2,})"#)
+        let ns = t as NSString
+        return re.stringByReplacingMatches(in: t, range: NSRange(location: 0, length: ns.length), withTemplate: #"\\\\"#)
+    }
+    static func object(_ t: String) -> [String: Any]? {
+        if let o = try? JSONSerialization.jsonObject(with: Data(repair(t).utf8)) as? [String: Any] { return o }
+        return try? JSONSerialization.jsonObject(with: Data(t.utf8)) as? [String: Any]
     }
 }

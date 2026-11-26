@@ -272,7 +272,7 @@ struct DSMastery: Codable, Hashable {
 func dsJSON(_ s: String) -> [String: Any]? {
     var t = s.trimmingCharacters(in: .whitespacesAndNewlines)
     if let a = t.firstIndex(of: "{"), let b = t.lastIndex(of: "}") { t = String(t[a...b]) }
-    return try? JSONSerialization.jsonObject(with: Data(t.utf8)) as? [String: Any]
+    return DSJSON.object(t)
 }
 
 func dsErr(_ e: Error) -> String { (e as? DSError)?.errorDescription ?? e.localizedDescription }

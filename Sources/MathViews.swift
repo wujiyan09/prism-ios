@@ -774,8 +774,16 @@ extension View {
             .onAppear { ScratchStore.shared.session(key) }
             .onDisappear { if clearOnLeave { ScratchStore.shared.clear(key) } }
     }
+    /// Solid theme-coloured title/toolbar row across the full width (over the scratch column too).
     @ViewBuilder func hardTopEdge() -> some View {
-        if #available(iOS 26.0, *) { self.scrollEdgeEffectStyle(.hard, for: .top) } else { self }
+        if #available(iOS 26.0, *) {
+            self.scrollEdgeEffectStyle(.hard, for: .top)
+                .toolbarBackground(Color.appBackground, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+        } else {
+            self.toolbarBackground(Color.appBackground, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+        }
     }
 }
 
