@@ -525,6 +525,7 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
             } header: { Text(T("Appearance", "外观")) }
+            .listRowBackground(Color.cardBackground)
             if UIDevice.current.userInterfaceIdiom == .pad {
                 Section {
                     PadButton()
@@ -533,7 +534,6 @@ struct SettingsView: View {
                 }
                 .listRowBackground(Color.cardBackground)
             }
-            .listRowBackground(Color.cardBackground)
             Section {
                 Picker(selection: $theme) {
                     ForEach(AppTheme.allCases) { th in
