@@ -260,7 +260,7 @@ struct DSContext {
     }
 
     static func ictCard(_ c: Chapter, _ i: Int) -> DSContext {
-        let k = c.cards[i]
+        let k = c.cards[min(max(0, i), c.cards.count - 1)]
         var page = k.t + "\n" + plain(k.zh ?? k.en ?? "")
         for (j, e) in (k.ex ?? []).enumerated() {
             page += "\n\n例题 \(j + 1)：" + plain(e.q) + "\n解答：" + plain(e.a)
@@ -284,7 +284,7 @@ struct DSContext {
     }
 
     static func mathCard(_ c: MChapter, _ i: Int) -> DSContext {
-        let k = c.cards[i]
+        let k = c.cards[min(max(0, i), c.cards.count - 1)]
         var parts: [String] = []
         if let t = k.t { parts.append(t) }
         if let t = k.s { parts.append(t) }
@@ -397,42 +397,27 @@ extension View {
 struct DeepSeekEntry: ViewModifier {
     let make: () -> DSContext?
     @State private var open = false
-    @Environment(\.horizontalSizeClass) private var hsc
+    @State private var ctx: DSContext?
 
     func body(content: Content) -> some View {
-        let wide = hsc == .regular
         content
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button { withAnimation(.snappy) { open.toggle() } } label: { Label("问 DeepSeek", systemImage: "sparkles") }
+                    Button { ctx = make(); open = true } label: { Label("问 DeepSeek", systemImage: "sparkles") }
                         .accessibilityLabel("问 DeepSeek")
                 }
             }
-            .overlay(alignment: .trailing) {
-                if open && wide {
-                    panel
-                        .frame(width: 400)
-                        .frame(maxHeight: .infinity)
-                        .background(Color(uiColor: .systemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .shadow(color: .black.opacity(0.25), radius: 12, x: -2)
-                        .padding(8)
-                        .transition(.move(edge: .trailing))
+            .sheet(isPresented: $open) {
+                Group {
+                    if let ctx {
+                        DeepSeekPanel(ctx: ctx, close: { open = false })
+                    } else {
+                        ContentUnavailableView("这一页暂时没有内容可以问", systemImage: "sparkles")
+                    }
                 }
+                .presentationDetents([.medium, .large])
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
             }
-            .sheet(isPresented: Binding(get: { open && !wide }, set: { if !$0 { open = false } })) {
-                panel
-                    .presentationDetents([.medium, .large])
-                    .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-            }
-    }
-
-    @ViewBuilder private var panel: some View {
-        if let ctx = make() {
-            DeepSeekPanel(ctx: ctx, close: { withAnimation(.snappy) { open = false } }).id(ctx.key)
-        } else {
-            ContentUnavailableView("这一页暂时没有内容可以问", systemImage: "sparkles")
-        }
     }
 }
 
