@@ -368,7 +368,22 @@ struct NotesLibraryView: View {
         Button(role: .destructive) { confirm = [n.id] } label: { Label("删除", systemImage: "trash") }
     }
 
-    var body: some View {
+    private var remoteSorted: [NoteSummary] { store.remote.values.sorted { $0.modified > $1.modified } }
+    @ViewBuilder private var remoteSection: some View {
+        if !store.remote.isEmpty && search.isEmpty && folder.isEmpty {
+            Section("其他设备") {
+                ForEach(remoteSorted, id: \.id) { s in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(s.title)
+                        Text("\(s.pages) 页 · 文件在其他设备上").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .listRowBackground(Color.cardBackground)
+        }
+    }
+
+    private var listView: some View {
         List(selection: $selection) {
             folderSection
             if store.docs.isEmpty && folder.isEmpty {
@@ -381,43 +396,39 @@ struct NotesLibraryView: View {
                 } header: { notesHeader }
                 .listRowBackground(Color.cardBackground)
             }
-            if !store.remote.isEmpty && search.isEmpty && folder.isEmpty {
-                Section("其他设备") {
-                    ForEach(Array(store.remote.values).sorted { $0.modified > $1.modified }, id: \.id) { s in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(s.title)
-                            Text("\(s.pages) 页 · 文件在其他设备上").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .listRowBackground(Color.cardBackground)
-            }
+            remoteSection
         }
         .environment(\.editMode, $edit)
         .searchable(text: $search, prompt: "搜索标题")
         .appList()
         .navigationTitle(folder.isEmpty ? "笔记" : NoteStore.leaf(folder))
         .navigationDestination(item: $open) { NoteDocView(id: $0) }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button { showNew = true } label: { Label("新建空白笔记", systemImage: "doc.badge.plus") }
-                    Button { field = ""; newFolder = true } label: { Label("新建文件夹", systemImage: "folder.badge.plus") }
-                    Button { picker = .files } label: { Label("导入文件（PDF / 图片）", systemImage: "folder") }
-                    Button { picker = .photos } label: { Label("从照片", systemImage: "photo.on.rectangle") }
-                    if VNDocumentCameraViewController.isSupported { Button { picker = .scan } label: { Label("扫描纸本", systemImage: "doc.viewfinder") } }
-                } label: { Image(systemName: "plus") }
-            }
-            if edit == .active {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { withAnimation { edit = .inactive; selection = [] } }.bold() }
-            } else {
-                ToolbarItem(placement: .secondaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } } }
-                ToolbarItem(placement: .secondaryAction) { Button { field = ""; newFolder = true } label: { Label("新建文件夹", systemImage: "folder.badge.plus") } }
-            }
-            if edit == .active && !selection.isEmpty {
-                ToolbarItem(placement: .bottomBar) { Button("删除 \(selection.count) 份", role: .destructive) { confirm = Array(selection) } }
-            }
+    }
+
+    @ToolbarContentBuilder private var bar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Button { showNew = true } label: { Label("新建空白笔记", systemImage: "doc.badge.plus") }
+                Button { field = ""; newFolder = true } label: { Label("新建文件夹", systemImage: "folder.badge.plus") }
+                Button { picker = .files } label: { Label("导入文件（PDF / 图片）", systemImage: "folder") }
+                Button { picker = .photos } label: { Label("从照片", systemImage: "photo.on.rectangle") }
+                if VNDocumentCameraViewController.isSupported { Button { picker = .scan } label: { Label("扫描纸本", systemImage: "doc.viewfinder") } }
+            } label: { Image(systemName: "plus") }
         }
+        if edit == .active {
+            ToolbarItem(placement: .confirmationAction) { Button("完成") { withAnimation { edit = .inactive; selection = [] } }.bold() }
+        } else {
+            ToolbarItem(placement: .secondaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } } }
+            ToolbarItem(placement: .secondaryAction) { Button { field = ""; newFolder = true } label: { Label("新建文件夹", systemImage: "folder.badge.plus") } }
+        }
+        if edit == .active && !selection.isEmpty {
+            ToolbarItem(placement: .bottomBar) { Button("删除 \(selection.count) 份", role: .destructive) { confirm = Array(selection) } }
+        }
+    }
+
+    private var core: some View {
+        listView
+            .toolbar { bar }
         .confirmationDialog("删除 \(confirm.count) 份笔记？页面、手写、图片和文本框都会从这台设备删除。", isPresented: Binding(get: { !confirm.isEmpty }, set: { if !$0 { confirm = [] } }), titleVisibility: .visible) {
             Button("删除", role: .destructive) { confirm.forEach { store.delete($0) }; confirm = []; selection = [] }
         }
@@ -434,6 +445,10 @@ struct NotesLibraryView: View {
         } message: { Text("\(pending?.doc.pageCount ?? 0) 页") }
         .onChange(of: pending?.id) { _, _ in if pending != nil { field = "笔记 " + Date().formatted(date: .numeric, time: .omitted) } }
         .sheet(isPresented: $showNew) { NavigationStack { NoteNewSheet { id in showNew = false; if let id { store.update(id) { $0.folder = folder }; open = id } } } }
+    }
+
+    var body: some View {
+        core
         .alert("新建文件夹", isPresented: $newFolder) {
             TextField("名称", text: $field)
             Button("取消", role: .cancel) {}
