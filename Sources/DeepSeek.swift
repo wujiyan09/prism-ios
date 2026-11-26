@@ -579,7 +579,7 @@ struct DeepSeekPanel: View {
                         Button { close() } label: { Label("收起", systemImage: "sidebar.trailing") }
                             .labelStyle(.iconOnly)
                     }
-                    .buttonStyle(.bordered).buttonBorderShape(.circle)
+                    .glassButton().buttonBorderShape(.circle)
                     .padding(.horizontal, 14).padding(.vertical, 8)
                     Divider()
                     content
@@ -608,7 +608,7 @@ struct DeepSeekPanel: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("先填 API key").font(.headline)
             Text("在 设置 → DeepSeek 填入你的 key 才能使用。").font(.callout).foregroundStyle(.secondary)
-            Button("打开 DeepSeek 设置") { showSettings = true }.buttonStyle(.borderedProminent)
+            Button("打开 DeepSeek 设置") { showSettings = true }.glassButton(prominent: true)
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -645,14 +645,14 @@ struct DeepSeekPanel: View {
                     if ctx.sheetID != nil { chip("草稿纸", on: $useScratch, icon: "scribble") }
                     if ctx.grade != nil {
                         Button { runGrade() } label: { Label("DeepSeek 批改", systemImage: "checkmark.seal") }
-                            .buttonStyle(.borderedProminent).controlSize(.small).disabled(busy)
+                            .glassButton(prominent: true).controlSize(.small).disabled(busy)
                     }
                 }
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(quick, id: \.0) { q in
-                        Button(q.0) { send(q.1, shown: q.0) }.buttonStyle(.bordered).controlSize(.small).disabled(busy)
+                        Button(q.0) { send(q.1, shown: q.0) }.glassButton().controlSize(.small).disabled(busy)
                     }
                 }
             }
@@ -664,10 +664,10 @@ struct DeepSeekPanel: View {
                     .onSubmit { send(input, shown: input) }
                 if task != nil {
                     Button { task?.cancel(); task = nil } label: { Label("停止", systemImage: "stop.fill") }
-                        .labelStyle(.iconOnly).buttonStyle(.bordered).buttonBorderShape(.circle)
+                        .labelStyle(.iconOnly).glassButton().buttonBorderShape(.circle)
                 } else {
                     Button { send(input, shown: input) } label: { Label("发送", systemImage: "arrow.up") }
-                        .labelStyle(.iconOnly).buttonStyle(.borderedProminent).buttonBorderShape(.circle)
+                        .labelStyle(.iconOnly).glassButton(prominent: true).buttonBorderShape(.circle)
                         .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || grading)
                 }
             }
@@ -680,7 +680,7 @@ struct DeepSeekPanel: View {
             if let icon { Label(t, systemImage: icon) } else { Text(t) }
         }
         .toggleStyle(.button)
-        .buttonStyle(.bordered)
+        .glassButton()
         .controlSize(.small)
     }
 
@@ -825,7 +825,7 @@ struct DSGradeCard: View {
                 Button { a(result.score); applied = true } label: {
                     Label(applied ? "已填入自评（可以再改）" : "采用这个分数作自评", systemImage: applied ? "checkmark" : "square.and.arrow.down")
                 }
-                .buttonStyle(.bordered).disabled(applied)
+                .glassButton().disabled(applied)
             }
         }
         .padding(12)

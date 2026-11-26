@@ -115,7 +115,7 @@ struct PracticalEditor: View {
         } label: {
             Label(T("Run & check", "运行并检查"), systemImage: "play.fill")
         }
-        .buttonStyle(.borderedProminent)
+        .glassButton(prominent: true)
         .disabled(running)
         .keyboardShortcut("r", modifiers: .command)
         if !inSession {
@@ -124,13 +124,13 @@ struct PracticalEditor: View {
             } label: {
                 Label(T("Show solution", "看参考答案"), systemImage: "lightbulb")
             }
-            .buttonStyle(.bordered)
+            .glassButton()
             Button(role: .destructive) {
                 code = practical.starter ?? ""; outcome = nil
             } label: {
                 Label(T("Reset", "重置"), systemImage: "arrow.uturn.backward")
             }
-            .buttonStyle(.bordered)
+            .glassButton()
         }
     }
 

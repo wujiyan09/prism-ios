@@ -152,7 +152,7 @@ struct SessionView: View {
                                         prev: session.index > 0 ? { go(-1) } : nil,
                                         next: session.index < session.keys.count - 1 ? { go(1) } : nil)
                             if session.index == session.keys.count - 1 {
-                                Button(T("Submit", "交卷")) { trySubmit() }.buttonStyle(.borderedProminent)
+                                Button(T("Submit", "交卷")) { trySubmit() }.glassButton(prominent: true)
                             }
                         }
                 }

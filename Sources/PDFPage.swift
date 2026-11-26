@@ -25,7 +25,7 @@ struct PDFPage: View {
                 ContentUnavailableView {
                     Label(T("Couldn't load the paper", "试卷下载失败"), systemImage: "wifi.exclamationmark")
                 } actions: {
-                    Button(T("Try again", "重试")) { Task { await load() } }.buttonStyle(.borderedProminent)
+                    Button(T("Try again", "重试")) { Task { await load() } }.glassButton(prominent: true)
                 }
             } else {
                 ProgressView(T("Downloading…", "正在下载…"))

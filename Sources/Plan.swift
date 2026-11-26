@@ -255,7 +255,7 @@ struct PlanListView: View {
                 } description: {
                     Text(T("Add an exam and Prism builds a day-by-day revision plan up to the exam date.", "添加一场考试，Prism 会排出到考试当天的每日复习计划。"))
                 } actions: {
-                    Button(T("Add exam", "添加考试")) { editing = Exam() }.buttonStyle(.borderedProminent)
+                    Button(T("Add exam", "添加考试")) { editing = Exam() }.glassButton(prominent: true)
                 }
                 .listRowBackground(Color.clear)
             }

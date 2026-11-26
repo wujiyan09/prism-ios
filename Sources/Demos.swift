@@ -23,14 +23,14 @@ struct StepPlayer<Content: View>: View {
                         if step >= count - 1 { step = 0 }
                         playing.toggle()
                     } label: { Label(playing ? T("Pause", "暂停") : T("Play", "播放"), systemImage: playing ? "pause.fill" : "play.fill") }
-                        .buttonStyle(.borderedProminent)
+                        .glassButton(prominent: true)
                     Button { playing = false; step = min(count - 1, step + 1) } label: { Label(T("Step", "下一步"), systemImage: "chevron.right") }
                         .disabled(step >= count - 1)
                     Spacer()
                     Text("\(step + 1)/\(count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
                 .labelStyle(.iconOnly)
-                .buttonStyle(.bordered)
+                .glassButton()
                 .controlSize(.small)
             }
         }
@@ -485,7 +485,7 @@ struct SQLDemo: View {
                     }
                 } else {
                     CodeEditor(text: $query, minHeight: 70)
-                    Button(T("Run", "运行")) { run() }.buttonStyle(.bordered)
+                    Button(T("Run", "运行")) { run() }.glassButton()
                     if !error.isEmpty { Text(error).font(.callout.monospaced()).foregroundStyle(Color.bad) }
                     else { ResultTables(sets: result) }
                     if !d.note.isEmpty { Caption(text: d.note) }
@@ -552,7 +552,7 @@ struct LiveHTMLDemo: View {
             HTMLPreview(html: "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><style>\(css)</style></head><body>\(html)<script>\(js)</script></body></html>")
                 .frame(height: 220)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            Button(T("Reset", "重置")) { html = d.html; css = d.css; js = d.js }.buttonStyle(.bordered).controlSize(.small)
+            Button(T("Reset", "重置")) { html = d.html; css = d.css; js = d.js }.glassButton().controlSize(.small)
         }
         .onAppear { if !loaded { html = d.html; css = d.css; js = d.js; loaded = true } }
     }
@@ -575,8 +575,8 @@ struct RunDemo: View {
             CodeEditor(text: Binding(get: { code ?? src }, set: { code = $0 }), minHeight: 100)
             HStack {
                 Button { Task { await run() } } label: { Label(T("Run", "运行"), systemImage: "play.fill") }
-                    .buttonStyle(.borderedProminent).disabled(running)
-                Button(T("Reset", "重置")) { code = src; output = ""; error = "" }.buttonStyle(.bordered)
+                    .glassButton(prominent: true).disabled(running)
+                Button(T("Reset", "重置")) { code = src; output = ""; error = "" }.glassButton()
                 if running { ProgressView() }
             }
             .controlSize(.small)
@@ -808,7 +808,7 @@ struct CodeSnippetView: View {
             }
             if snip.run, ["python", "js", "javascript", "sql", "html"].contains(snip.lang.lowercased()) {
                 Button { tryIt = true } label: { Label(T("Try it", "动手试试"), systemImage: "play.circle") }
-                    .buttonStyle(.bordered)
+                    .glassButton()
                     .sheet(isPresented: $tryIt) { TrySheet(snip: snip).environment(\.tr, T) }
             }
         }

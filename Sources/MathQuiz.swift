@@ -221,7 +221,7 @@ struct MathQuizRunner: View {
                                 next: index < items.count - 1 ? { index += 1 } : nil)
                     if index == items.count - 1 {
                         Button { index += 1 } label: { Label(T("Submit", "交卷"), systemImage: "flag.checkered") }
-                            .buttonStyle(.borderedProminent)
+                            .glassButton(prominent: true)
                     }
                 }
             }
@@ -360,8 +360,8 @@ struct MathQuizRunner: View {
             Text(T("\(picked.count) answered", "已答 \(picked.count) 题")).foregroundStyle(.secondary)
             if case .set(let sid) = spec, MathMC.shared.set(sid)?.kind != "pastpaper" { PortalStatusView(attempt: attempt).font(.subheadline) }
             HStack {
-                Button(T("Review", "回看")) { index = 0 }.buttonStyle(.bordered)
-                Button(T("New round", "再来一轮")) { picked = [:]; index = 0; attempt = UUID().uuidString; ScratchStore.shared.session("quiz-\(spec)-\(Date().timeIntervalSince1970)"); build() }.buttonStyle(.borderedProminent)
+                Button(T("Review", "回看")) { index = 0 }.glassButton()
+                Button(T("New round", "再来一轮")) { picked = [:]; index = 0; attempt = UUID().uuidString; ScratchStore.shared.session("quiz-\(spec)-\(Date().timeIntervalSince1970)"); build() }.glassButton(prominent: true)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

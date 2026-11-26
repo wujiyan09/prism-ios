@@ -356,7 +356,7 @@ struct DownloadView: View {
                 Text(T("Download failed. Check your internet connection.", "下载失败，请检查网络。"))
                     .foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Button(T("Try again", "重试")) { Task { await lib.firstDownload() } }
-                    .buttonStyle(.borderedProminent)
+                    .glassButton(prominent: true)
             } else {
                 Text(lib.version == 0 ? T("Step 1 of 2: lessons and questions", "第 1 步（共 2 步）：课程和题目")
                                       : T("Step 2 of 2: exam pages and figures", "第 2 步（共 2 步）：试卷页面和图片"))

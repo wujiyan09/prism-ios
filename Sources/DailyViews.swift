@@ -334,7 +334,7 @@ struct DailyDayView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
                 }
-                .buttonStyle(.borderedProminent)
+                .glassButton(prominent: true)
 
                 if let n = d.answerNote { Text(n).font(.footnote).foregroundStyle(.secondary) }
             }
@@ -409,7 +409,7 @@ struct DailyRunner: View {
             Button { if (store.results[date] ?? DailyResult()).submitted { index += 1 } else { confirmSubmit = true } } label: {
                 Label(T("Submit", "交卷"), systemImage: "flag.checkered")
             }
-            .buttonStyle(.borderedProminent)
+            .glassButton(prominent: true)
         }
     }
 
@@ -599,7 +599,7 @@ struct DailyRunner: View {
                 Text("\(s.got) / \(s.tot)").font(.largeTitle.bold().monospacedDigit())
                 if ReviewStore.shared.inReview("daily-" + date) {
                     Text(T("Open each written question, read the answer and mark yourself, then tap Done.", "逐题看答案并自评，完成后按「完成」。")).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button(T("Done", "完成")) { ReviewStore.shared.finish("daily-" + date) }.buttonStyle(.borderedProminent)
+                    Button(T("Done", "完成")) { ReviewStore.shared.finish("daily-" + date) }.glassButton(prominent: true)
                 }
                 if !mcs.isEmpty {
                     Text(T("MC \(mcGot)/\(mcs.count) correct", "选择题对 \(mcGot)/\(mcs.count) 题")).foregroundStyle(.secondary)

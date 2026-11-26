@@ -299,12 +299,12 @@ struct SQLTool: View {
 
     @ViewBuilder private var buttons: some View {
         Button { run() } label: { Label(T("Run", "运行"), systemImage: "play.fill") }
-            .buttonStyle(.borderedProminent)
+            .glassButton(prominent: true)
             .keyboardShortcut("r", modifiers: .command)
         Button(role: .destructive) {
             db = Self.fresh(); result = []; error = ""; ran = false
         } label: { Label(T("Reset database", "重置数据库"), systemImage: "arrow.counterclockwise") }
-            .buttonStyle(.bordered)
+            .glassButton()
     }
 
     private func run() {

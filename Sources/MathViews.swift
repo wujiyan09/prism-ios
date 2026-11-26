@@ -829,7 +829,7 @@ struct ScratchPane: View {
                                     Button { pinned = false } label: { Label(T("Hide", "收起"), systemImage: "chevron.up") }
                                     Spacer()
                                     Button { place(img) } label: { Label(T("Place on scratch", "置入草稿纸"), systemImage: "square.and.arrow.down.on.square") }
-                                        .buttonStyle(.borderedProminent)
+                                        .glassButton(prominent: true)
                                 }
                                 .font(.subheadline)
                             }
@@ -838,7 +838,7 @@ struct ScratchPane: View {
                             .shadow(radius: 4, y: 2)
                         }
                     } else {
-                        Button { pinned = true } label: { Label(T("Figure", "图"), systemImage: "photo") }.buttonStyle(.bordered)
+                        Button { pinned = true } label: { Label(T("Figure", "图"), systemImage: "photo") }.glassButton()
                     }
                 }
                 .padding(10)
@@ -888,6 +888,7 @@ struct CanvasRep: UIViewRepresentable {
         v.backgroundColor = .clear
         v.isOpaque = false
         v.alwaysBounceVertical = true
+        if #available(iOS 26.0, *) { v.topEdgeEffect.style = .hard }
         v.minimumZoomScale = 0.5
         v.maximumZoomScale = 4
         v.bouncesZoom = true
@@ -912,6 +913,11 @@ struct CanvasRep: UIViewRepresentable {
         dt.numberOfTapsRequired = 2
         dt.numberOfTouchesRequired = 2
         v.addGestureRecognizer(dt)
+        // Finger tap on an inserted image selects it (move / resize / delete).
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coord.tapSelect(_:)))
+        tap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        tap.cancelsTouchesInView = false
+        v.addGestureRecognizer(tap)
         // One shared picker for every canvas, so the tool chosen is the tool used.
         let picker = CanvasRep.sharedPicker
         picker.addObserver(v)
@@ -945,14 +951,14 @@ struct CanvasRep: UIViewRepresentable {
 
     static let sharedPicker = PKToolPicker()
 
-    final class Coord: NSObject, PKCanvasViewDelegate, PKToolPickerObserver {
+    final class Coord: NSObject, PKCanvasViewDelegate, PKToolPickerObserver, UIContextMenuInteractionDelegate {
         var shown = true
         var parent: CanvasRep
         weak var canvas: PKCanvasView?
         var under: UIView?
         var picker: PKToolPicker?
         var height: CGFloat = 4000
-        private var lastKey = ""
+        var lastKey = ""
         init(_ p: CanvasRep) { parent = p }
 
         /// Belt and braces: apply the picked tool directly too.
@@ -980,6 +986,148 @@ struct CanvasRep: UIViewRepresentable {
             guard let u = under else { return }
             u.transform = CGAffineTransform(scaleX: sv.zoomScale, y: sv.zoomScale)
             u.layer.position = .zero
+            layoutSelection()
+        }
+
+        // MARK: inserted-image selection
+        var imageViews: [UIImageView] = []
+        var selected: Int?
+        private var selView: UIView?
+        private var startFrame: CGRect = .zero
+
+        private func rect(_ i: Int) -> CGRect? {
+            guard parent.placed.indices.contains(i), i < imageViews.count else { return nil }
+            return imageViews[i].frame
+        }
+
+        @objc func tapSelect(_ g: UITapGestureRecognizer) {
+            guard let c = canvas else { return }
+            let z = max(c.zoomScale, 0.01)
+            let p = g.location(in: c)
+            let pt = CGPoint(x: p.x / z, y: p.y / z)
+            if let i = imageViews.indices.reversed().first(where: { imageViews[$0].frame.insetBy(dx: -6, dy: -6).contains(pt) }) {
+                // Drop the dot a finger tap may have drawn.
+                if let last = c.drawing.strokes.last, last.renderBounds.width < 14, last.renderBounds.height < 14,
+                   last.renderBounds.insetBy(dx: -10, dy: -10).contains(pt) {
+                    var d = c.drawing; d.strokes.removeLast(); c.drawing = d
+                }
+                select(i)
+            } else {
+                select(nil)
+            }
+        }
+
+        func select(_ i: Int?) {
+            selView?.removeFromSuperview(); selView = nil
+            selected = i
+            guard let i, let c = canvas, rect(i) != nil else { selected = nil; return }
+            let v = UIView()
+            v.layer.borderColor = UIColor.tintColor.cgColor
+            v.layer.borderWidth = 2
+            v.layer.cornerRadius = 4
+            v.backgroundColor = UIColor.tintColor.withAlphaComponent(0.06)
+            v.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(move(_:))))
+            v.addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(pinch(_:))))
+            v.addInteraction(UIContextMenuInteraction(delegate: self))
+            let h = UIImageView(image: UIImage(systemName: "arrow.up.left.and.arrow.down.right.circle.fill"))
+            h.tintColor = .tintColor
+            h.backgroundColor = .systemBackground
+            h.layer.cornerRadius = 15
+            h.clipsToBounds = true
+            h.isUserInteractionEnabled = true
+            h.tag = 7
+            h.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(resize(_:))))
+            v.addSubview(h)
+            c.addSubview(v)
+            selView = v
+            layoutSelection()
+        }
+
+        func layoutSelection() {
+            guard let v = selView, let i = selected, let r = rect(i), let c = canvas else { return }
+            let z = c.zoomScale
+            v.frame = CGRect(x: r.minX * z, y: r.minY * z, width: r.width * z, height: r.height * z)
+            if let h = v.viewWithTag(7) { h.frame = CGRect(x: v.bounds.width - 18, y: v.bounds.height - 18, width: 30, height: 30) }
+        }
+
+        private func setFrame(_ i: Int, _ f: CGRect) {
+            imageViews[i].frame = f
+            layoutSelection()
+        }
+
+        private func commit(_ i: Int) {
+            guard parent.placed.indices.contains(i), i < imageViews.count else { return }
+            let f = imageViews[i].frame
+            var p = parent.placed
+            p[i].x = Double(f.minX); p[i].y = Double(f.minY); p[i].w = Double(max(40, f.width))
+            lastKey = "\(parent.paper.rawValue)|\(p)"   // views already match; skip rebuild
+            parent.placed = p
+            save()
+        }
+
+        @objc func move(_ g: UIPanGestureRecognizer) {
+            guard let i = selected, let c = canvas, let r = rect(i) else { return }
+            let z = max(c.zoomScale, 0.01)
+            switch g.state {
+            case .began: startFrame = r
+            case .changed:
+                let t = g.translation(in: c)
+                setFrame(i, startFrame.offsetBy(dx: t.x / z, dy: t.y / z))
+            case .ended, .cancelled: commit(i)
+            default: break
+            }
+        }
+
+        @objc func resize(_ g: UIPanGestureRecognizer) {
+            guard let i = selected, let c = canvas, let r = rect(i) else { return }
+            let z = max(c.zoomScale, 0.01)
+            switch g.state {
+            case .began: startFrame = r
+            case .changed:
+                let t = g.translation(in: c)
+                let w = max(40, startFrame.width + t.x / z)
+                setFrame(i, CGRect(x: startFrame.minX, y: startFrame.minY, width: w, height: w * startFrame.height / max(startFrame.width, 1)))
+            case .ended, .cancelled: commit(i)
+            default: break
+            }
+        }
+
+        @objc func pinch(_ g: UIPinchGestureRecognizer) {
+            guard let i = selected, let r = rect(i) else { return }
+            switch g.state {
+            case .began: startFrame = r
+            case .changed:
+                let w = max(40, startFrame.width * g.scale), h = w * startFrame.height / max(startFrame.width, 1)
+                setFrame(i, CGRect(x: startFrame.midX - w / 2, y: startFrame.midY - h / 2, width: w, height: h))
+            case .ended, .cancelled: commit(i)
+            default: break
+            }
+        }
+
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+            guard let i = selected else { return nil }
+            return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
+                UIMenu(children: [
+                    UIAction(title: "放大", image: UIImage(systemName: "plus.magnifyingglass")) { [weak self] _ in self?.scale(i, 1.25) },
+                    UIAction(title: "缩小", image: UIImage(systemName: "minus.magnifyingglass")) { [weak self] _ in self?.scale(i, 0.8) },
+                    UIAction(title: "删除图片", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.delete(i) },
+                ])
+            }
+        }
+
+        private func scale(_ i: Int, _ k: CGFloat) {
+            guard let r = rect(i) else { return }
+            let w = max(40, r.width * k)
+            setFrame(i, CGRect(x: r.minX, y: r.minY, width: w, height: w * r.height / max(r.width, 1)))
+            commit(i)
+        }
+
+        private func delete(_ i: Int) {
+            select(nil)
+            var p = parent.placed
+            guard p.indices.contains(i) else { return }
+            p.remove(at: i)
+            parent.placed = p
         }
 
         @objc func resetZoom(_ g: UITapGestureRecognizer) {
@@ -1024,8 +1172,9 @@ struct CanvasRep: UIViewRepresentable {
                 bg.backgroundColor = UIColor(patternImage: tile)
                 u.addSubview(bg)
             }
+            imageViews = []
             for p in placed {
-                guard let d = p.png, let img = UIImage(data: d) else { continue }
+                guard let d = p.png, let img = UIImage(data: d) else { imageViews.append(UIImageView()); continue }
                 let w = CGFloat(p.w), hgt = w * img.size.height / max(img.size.width, 1)
                 let iv = UIImageView(image: img)
                 iv.frame = CGRect(x: p.x, y: p.y, width: w, height: hgt)
@@ -1033,7 +1182,9 @@ struct CanvasRep: UIViewRepresentable {
                 iv.layer.borderColor = UIColor.systemGray4.cgColor
                 iv.layer.borderWidth = 0.5
                 u.addSubview(iv)
+                imageViews.append(iv)
             }
+            if let s = selected, s >= placed.count { select(nil) } else { layoutSelection() }
             return true
         }
     }
@@ -1051,10 +1202,11 @@ struct WorkSplit<Q: View, B: View>: View {
     var body: some View {
         if on {
             SplitContainer(key: "math.split.ratio", defaultRatio: ratio) {
-                question().frame(maxHeight: .infinity).pageNav { bar() }
+                question().frame(maxHeight: .infinity).pageNav { bar() }.hardTopEdge()
             } second: {
-                ScratchPane(sheetID: sheetID, figs: figs)
+                ScratchPane(sheetID: sheetID, figs: figs).hardTopEdge()
             }
+            .hardTopEdge()
         } else {
             question().pageNav { bar() }
         }

@@ -393,8 +393,8 @@ struct DSMasteryCard: View {
             if !m.cards.isEmpty || !m.questions.isEmpty {
                 Text("建议：复习 \(m.cards.count) 张卡、练 \(m.questions.count) 题").font(.footnote).foregroundStyle(.secondary)
                 HStack {
-                    Button { practise() } label: { Label("练这些题", systemImage: "pencil") }.buttonStyle(.borderedProminent)
-                    Button { addToPlan() } label: { Label("加入备考计划", systemImage: "calendar.badge.plus") }.buttonStyle(.bordered)
+                    Button { practise() } label: { Label("练这些题", systemImage: "pencil") }.glassButton(prominent: true)
+                    Button { addToPlan() } label: { Label("加入备考计划", systemImage: "calendar.badge.plus") }.glassButton()
                 }
                 .controlSize(.small)
             }
@@ -492,7 +492,7 @@ struct DSPlanSection: View {
                     .lineLimit(1...3)
                 HStack {
                     Spacer()
-                    Button("生成调整") { adjust() }.buttonStyle(.bordered).controlSize(.small)
+                    Button("生成调整") { adjust() }.glassButton().controlSize(.small)
                         .disabled(busy || text.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
@@ -569,8 +569,8 @@ struct DSPlanSection: View {
                     store.add("adjust", scope: exam.id.uuidString, title: text + (a.summary.isEmpty ? "" : " → " + a.summary), body: (try? String(data: JSONEncoder().encode(a), encoding: .utf8)) ?? "")
                     pending = nil; text = ""
                 }
-                .buttonStyle(.borderedProminent)
-                Button("取消", role: .cancel) { pending = nil }.buttonStyle(.bordered)
+                .glassButton(prominent: true)
+                Button("取消", role: .cancel) { pending = nil }.glassButton()
             }
             .controlSize(.small)
         }
@@ -671,7 +671,7 @@ struct DSDiagRow: View {
                     p.notes.append(recordID)
                     store.setPlan(exam.id, p)
                 }
-                .buttonStyle(.bordered).controlSize(.small).disabled(added || point.chapter.isEmpty)
+                .glassButton().controlSize(.small).disabled(added || point.chapter.isEmpty)
             }
         }
     }

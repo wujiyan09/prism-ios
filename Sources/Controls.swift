@@ -60,12 +60,13 @@ struct MarkControl: View {
             Button { prog.setMark(key, m == true ? nil : true) } label: {
                 Label(T("Correct", "对"), systemImage: m == true ? "checkmark.circle.fill" : "checkmark.circle")
             }
-            .buttonStyle(.bordered).tint(m == true ? .green : .secondary)
+            .glassButton().tint(m == true ? .green : nil)
             Button { prog.setMark(key, m == false ? nil : false) } label: {
                 Label(T("Wrong", "错"), systemImage: m == false ? "xmark.circle.fill" : "xmark.circle")
             }
-            .buttonStyle(.bordered).tint(m == false ? .red : .secondary)
+            .glassButton().tint(m == false ? .red : nil)
         }
+        .glassGroup()
         .sensoryFeedback(.selection, trigger: m)
     }
 }
@@ -90,7 +91,7 @@ struct AnswerReveal<C: View>: View {
             Button { withAnimation { open = true } } label: {
                 Label(T("Show answer", "显示答案"), systemImage: "eye").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .glassButton()
             .controlSize(.large)
         }
     }
@@ -145,5 +146,22 @@ struct PendingReviewRows: View {
             .buttonStyle(.plain)
             .listRowBackground(Color.cardBackground)
         }
+    }
+}
+
+// MARK: - Liquid Glass buttons (iOS 26), bordered fallback
+
+extension View {
+    /// In-content buttons: native Liquid Glass on iOS 26 (.glass / .glassProminent), bordered before that.
+    @ViewBuilder func glassButton(prominent: Bool = false) -> some View {
+        if #available(iOS 26.0, *) {
+            if prominent { self.buttonStyle(.glassProminent) } else { self.buttonStyle(.glass) }
+        } else {
+            if prominent { self.buttonStyle(.borderedProminent) } else { self.buttonStyle(.bordered) }
+        }
+    }
+    /// Groups neighbouring glass buttons so they blend (e.g. ✓ / ✗).
+    @ViewBuilder func glassGroup(spacing: CGFloat = 10) -> some View {
+        if #available(iOS 26.0, *) { GlassEffectContainer(spacing: spacing) { self } } else { self }
     }
 }
