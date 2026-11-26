@@ -1,0 +1,5 @@
+# Generated at build time from GitHub Actions secrets — never commit.
+Sources/Secrets.swift
+*.xcodeproj/
+build/
+.DS_Store

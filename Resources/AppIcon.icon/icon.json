@@ -1,0 +1,70 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "linear-gradient": [
+          "srgb:0.10588,0.18039,0.41961,1.00000",
+          "srgb:0.02353,0.05490,0.14118,1.00000"
+        ]
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "srgb:0.04706,0.07843,0.20000,1.00000",
+          "srgb:0.00000,0.00000,0.00000,1.00000"
+        ]
+      }
+    }
+  ],
+  "groups": [
+    {
+      "name": "Prism",
+      "layers": [
+        {
+          "name": "facet",
+          "image-name": "facet.svg",
+          "glass": false
+        },
+        {
+          "name": "prism",
+          "image-name": "prism.svg",
+          "glass": true,
+          "opacity-specializations": [
+            {
+              "value": 1
+            },
+            {
+              "appearance": "tinted",
+              "value": 0.9
+            }
+          ]
+        },
+        {
+          "name": "spectrum",
+          "image-name": "spectrum.svg",
+          "glass": false
+        },
+        {
+          "name": "depth",
+          "image-name": "depth.svg",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.3
+      },
+      "specular": true,
+      "lighting": "individual"
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}
