@@ -23,6 +23,9 @@ struct PageCluster<Extra: View>: View {
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 6)
+        .onAppear { PadHub.shared.prev = prev; PadHub.shared.next = next }
+        .onChange(of: index) { _, _ in PadHub.shared.prev = prev; PadHub.shared.next = next }
+        .onDisappear { PadHub.shared.prev = nil; PadHub.shared.next = nil }
         if #available(iOS 26.0, *) {
             GlassEffectContainer { row.glassEffect(.regular.interactive(), in: .capsule) }
         } else {

@@ -632,6 +632,7 @@ struct ImportPaperView: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 if p.mode == "ink" {
                     InkToggle(on: $inkOn)
+                    PadButton()
                     if p.submitted && ms != nil { Button { swap.toggle() } label: { Image(systemName: "arrow.left.arrow.right") }.accessibilityLabel("交换左右") }
                 } else {
                     Button { withAnimation { splitOn.toggle() } } label: { Image(systemName: splitOn ? "rectangle.split.2x1.fill" : "rectangle.split.2x1") }

@@ -457,6 +457,10 @@ struct DeepSeekEntry: ViewModifier {
                         .accessibilityLabel("问 DeepSeek")
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .padAskDS)) { _ in
+                if Self.pinEnabled && hsc == .regular && dock.pinned { withAnimation(.smooth(duration: 0.35)) { dock.visible = true } }
+                else { open = true }
+            }
             .safeAreaInset(edge: .trailing, spacing: 0) {
                 if showPinned {
                     // Floating Liquid Glass panel, inset from the edges like the iOS 26 sidebar.
@@ -666,6 +670,9 @@ struct DeepSeekPanel: View {
                         .navigationDestination(isPresented: $showHistory) { DSHistoryView(scope: ctx.key) }
                 }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .padAskDS)) { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { focused = true }
         }
         .onAppear { msgs = DSStore.shared.chats[chatKey]?.msgs ?? []; loadedKey = chatKey; grade = DSStore.shared.history(ctx.key, "grade").first.flatMap { DSGradeResult.parse($0.body, max: ctx.grade?.maxMarks ?? 0) }; useScratch = false }
         .onChange(of: ctx.key) { _, _ in

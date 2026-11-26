@@ -37,6 +37,12 @@ struct ICTApp: App {
             SectionCommands()
             PagerCommands()
         }
+        // 手写板: opened on the iPad screen while Prism runs on an external display. Never receives URLs.
+        WindowGroup("手写板", id: "pad") {
+            PadView()
+                .preferredColorScheme(appearance == "light" ? .light : (appearance == "dark" ? .dark : nil))
+        }
+        .handlesExternalEvents(matching: [])
     }
 }
 

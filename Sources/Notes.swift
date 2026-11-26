@@ -582,6 +582,10 @@ struct NoteDocView: View {
                         }
                         .overlay(alignment: .bottomTrailing) { zoomBadge }
                         .onChange(of: showPages) { _, v in if !v, let c = current { jump = offset(doc, base, c) } }
+                        .onReceive(NotificationCenter.default.publisher(for: .padPage)) { n in
+                            guard (n.object as? String) == "note-" + id, let i = n.userInfo?["i"] as? Int, doc.pages.indices.contains(i) else { return }
+                            current = doc.pages[i].id; jump = offset(doc, base, doc.pages[i].id)
+                        }
                     }
                 }
             } else {
@@ -593,7 +597,13 @@ struct NoteDocView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .deepSeek(ctx)
-        .onAppear { if current == nil { current = doc?.pages.first?.id } }
+        .onAppear {
+            if current == nil { current = doc?.pages.first?.id }
+            if let s = PadSources.note(id) { PadHub.shared.activate(s, index: pageIndex) }
+        }
+        .onDisappear { PadHub.shared.deactivate("note-" + id) }
+        .onChange(of: current) { _, _ in PadHub.shared.setIndex("note-" + id, pageIndex) }
+        .onChange(of: doc?.pages.count ?? 0) { _, _ in if let s = PadSources.note(id) { PadHub.shared.activate(s, index: pageIndex, force: true) } }
         .task(id: "\(scope)|\(current ?? "")|\(Int(doc?.modified ?? 0))") {
             try? await Task.sleep(for: .milliseconds(600))
             if !Task.isCancelled { ctx = makeContext() }
@@ -724,6 +734,7 @@ struct NoteDocView: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
+            PadButton()
             Button { showTools.toggle() } label: {
                 Label(showTools ? "隐藏笔盘" : "笔盘", systemImage: showTools ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
             }
@@ -910,6 +921,10 @@ struct NoteCanvas: UIViewRepresentable {
         v.tool = picker.selectedTool
         context.coordinator.picker = picker
         DispatchQueue.main.async { context.coordinator.load() }
+        let link = PadLink("note:" + key, canvas: v)
+        link.host = { [weak v] in v?.layer }
+        link.k = { [weak v] in (v?.bounds.width ?? NoteRender.logicalWidth) / NoteRender.logicalWidth }
+        context.coordinator.link = link
         // 笔盘 on at open: show it without waiting for a first stroke.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak v, weak c = context.coordinator] in
             guard let v, let c, v.window != nil, c.parent.enabled, c.parent.tools else { return }
@@ -934,6 +949,7 @@ struct NoteCanvas: UIViewRepresentable {
         }
     }
     static func dismantleUIView(_ v: PKCanvasView, coordinator: Coord) {
+        coordinator.link?.tearDown(); coordinator.link = nil
         coordinator.save()
         coordinator.picker?.removeObserver(v)
         coordinator.picker?.colorUserInterfaceStyle = .unspecified
@@ -956,6 +972,7 @@ struct NoteCanvas: UIViewRepresentable {
             }
         }
         var lastTouched = false
+        var link: PadLink?
 
         func load() {
             guard let v = canvas, v.bounds.width > 10 else { return }
@@ -973,6 +990,7 @@ struct NoteCanvas: UIViewRepresentable {
         }
         func canvasViewDrawingDidChange(_ v: PKCanvasView) {
             guard !loading else { return }
+            link?.changed(v.drawing)
             pending?.cancel()
             let w = DispatchWorkItem { [weak self] in self?.save() }
             pending = w

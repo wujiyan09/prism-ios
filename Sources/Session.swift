@@ -195,9 +195,15 @@ struct SessionView: View {
         .workingSession(sheetKey)
         .focusedSceneValue(\.pager, actions)
         .keyPager(actions)
+        .padMC("ict-\(session.index)", count: padMCCount, selected: session.submitted ? nil : session.mc[session.index], pick: { j in actions.choose?(j) })
         .hardTopEdge()
         .onKeyPress(.leftArrow) { guard !typing, !session.submitted else { return .ignored }; go(-1); return .handled }
         .onKeyPress(.rightArrow) { guard !typing, !session.submitted else { return .ignored }; go(1); return .handled }
+    }
+
+    private var padMCCount: Int {
+        guard !session.submitted, let it = lib.items[session.keys[session.index]], it.type == .mc else { return 0 }
+        return it.o.count
     }
 
     private var actions: PagerActions {

@@ -924,6 +924,7 @@ struct ScratchPane: View {
         .onChange(of: figKey) { pinned = true }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                PadButton()
                 Menu {
                     Picker(T("Paper", "纸张"), selection: $paper) {
                         ForEach(PaperStyle.allCases) { Text($0.name(T)).tag($0) }
@@ -1019,6 +1020,16 @@ struct CanvasRep: UIViewRepresentable {
         if tools { DispatchQueue.main.async { v.becomeFirstResponder() } }
         context.coordinator.redraw(paper: paper, placed: placed)
         context.coordinator.layoutAdd(v)
+        let co = context.coordinator
+        let link = PadLink("scratch:" + itemID, canvas: v)
+        link.host = { [weak co] in co?.under?.layer }
+        link.onScroll = { [weak v] y in
+            guard let v else { return }
+            let maxY = max(0, v.contentSize.height - v.bounds.height)
+            v.setContentOffset(CGPoint(x: v.contentOffset.x, y: min(maxY, max(0, y * v.zoomScale))), animated: false)
+        }
+        co.link = link
+        PadHub.shared.activate(PadSources.scratch(itemID, height: h))
         return v
     }
 
@@ -1034,6 +1045,8 @@ struct CanvasRep: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ v: PKCanvasView, coordinator: Coord) {
+        coordinator.link?.tearDown(); coordinator.link = nil
+        PadHub.shared.deactivate("scratch:" + coordinator.parent.itemID)
         coordinator.picker?.setVisible(false, forFirstResponder: v)
         coordinator.picker?.removeObserver(v)
         coordinator.picker?.removeObserver(coordinator)
@@ -1051,6 +1064,7 @@ struct CanvasRep: UIViewRepresentable {
         var height: CGFloat = 4000
         var lastKey = ""
         var addButton: UIButton?
+        var link: PadLink?
 
         /// Content = pages + room for the 加一页 button under the last page.
         func layoutAdd(_ c: UIScrollView) {
@@ -1073,6 +1087,7 @@ struct CanvasRep: UIViewRepresentable {
                 u.transform = CGAffineTransform(scaleX: z, y: z)
             }
             lastKey = ""
+            PadHub.shared.activate(PadSources.scratch(parent.itemID, height: h), force: true)
             redraw(paper: parent.paper, placed: parent.placed)
             layoutAdd(c)
         }
@@ -1099,6 +1114,7 @@ struct CanvasRep: UIViewRepresentable {
         func canvasViewDrawingDidChange(_ c: PKCanvasView) {
             // Extend the sheet when writing near the bottom.
             if !c.drawing.strokes.isEmpty && c.drawing.bounds.maxY > height - 150 { setHeight(CanvasRep.pages(for: c.drawing.bounds.maxY + 200)) }
+            link?.changed(c.drawing)
             save()
         }
 

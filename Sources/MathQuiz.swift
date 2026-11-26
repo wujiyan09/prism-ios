@@ -247,6 +247,9 @@ struct MathQuizRunner: View {
                 let it = items[index]
                 WorkSplit(on: split, sheetID: "quiz-\(spec)", figs: split ? figImages(it) : []) {
                     question(it).id(it.id)
+                        .padMC("mq-" + it.id, count: it.order.count, selected: picked[it.id].flatMap { ci in it.order.firstIndex(of: ci) }, pick: { pos in
+                            if it.order.indices.contains(pos) { choose(it, it.order[pos]) }
+                        })
                 } bar: {
                     PageCluster(index: index, count: items.count,
                                 prev: index > 0 ? { index -= 1 } : nil,
@@ -327,6 +330,19 @@ struct MathQuizRunner: View {
         }
     }
 
+    private func choose(_ it: MathQuizItem, _ ci: Int) {
+        guard picked[it.id] == nil else { return }
+        let isAns = ci == it.v.a
+        picked[it.id] = ci
+        prog.record(MathMC.key(it.q), ok: isAns)
+        prog.marks[MathMC.key(it.q)] = isAns
+        // Instant feedback: move on after 1 s, only when right (wrong stays so the explanation can be read).
+        if isAns, UserDefaults.standard.bool(forKey: "autoNext"), index < items.count - 1 {
+            let here = index
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { if index == here { withAnimation(.snappy) { index += 1 } } }
+        }
+    }
+
     private func question(_ it: MathQuizItem) -> some View {
         let chosen = picked[it.id]
         return ScrollView {
@@ -346,15 +362,7 @@ struct MathQuizRunner: View {
                     let c = it.v.c[ci]
                     let isAns = ci == it.v.a
                     Button {
-                        guard chosen == nil else { return }
-                        picked[it.id] = ci
-                        prog.record(MathMC.key(it.q), ok: isAns)
-                        prog.marks[MathMC.key(it.q)] = isAns
-                        // Instant feedback: move on after 1 s, only when right (wrong stays so the explanation can be read).
-                        if isAns, UserDefaults.standard.bool(forKey: "autoNext"), index < items.count - 1 {
-                            let here = index
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { if index == here { withAnimation(.snappy) { index += 1 } } }
-                        }
+                        choose(it, ci)
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .firstTextBaseline, spacing: 10) {

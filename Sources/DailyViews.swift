@@ -514,6 +514,20 @@ struct DailyRunner: View {
         .softEdges()
     }
 
+    private func choose(_ q: DailyQuestion, _ r: DailyResult, _ i: Int) {
+        let letters = ["A", "B", "C", "D", "E", "F"]
+        guard r.mc[q.id] == nil, !r.submitted, i < (q.options ?? []).count else { return }
+        let L = letters[min(i, 5)]
+        let isAns = L == (q.answer ?? "").trimmingCharacters(in: CharacterSet.letters.inverted).uppercased().prefix(1).description
+        binding { $0.mc[q.id] = L }
+        ProgressStore.shared.record("daily:" + q.id, ok: isAns)
+        // Instant feedback here: only move on after a right answer, and only after 1 s.
+        if isAns, UserDefaults.standard.bool(forKey: "autoNext"), let d = store.loaded[date], index < d.questions.count - 1 {
+            let here = index
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { if index == here { withAnimation { index += 1 } } }
+        }
+    }
+
     @ViewBuilder private func mc(_ q: DailyQuestion, _ r: DailyResult) -> some View {
         let chosen = r.mc[q.id]
         let letters = ["A", "B", "C", "D", "E", "F"]
@@ -521,14 +535,7 @@ struct DailyRunner: View {
             let L = letters[min(i, 5)]
             let isAns = L == (q.answer ?? "").trimmingCharacters(in: CharacterSet.letters.inverted).uppercased().prefix(1).description
             Button {
-                guard chosen == nil, !r.submitted else { return }
-                binding { $0.mc[q.id] = L }
-                ProgressStore.shared.record("daily:" + q.id, ok: isAns)
-                // Instant feedback here: only move on after a right answer, and only after 1 s.
-                if isAns, UserDefaults.standard.bool(forKey: "autoNext"), let d = store.loaded[date], index < d.questions.count - 1 {
-                    let here = index
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { if index == here { withAnimation { index += 1 } } }
-                }
+                choose(q, r, i)
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     MCLetter(l: L, color: chosen == nil ? Color.accentColor : (isAns ? Color.good : (chosen == L ? Color.bad : .secondary)))
@@ -543,6 +550,9 @@ struct DailyRunner: View {
             }
             .buttonStyle(.plain)
         }
+        Color.clear.frame(height: 0)
+            .padMC("daily-" + q.id, count: r.submitted || chosen != nil ? 0 : (q.options ?? []).count,
+                   selected: nil, pick: { i in choose(q, r, i) })
         if chosen != nil || r.submitted, let s = q.solution, !s.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Label(T("Solution", "解答") + " · " + (q.answer ?? ""), systemImage: "text.book.closed").font(.headline)

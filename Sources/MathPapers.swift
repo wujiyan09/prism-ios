@@ -173,6 +173,7 @@ struct PPSchoolPaper: View {
         .onChange(of: inkOn) { _, v in ink.enabled = v }
         .toolbar {
             ToolbarItem(placement: .primaryAction) { InkToggle(on: $inkOn) }
+            ToolbarItem(placement: .primaryAction) { PadButton() }
             if review, !info.ms.isEmpty, !info.p.isEmpty {
                 ToolbarItem(placement: .principal) {
                     Picker("", selection: $showMS) {
@@ -260,6 +261,7 @@ struct PPSetView: View {
                 WorkSplit(on: splitOn, sheetID: sheet, figs: splitOn ? q.figImages : [], ratio: 0.45) {
                     PPQuestionView(q: q, label: set.al, splitOn: splitOn, review: review, picked: Binding(get: { picked[q.id] }, set: { picked[q.id] = $0 }), sheetID: sheet)
                         .id(q.id)
+                        .padMC("pp-" + q.id, count: review ? 0 : (q.o?.count ?? 0), selected: picked[q.id], pick: { i in if !review { picked[q.id] = i } })
                         .deepSeek(PPDS.ctx(q, title: info.t, review: review, picked: picked[q.id], sheet: splitOn ? sheet : nil))
                 } bar: {
                     PageCluster(index: index, count: set.qs.count,

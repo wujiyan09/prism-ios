@@ -43,6 +43,7 @@ struct PDFPage: View {
         .toolbar {
             if doc != nil {
                 ToolbarItem(placement: .primaryAction) { InkToggle(on: $inkOn) }
+                ToolbarItem(placement: .primaryAction) { PadButton() }
                 ToolbarItem(placement: .primaryAction) {
                     ShareLink(item: file) { Label(T("Share", "分享"), systemImage: "square.and.arrow.up") }
                 }
@@ -79,10 +80,18 @@ struct PDFKitView: UIViewRepresentable {
     var inkTitle = ""
     final class Coord: NSObject {
         var onPage: ((Int) -> Void)?
+        var owner = ""
+        weak var view: PDFView?
         @objc func changed(_ n: Notification) {
             guard let v = n.object as? PDFView, let p = v.currentPage, let d = v.document else { return }
             let i = d.index(for: p)
+            PadHub.shared.setIndex(owner, i)
             DispatchQueue.main.async { self.onPage?(i) }
+        }
+        /// Main window follows the pad's page.
+        @objc func padPage(_ n: Notification) {
+            guard (n.object as? String) == owner, let i = n.userInfo?["i"] as? Int, let v = view, let p = v.document?.page(at: i) else { return }
+            v.go(to: p)
         }
     }
     func makeCoordinator() -> Coord { Coord() }
@@ -98,9 +107,17 @@ struct PDFKitView: UIViewRepresentable {
             ink.reset(key: inkKey, title: inkTitle)
             v.pageOverlayViewProvider = ink
             v.isInMarkupMode = true
+            let src = PadSources.pdf(doc, key: inkKey, title: inkTitle)
+            context.coordinator.owner = src.owner
+            NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coord.padPage(_:)), name: .padPage, object: nil)
+            PadHub.shared.activate(src)
         }
+        context.coordinator.view = v
         v.document = doc
         return v
+    }
+    static func dismantleUIView(_ v: PDFView, coordinator: Coord) {
+        if !coordinator.owner.isEmpty { PadHub.shared.deactivate(coordinator.owner) }
     }
     func updateUIView(_ v: PDFView, context: Context) {
         if v.document !== doc { v.document = doc }

@@ -55,6 +55,7 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
     var key = ""
     var title = ""
     private var canvases: [Int: PKCanvasView] = [:]
+    private var links: [Int: PadLink] = [:]
     private let picker = PKToolPicker()
     var enabled = false { didSet { canvases.values.forEach(apply) } }
 
@@ -67,7 +68,7 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
     }
 
     func reset(key: String, title: String) {
-        if key != self.key { canvases = [:] }
+        if key != self.key { canvases = [:]; links.values.forEach { $0.tearDown() }; links = [:] }
         self.key = key; self.title = title
     }
 
@@ -85,6 +86,11 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
         if let d = PDFInk.load(key, i) { c.drawing = d }
         c.delegate = self
         canvases[i] = c
+        let pw = page.bounds(for: .mediaBox).width
+        let link = PadLink("pdf:\(key):\(i)", canvas: c)
+        link.host = { [weak c] in c?.layer }
+        link.k = { [weak c] in max(1, c?.bounds.width ?? pw) / max(1, pw) }
+        links[i] = link
         apply(c)
         return c
     }
@@ -93,9 +99,10 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
         guard let c = overlayView as? PKCanvasView else { return }
         PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width)
         canvases[c.tag] = nil
+        links[c.tag]?.tearDown(); links[c.tag] = nil
     }
 
-    func canvasViewDrawingDidChange(_ c: PKCanvasView) { PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width) }
+    func canvasViewDrawingDidChange(_ c: PKCanvasView) { links[c.tag]?.changed(c.drawing); PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width) }
 
     private func apply(_ c: PKCanvasView) {
         c.isUserInteractionEnabled = enabled
