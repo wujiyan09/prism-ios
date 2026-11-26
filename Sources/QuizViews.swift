@@ -82,6 +82,13 @@ struct QuizBuilderView: View {
             }
             .listRowBackground(Color.cardBackground)
 
+            Section {
+                ImportLibraryLink()
+            } footer: {
+                Text("导入任何科目的 PDF、照片或扫描的试卷：直接写在上面，或让 DeepSeek 拆成答题卡。")
+            }
+            .listRowBackground(Color.cardBackground)
+
             Section(T("Recent results", "最近成绩")) {
                 if prog.runs.isEmpty {
                     Text("—").foregroundStyle(.secondary)

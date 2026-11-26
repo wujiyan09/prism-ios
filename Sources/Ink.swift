@@ -17,13 +17,18 @@ enum PDFInk {
     static func load(_ key: String, _ page: Int) -> PKDrawing? {
         (try? Data(contentsOf: dir(key).appendingPathComponent("\(page).drawing"))).flatMap { try? PKDrawing(data: $0) }
     }
-    static func save(_ key: String, _ page: Int, _ d: PKDrawing, title: String) {
+    /// Canvas width the drawing was made at (to flatten onto the page at the right scale).
+    static func width(_ key: String, _ page: Int) -> CGFloat? {
+        (try? String(contentsOf: dir(key).appendingPathComponent("\(page).w"), encoding: .utf8)).flatMap { Double($0) }.map { CGFloat($0) }
+    }
+    static func save(_ key: String, _ page: Int, _ d: PKDrawing, title: String, width: CGFloat = 0) {
         let dd = dir(key)
         let f = dd.appendingPathComponent("\(page).drawing")
         if d.strokes.isEmpty { try? FileManager.default.removeItem(at: f); return }
         try? FileManager.default.createDirectory(at: dd, withIntermediateDirectories: true)
         try? d.dataRepresentation().write(to: f, options: .atomic)
         try? Data(title.utf8).write(to: dd.appendingPathComponent("title.txt"))
+        if width > 0 { try? Data("\(Double(width))".utf8).write(to: dd.appendingPathComponent("\(page).w")) }
     }
     struct Entry: Identifiable { let id: String; let title: String; let size: Int; let date: Date; let pages: Int }
     static func papers() -> [Entry] {
@@ -76,11 +81,11 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
 
     func pdfView(_ pdfView: PDFView, willEndDisplayingOverlayView overlayView: UIView, for page: PDFKit.PDFPage) {
         guard let c = overlayView as? PKCanvasView else { return }
-        PDFInk.save(key, c.tag, c.drawing, title: title)
+        PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width)
         canvases[c.tag] = nil
     }
 
-    func canvasViewDrawingDidChange(_ c: PKCanvasView) { PDFInk.save(key, c.tag, c.drawing, title: title) }
+    func canvasViewDrawingDidChange(_ c: PKCanvasView) { PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width) }
 
     private func apply(_ c: PKCanvasView) {
         c.isUserInteractionEnabled = enabled

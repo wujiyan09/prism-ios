@@ -159,6 +159,7 @@ enum SyncRecords {
         for (k, v) in DailyStore.shared.results { o["daily/" + k] = j(v) }
         for e in ExamStore.shared.exams { o["exam/" + e.id.uuidString] = j(e) }
         for (k, v) in InboxStore.shared.items { o["inbox/" + k] = j(v) }
+        for (k, v) in ImportStore.shared.collect() { o[k] = v }
         for (k, v) in DSStore.shared.collect() { o[k] = v }
         let u = UserDefaults.standard
         for k in settingKeys {
@@ -202,6 +203,7 @@ enum SyncRecords {
             case "quiz": if let x = d(r.v, QuizPrefs.self) { quiz = x }
             case "daily": daily[id] = r.d ? nil : d(r.v, DailyResult.self)
             case "inbox": inbox[id] = r.d ? nil : d(r.v, InboxItem.self)
+            case "imp": ImportStore.shared.apply(id, r.v, deleted: r.d)
             case "exam":
                 exams.removeAll { $0.id.uuidString == id }
                 if !r.d, let x = d(r.v, Exam.self) { exams.append(x) }

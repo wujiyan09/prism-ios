@@ -12,6 +12,7 @@
 	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key><true/>
+	<key>NSCameraUsageDescription</key><string>扫描纸本试卷和评分标准，导入 Prism。</string>
 	<key>UILaunchScreen</key><dict/>
 	<key>UIRequiresFullScreen</key><false/>
 	<key>UIApplicationSceneManifest</key>

@@ -39,6 +39,7 @@ struct MathPapersHome: View {
     @State private var failed = false
     var body: some View {
         List {
+            Section { ImportLibraryLink() }.listRowBackground(Color.cardBackground)
             if let idx {
                 let dse = idx.dse ?? []
                 if dse.isEmpty {
