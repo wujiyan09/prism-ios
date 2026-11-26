@@ -326,31 +326,37 @@ struct NotesLibraryView: View {
     }
     private var groups: [(String, [NoteDoc])] { shown.isEmpty ? [] : [("", shown)] }
 
+    @ViewBuilder private var folderSection: some View {
+        if search.isEmpty && !store.children(folder).isEmpty {
+            Section {
+                ForEach(store.children(folder), id: \.self) { f in
+                    NavigationLink { NotesLibraryView(folder: f) } label: {
+                        HStack {
+                            Label(NoteStore.leaf(f), systemImage: "folder.fill")
+                            Spacer()
+                            Text(String(count(f))).foregroundStyle(.secondary)
+                        }
+                    }
+                    .dropDestination(for: String.self) { ids, _ in dropNotes(ids, f) }
+                    .contextMenu {
+                        Button { field = NoteStore.leaf(f); renameFolder = f } label: { Label("重命名文件夹", systemImage: "pencil") }
+                        Button(role: .destructive) { deleteFolder = f } label: { Label("删除文件夹", systemImage: "trash") }
+                    }
+                    .swipeActions { Button("删除", role: .destructive) { deleteFolder = f } }
+                }
+            }
+            .listRowBackground(Color.cardBackground)
+        }
+    }
+    private func count(_ f: String) -> Int { store.docs.values.filter { $0.folder == f || $0.folder.hasPrefix(f + "/") }.count }
+    private func dropNotes(_ ids: [String], _ f: String) -> Bool {
+        for id in ids { store.update(id) { $0.folder = f } }
+        sync(); return !ids.isEmpty
+    }
+
     var body: some View {
         List(selection: $selection) {
-            if search.isEmpty && !store.children(folder).isEmpty {
-                Section {
-                    ForEach(store.children(folder), id: \.self) { f in
-                        NavigationLink { NotesLibraryView(folder: f) } label: {
-                            HStack {
-                                Label(NoteStore.leaf(f), systemImage: "folder.fill")
-                                Spacer()
-                                Text("\(store.docs.values.filter { $0.folder == f || $0.folder.hasPrefix(f + "/") }.count)").foregroundStyle(.secondary)
-                            }
-                        }
-                        .dropDestination(for: String.self) { ids, _ in
-                            for id in ids { store.update(id) { $0.folder = f } }
-                            sync(); return !ids.isEmpty
-                        }
-                        .contextMenu {
-                            Button { field = NoteStore.leaf(f); renameFolder = f } label: { Label("重命名文件夹", systemImage: "pencil") }
-                            Button(role: .destructive) { deleteFolder = f } label: { Label("删除文件夹", systemImage: "trash") }
-                        }
-                        .swipeActions { Button("删除", role: .destructive) { deleteFolder = f } }
-                    }
-                }
-                .listRowBackground(Color.cardBackground)
-            }
+            folderSection
             if store.docs.isEmpty && folder.isEmpty {
                 ContentUnavailableView("还没有笔记", systemImage: "note.text", description: Text("右上角 + 新建空白笔记，或导入 PDF、照片、扫描。"))
                     .listRowBackground(Color.clear)
