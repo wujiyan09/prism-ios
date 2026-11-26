@@ -418,8 +418,8 @@ struct NotesLibraryView: View {
         if edit == .active {
             ToolbarItem(placement: .confirmationAction) { Button("完成") { withAnimation { edit = .inactive; selection = [] } }.bold() }
         } else {
-            ToolbarItem(placement: .secondaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } } }
-            ToolbarItem(placement: .secondaryAction) { Button { field = ""; newFolder = true } label: { Label("新建文件夹", systemImage: "folder.badge.plus") } }
+            ToolbarItem(placement: .primaryAction) { Button { field = ""; newFolder = true } label: { Label("新建文件夹", systemImage: "folder.badge.plus") } }
+            ToolbarItem(placement: .primaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } }.tint(.primary) }
         }
         if edit == .active && !selection.isEmpty {
             ToolbarItem(placement: .bottomBar) { Button("删除 \(selection.count) 份", role: .destructive) { confirm = Array(selection) } }
@@ -550,12 +550,12 @@ struct NoteDocView: View {
     let id: String
     @State private var store = NoteStore.shared
     @State private var zoom: CGFloat = 1
-    @State private var pinch: CGFloat = 1
+    @State private var jump: CGFloat?
     @State private var current: String?
     @State private var selected: String?
     @State private var editing: NoteItem?
     @State private var showPages = false
-    @State private var scope = "all"
+    @AppStorage("notes.dsScope") private var scope = "all"
     @State private var ctx: DSContext?
     @State private var share: ShareItem?
     @State private var imgSource: ImportSource?
@@ -574,44 +574,14 @@ struct NoteDocView: View {
         Group {
             if let doc {
                 VStack(spacing: 0) {
-                    contextBar(doc)
                     GeometryReader { geo in
-                    let base = min(1000, max(200, geo.size.width - 32))
-                    ScrollViewReader { proxy in
-                        ScrollView([.vertical, .horizontal]) {
-                            LazyVStack(spacing: 18) {
-                                ForEach(Array(doc.pages.enumerated()), id: \.element.id) { i, p in
-                                    VStack(spacing: 4) {
-                                        NotePageView(docID: id, page: p, tool: tool, showTools: showTools, selected: $selected, editing: $editing)
-                                        Text("\(i + 1) / \(doc.pages.count)").font(.caption2).foregroundStyle(.secondary)
-                                    }
-                                    .id(p.id)
-                                    .onAppear { if current == nil { current = p.id } }
-                                }
-                            }
-                            .scrollTargetLayout()
-                            .frame(width: base * zoom)
-                            .scaleEffect(pinch, anchor: .center)
-                            .padding(.horizontal, 16).padding(.vertical, 12)
-                            .frame(minWidth: geo.size.width)
+                        let base = min(1000, max(200, geo.size.width - 32))
+                        ZoomScroll(size: CGSize(width: base + 32, height: contentHeight(doc, base)), zoom: $zoom, jump: $jump,
+                                   onScroll: { y in pageAt(doc, base, y) }) {
+                            pagesStack(doc, base)
                         }
-                        .scrollPosition(id: $current, anchor: .center)
-                        .simultaneousGesture(MagnifyGesture()
-                            .onChanged { v in pinch = min(4 / zoom, max(0.5 / zoom, v.magnification)) }
-                            .onEnded { v in
-                                let z = min(4, max(0.5, zoom * v.magnification))
-                                var t = Transaction(); t.disablesAnimations = true
-                                withTransaction(t) { zoom = z; pinch = 1 }
-                                if let c = current { DispatchQueue.main.async { proxy.scrollTo(c, anchor: .center) } }
-                            })
-                        .overlay(alignment: .bottomTrailing) {
-                            if zoom != 1 {
-                                Button { zoom = 1 } label: { Text("\(Int(zoom * 100))%").font(.caption.monospacedDigit()) }
-                                    .glassButton().padding(12)
-                            }
-                        }
-                        .onChange(of: showPages) { _, v in if !v, let c = current { proxy.scrollTo(c, anchor: .top) } }
-                    }
+                        .overlay(alignment: .bottomTrailing) { zoomBadge }
+                        .onChange(of: showPages) { _, v in if !v, let c = current { jump = offset(doc, base, c) } }
                     }
                 }
             } else {
@@ -623,6 +593,7 @@ struct NoteDocView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .deepSeek(ctx)
+        .onAppear { if current == nil { current = doc?.pages.first?.id } }
         .task(id: "\(scope)|\(current ?? "")|\(Int(doc?.modified ?? 0))") {
             try? await Task.sleep(for: .milliseconds(600))
             if !Task.isCancelled { ctx = makeContext() }
@@ -640,6 +611,48 @@ struct NoteDocView: View {
             TextField("名称", text: $field)
             Button("取消", role: .cancel) {}
             Button("好") { if !field.isEmpty { store.update(id) { $0.title = field }; Task { await SyncManager.shared.sync() } } }
+        }
+    }
+
+    // MARK: pages layout (unscaled points; ZoomScroll scales natively)
+
+    private static let gap: CGFloat = 18, caption: CGFloat = 20, pad: CGFloat = 12
+    private func blockH(_ p: NotePage, _ base: CGFloat) -> CGFloat { base * CGFloat(p.aspect) + Self.caption }
+    private func contentHeight(_ doc: NoteDoc, _ base: CGFloat) -> CGFloat {
+        var h = Self.pad * 2
+        for (i, p) in doc.pages.enumerated() { h += blockH(p, base) + (i > 0 ? Self.gap : 0) }
+        return h
+    }
+    private func offset(_ doc: NoteDoc, _ base: CGFloat, _ pid: String) -> CGFloat {
+        var y = Self.pad
+        for p in doc.pages { if p.id == pid { return max(0, y - 8) }; y += blockH(p, base) + Self.gap }
+        return 0
+    }
+    private func pageAt(_ doc: NoteDoc, _ base: CGFloat, _ y: CGFloat) {
+        var top = Self.pad
+        for p in doc.pages {
+            let end = top + blockH(p, base) + Self.gap
+            if y < end { if current != p.id { current = p.id }; return }
+            top = end
+        }
+    }
+    private func pagesStack(_ doc: NoteDoc, _ base: CGFloat) -> some View {
+        VStack(spacing: Self.gap) {
+            ForEach(Array(doc.pages.enumerated()), id: \.element.id) { i, p in
+                VStack(spacing: 4) {
+                    NotePageView(docID: id, page: p, tool: tool, showTools: showTools, selected: $selected, editing: $editing)
+                        .frame(width: base, height: base * CGFloat(p.aspect))
+                    Text("\(i + 1) / \(doc.pages.count)").font(.caption2).foregroundStyle(.secondary).frame(height: Self.caption - 4)
+                }
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, Self.pad)
+        .frame(width: base + 32, alignment: .top)
+    }
+    @ViewBuilder private var zoomBadge: some View {
+        if abs(zoom - 1) > 0.01 {
+            Button { zoom = 1 } label: { Text("\(Int(zoom * 100))%").font(.caption.monospacedDigit()) }
+                .glassButton().padding(12)
         }
     }
 
@@ -677,8 +690,12 @@ struct NoteDocView: View {
         }
         if text.isEmpty { text = "（这份笔记没有文字层或文本框，内容见附图。）" }
         let imgs = attachedPages.map { NoteRender.flat(id, $0, width: 1000) }
-        return DSContext(key: "note-" + id + (scope == "page" ? "-" + (current ?? "") : ""), subject: "笔记", title: doc.title + (scope == "page" ? " · 第 \(pageIndex + 1) 页" : ""),
+        let pages = scope == "page" ? "第 \(pageIndex + 1) 页" : "全文 \(doc.pages.count) 页"
+        let note = "会看到：" + pages + "文字" + (imgs.isEmpty ? "" : " + \(imgs.count) 张页面图")
+        var c = DSContext(key: "note-" + id + (scope == "page" ? "-" + (current ?? "") : ""), subject: "笔记", title: doc.title + (scope == "page" ? " · 第 \(pageIndex + 1) 页" : ""),
                          page: DSStudy.cut(text, 20000), images: imgs)
+        c.scopeNote = note
+        return c
     }
 
     // MARK: actions
@@ -893,7 +910,18 @@ struct NoteCanvas: UIViewRepresentable {
         v.tool = picker.selectedTool
         context.coordinator.picker = picker
         DispatchQueue.main.async { context.coordinator.load() }
+        // 笔盘 on at open: show it without waiting for a first stroke.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak v, weak c = context.coordinator] in
+            guard let v, let c, v.window != nil, c.parent.enabled, c.parent.tools else { return }
+            if !NoteCanvas.anyActive { c.picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder(); c.lastTouched = true }
+        }
         return v
+    }
+    /// True when some note canvas already owns the 笔盘.
+    static var anyActive: Bool {
+        guard let w = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first?.keyWindow else { return false }
+        func find(_ v: UIView) -> Bool { (v is PKCanvasView && v.isFirstResponder) || v.subviews.contains(where: find) }
+        return find(w)
     }
     func updateUIView(_ v: PKCanvasView, context: Context) {
         context.coordinator.parent = self
@@ -921,6 +949,7 @@ struct NoteCanvas: UIViewRepresentable {
         init(_ p: NoteCanvas) {
             parent = p
             super.init()
+            NotificationCenter.default.addObserver(forName: .noteInkFlush, object: nil, queue: nil) { [weak self] _ in self?.save() }
             PickerRestore.observe(self) { [weak self] in
                 guard let self, self.parent.enabled, self.parent.tools, let v = self.canvas, v.window != nil, self.lastTouched else { return }
                 self.picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder()
@@ -1030,6 +1059,7 @@ enum NoteExport {
         return ImpExport.out.appendingPathComponent(n + suffix + "." + ext)
     }
     private static func render(_ id: String, overlay: Bool, to u: URL) -> URL? {
+        NotificationCenter.default.post(name: .noteInkFlush, object: nil)   // save ink still waiting on the debounce
         guard let d = NoteStore.shared.docs[id] else { return nil }
         let r = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842))
         do {
@@ -1122,3 +1152,5 @@ struct NotesStorageSection: View {
         }
     }
 }
+
+extension Notification.Name { static let noteInkFlush = Notification.Name("noteInkFlush") }

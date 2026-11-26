@@ -256,7 +256,7 @@ struct ImportLibraryView: View {
             if edit == .active {
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { withAnimation { edit = .inactive; selection = [] } }.bold() }
             } else {
-                ToolbarItem(placement: .secondaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } } }
+                ToolbarItem(placement: .primaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } }.tint(.primary) }
             }
             if edit == .active && !selection.isEmpty {
                 ToolbarItem(placement: .bottomBar) {
@@ -1066,7 +1066,11 @@ enum ImpExport {
         guard let dr = PDFInk.load(key, i) else { return }
         let w = PDFInk.width(key, i) ?? max(dr.bounds.maxX, 1)
         let h = w * r.height / max(1, r.width)
-        dr.image(from: CGRect(x: 0, y: 0, width: w, height: h), scale: 2).draw(in: r)
+        var im = UIImage()
+        UITraitCollection(userInterfaceStyle: .light).performAsCurrent {   // dark mode would turn black ink white
+            im = dr.image(from: CGRect(x: 0, y: 0, width: w, height: h), scale: 2)
+        }
+        im.draw(in: r)
     }
 
     static func annotated(_ id: String) -> URL? {

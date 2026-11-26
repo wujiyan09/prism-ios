@@ -114,11 +114,15 @@ final class ReviewStore {
     func handIn(_ sheet: String, title: String, route: String) {
         pending[sheet] = Pending(title: title, route: route, t: Date().timeIntervalSince1970)
     }
+    /// Leaves review. Daily sheets are kept (deleted with the daily); others ask via `askKeep`.
     func finish(_ sheet: String) {
         guard pending[sheet] != nil else { return }
         pending[sheet] = nil
-        ScratchStore.shared.clear(sheet, force: true)
+        if sheet.hasPrefix("daily-") { ScratchStore.shared.keep(sheet) }
+        else if ScratchStore.shared.has(sheet) { askKeep = sheet }
     }
+    /// Sheet waiting for the 保留草稿纸 / 删除 choice.
+    var askKeep: String?
     /// Drops stale entries: a daily is no longer pending once every written part has a score
     /// (or the day is gone), and nothing stays pending for more than 30 days.
     @MainActor func prune() {
@@ -209,4 +213,18 @@ struct MCLetter: View {
     let l: String
     var color: Color = .accentColor
     var body: some View { Text(l).font(Reading.font(18, weight: .bold)).foregroundStyle(color).frame(minWidth: 20, alignment: .leading) }
+}
+
+extension View {
+    /// After 结算: 保留草稿纸 / 删除 for that set's scratch sheet.
+    func scratchKeepPrompt() -> some View { modifier(ScratchKeepPrompt()) }
+}
+struct ScratchKeepPrompt: ViewModifier {
+    @State private var store = ReviewStore.shared
+    func body(content: Content) -> some View {
+        content.confirmationDialog("草稿纸要保留吗？", isPresented: Binding(get: { store.askKeep != nil }, set: { if !$0 { store.askKeep = nil } }), titleVisibility: .visible) {
+            Button("保留草稿纸") { if let k = store.askKeep { ScratchStore.shared.keep(k) }; store.askKeep = nil }
+            Button("删除", role: .destructive) { if let k = store.askKeep { ScratchStore.shared.clear(k, force: true) }; store.askKeep = nil }
+        }
+    }
 }

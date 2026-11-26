@@ -769,7 +769,8 @@ final class ScratchStore {
     private let dir: URL = {
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("scratch", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-        let keep = Set(ReviewStore.shared.pending.keys.map { $0.replacingOccurrences(of: "/", with: "_") + ".json" })
+        let kept = Set(ReviewStore.shared.pending.keys).union(UserDefaults.standard.stringArray(forKey: "scratch.keep") ?? [])
+        let keep = Set(kept.map { $0.replacingOccurrences(of: "/", with: "_") + ".json" })
         for f in (try? FileManager.default.contentsOfDirectory(atPath: d.path)) ?? [] where !keep.contains(f) {
             try? FileManager.default.removeItem(at: d.appendingPathComponent(f))
         }
@@ -777,6 +778,18 @@ final class ScratchStore {
         return d
     }()
     private var current: String?
+    /// Sheets the student chose to keep after 结算 (and every daily's sheet, until that daily is deleted).
+    private var kept: [String] {
+        get { UserDefaults.standard.stringArray(forKey: "scratch.keep") ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: "scratch.keep") }
+    }
+    func keep(_ k: String) { if !kept.contains(k) { kept.append(k) } }
+    func removeAll(prefix: String) {
+        for k in kept where k.hasPrefix(prefix) { clear(k, force: true) }
+        for f in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] where f.hasPrefix(prefix) {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(f))
+        }
+    }
     private func url(_ id: String) -> URL { dir.appendingPathComponent(id.replacingOccurrences(of: "/", with: "_") + ".json") }
 
     /// Entering a different question set clears the previous sheet (unless it is waiting for self-marking).
@@ -786,8 +799,9 @@ final class ScratchStore {
     /// Called when leaving a set or on 交卷 for auto-marked sets. Sheets in review are kept unless forced.
     func clear(_ key: String? = nil, force: Bool = false) {
         guard let k = key ?? current else { return }
-        if !force && ReviewStore.shared.inReview(k) { return }
+        if !force && (ReviewStore.shared.inReview(k) || kept.contains(k)) { return }
         try? FileManager.default.removeItem(at: url(k))
+        kept.removeAll { $0 == k }
         if current == k { current = nil }
     }
     func touch(_ id: String) {}
@@ -921,6 +935,9 @@ struct CanvasRep: UIViewRepresentable {
     let port: CanvasViewport
 
     static let width: CGFloat = 2400
+    /// A4 pages (595×842) at the sheet width.
+    static let pageH: CGFloat = 2400 * 842 / 595
+    static func pages(for h: CGFloat) -> CGFloat { max(1, (h / pageH).rounded(.up)) * pageH }
 
     func makeCoordinator() -> Coord { Coord(self) }
 
@@ -934,10 +951,13 @@ struct CanvasRep: UIViewRepresentable {
         v.minimumZoomScale = 0.5
         v.maximumZoomScale = 4
         v.bouncesZoom = true
-        var h: CGFloat = 4000
+        var h: CGFloat = CanvasRep.pageH
         if let d = ScratchStore.shared.load(itemID) {
             v.drawing = (try? PKDrawing(data: d.drawing)) ?? PKDrawing()
-            h = max(h, CGFloat(d.height ?? 0), v.drawing.bounds.maxY + 1500)
+            // Old free-height sheets land on as many A4 pages as their ink needs.
+            let ink = v.drawing.strokes.isEmpty ? 0 : v.drawing.bounds.maxY + 1
+            let figs = d.placed.map { CGFloat($0.y) + CGFloat($0.w) }.max() ?? 0
+            h = CanvasRep.pages(for: max(ink, figs))
             DispatchQueue.main.async { placed = d.placed }
         }
         context.coordinator.height = h
@@ -948,6 +968,14 @@ struct CanvasRep: UIViewRepresentable {
         under.isUserInteractionEnabled = false
         v.insertSubview(under, at: 0)
         context.coordinator.under = under
+        let add = UIButton(configuration: .gray())
+        add.configuration?.title = "加一页"
+        add.configuration?.image = UIImage(systemName: "plus")
+        add.configuration?.imagePadding = 6
+        add.configuration?.cornerStyle = .capsule
+        add.addAction(UIAction { [weak c = context.coordinator] _ in c?.addPage() }, for: .primaryActionTriggered)
+        v.addSubview(add)
+        context.coordinator.addButton = add
         v.delegate = context.coordinator
         context.coordinator.canvas = v
         port.canvas = v
@@ -970,6 +998,7 @@ struct CanvasRep: UIViewRepresentable {
         picker.setVisible(tools, forFirstResponder: v)
         if tools { DispatchQueue.main.async { v.becomeFirstResponder() } }
         context.coordinator.redraw(paper: paper, placed: placed)
+        context.coordinator.layoutAdd(v)
         return v
     }
 
@@ -1001,6 +1030,40 @@ struct CanvasRep: UIViewRepresentable {
         var picker: PKToolPicker?
         var height: CGFloat = 4000
         var lastKey = ""
+        var addButton: UIButton?
+
+        /// Content = pages + room for the 加一页 button under the last page.
+        func layoutAdd(_ c: UIScrollView) {
+            let z = c.zoomScale
+            c.contentSize = CGSize(width: CanvasRep.width * z, height: height * z + 90)
+            if let b = addButton {
+                let s = CGSize(width: 130, height: 44)
+                b.frame = CGRect(x: (CanvasRep.width * z - s.width) / 2, y: height * z + 23, width: s.width, height: s.height)
+            }
+            centre(c)
+        }
+        func setHeight(_ h: CGFloat) {
+            guard let c = canvas else { return }
+            height = h
+            if let u = under {
+                let z = c.zoomScale
+                u.transform = .identity
+                u.frame = CGRect(x: 0, y: 0, width: CanvasRep.width, height: height)
+                u.layer.anchorPoint = .zero; u.layer.position = .zero
+                u.transform = CGAffineTransform(scaleX: z, y: z)
+            }
+            lastKey = ""
+            redraw(paper: parent.paper, placed: parent.placed)
+            layoutAdd(c)
+        }
+        func addPage() { setHeight(height + CanvasRep.pageH); save() }
+        /// Narrower than the view when zoomed out: centre it and lock sideways sliding.
+        func centre(_ sv: UIScrollView) {
+            let ix = max(0, (sv.bounds.width - sv.contentSize.width) / 2)
+            if abs(sv.contentInset.left - ix) > 0.5 { sv.contentInset.left = ix; sv.contentInset.right = ix }
+            sv.alwaysBounceHorizontal = false
+            if ix > 0 && abs(sv.contentOffset.x + ix) > 0.5 { sv.contentOffset.x = -ix }
+        }
         init(_ p: CanvasRep) {
             parent = p
             super.init()
@@ -1015,19 +1078,7 @@ struct CanvasRep: UIViewRepresentable {
 
         func canvasViewDrawingDidChange(_ c: PKCanvasView) {
             // Extend the sheet when writing near the bottom.
-            if c.drawing.bounds.maxY > height - 1200 {
-                height += 3000
-                let z = c.zoomScale
-                c.contentSize = CGSize(width: CanvasRep.width * z, height: height * z)
-                if let u = under {
-                    u.transform = .identity
-                    u.frame = CGRect(x: 0, y: 0, width: CanvasRep.width, height: height)
-                    u.layer.anchorPoint = .zero; u.layer.position = .zero
-                    u.transform = CGAffineTransform(scaleX: z, y: z)
-                }
-                lastKey = ""
-                redraw(paper: parent.paper, placed: parent.placed)
-            }
+            if !c.drawing.strokes.isEmpty && c.drawing.bounds.maxY > height - 150 { setHeight(CanvasRep.pages(for: c.drawing.bounds.maxY + 200)) }
             save()
         }
 
@@ -1036,6 +1087,7 @@ struct CanvasRep: UIViewRepresentable {
             u.transform = CGAffineTransform(scaleX: sv.zoomScale, y: sv.zoomScale)
             u.layer.position = .zero
             layoutSelection()
+            layoutAdd(sv)
         }
 
         // MARK: inserted-image selection
@@ -1220,6 +1272,20 @@ struct CanvasRep: UIViewRepresentable {
                 let bg = UIView(frame: CGRect(origin: .zero, size: size))
                 bg.backgroundColor = UIColor(patternImage: tile)
                 u.addSubview(bg)
+            }
+            // A4 page edges + numbers.
+            let pages = Int((size.height / CanvasRep.pageH).rounded())
+            for i in 0..<max(1, pages) {
+                let y = CGFloat(i) * CanvasRep.pageH
+                if i > 0 {
+                    let line = UIView(frame: CGRect(x: 0, y: y - 3, width: size.width, height: 6))
+                    line.backgroundColor = UIColor.separator
+                    u.addSubview(line)
+                }
+                let l = UILabel(frame: CGRect(x: size.width - 260, y: y + CanvasRep.pageH - 70, width: 220, height: 50))
+                l.text = "\(i + 1) / \(max(1, pages))"; l.textAlignment = .right
+                l.font = .systemFont(ofSize: 34); l.textColor = .tertiaryLabel
+                u.addSubview(l)
             }
             imageViews = []
             for p in placed {

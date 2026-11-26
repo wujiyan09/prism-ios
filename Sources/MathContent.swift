@@ -290,6 +290,7 @@ struct StorageView: View {
                 LabeledContent(T("Cached papers", "已缓存试卷"), value: fmt(dailySize))
                 Button(T("Clear cache", "清除缓存"), role: .destructive) {
                     try? FileManager.default.removeItem(at: dailyDir)
+                    ScratchStore.shared.removeAll(prefix: "daily-")
                     try? FileManager.default.createDirectory(at: dailyDir.appendingPathComponent("figs"), withIntermediateDirectories: true)
                     dailySize = 0
                 }

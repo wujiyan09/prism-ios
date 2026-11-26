@@ -215,6 +215,7 @@ struct DSContext {
     var sheetID: String? = nil    // scratch sheet for this set
     var isCard = false
     var grade: DSGradeSpec? = nil
+    var scopeNote: String? = nil  // 笔记: what DeepSeek sees; shows the 全文/本页 switch in the panel
 
     static func subjectName(_ s: String) -> String {
         switch s {
@@ -545,8 +546,23 @@ struct DeepSeekPanel: View {
     private var model: DSModel { DSModel(rawValue: modelRaw) ?? .flash }
     private var busy: Bool { task != nil || grading }
 
+    @AppStorage("notes.dsScope") private var noteScope = "all"
+    @ViewBuilder private var scopeRow: some View {
+        if let s = ctx.scopeNote {
+            HStack(spacing: 8) {
+                Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Spacer(minLength: 4)
+                Picker("", selection: $noteScope) { Text("全文").tag("all"); Text("本页").tag("page") }
+                    .pickerStyle(.segmented).frame(width: 120).controlSize(.small)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 6)
+            Divider()
+        }
+    }
+
     private var content: some View {
         VStack(spacing: 0) {
+            scopeRow
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {

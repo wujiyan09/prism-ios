@@ -18,6 +18,7 @@ struct RootView: View {
                 split(T)
             }
         }
+        .scratchKeepPrompt()
         .id(theme)   // rebuild so every page picks up a new background theme
         .environment(scene)
         .environment(\.tr, T)
@@ -255,7 +256,7 @@ struct SubjectListView: View {
         .listStyle(.insetGrouped)
         .appList()
         .environment(\.editMode, $editing)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { EditButton().environment(\.editMode, $editing) } }
+        .toolbar { ToolbarItem(placement: .confirmationAction) { EditButton().environment(\.editMode, $editing).tint(.primary) } }
         .navigationTitle(section.title(T))
     }
 
