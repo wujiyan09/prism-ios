@@ -317,8 +317,8 @@ struct MathQuizRunner: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                Text(["A", "B", "C", "D", "E", "F"][min(pos, 5)]).font(.headline.monospaced())
-                                    .foregroundStyle(chosen == nil ? Color.accentColor : (isAns ? Color.good : (chosen == ci ? Color.bad : .secondary)))
+                                MCLetter(l: ["A", "B", "C", "D", "E", "F"][min(pos, 5)],
+                                         color: chosen == nil ? Color.accentColor : (isAns ? Color.good : (chosen == ci ? Color.bad : .secondary)))
                                 MathText(text: c.t, size: 17)
                                 if chosen != nil && (isAns || chosen == ci) {
                                     Image(systemName: isAns ? "checkmark.circle.fill" : "xmark.circle.fill").foregroundStyle(isAns ? Color.good : Color.bad)
@@ -330,9 +330,7 @@ struct MathQuizRunner: View {
                         }
                         .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(chosen == nil ? Color.clear : (isAns ? Color.good : (chosen == ci ? Color.bad : .clear)), lineWidth: 1.5))
+                        .mcGlass(chosen == nil ? .idle : (isAns ? .correct : (chosen == ci ? .wrong : .idle)))
                     }
                     .buttonStyle(.plain)
                 }

@@ -516,8 +516,7 @@ struct DailyRunner: View {
                 }
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(L).font(.headline.monospaced())
-                        .foregroundStyle(chosen == nil ? Color.accentColor : (isAns ? Color.good : (chosen == L ? Color.bad : .secondary)))
+                    MCLetter(l: L, color: chosen == nil ? Color.accentColor : (isAns ? Color.good : (chosen == L ? Color.bad : .secondary)))
                     DailyText(text: opt, size: 17)
                     if chosen != nil && (isAns || chosen == L) {
                         Image(systemName: isAns ? "checkmark.circle.fill" : "xmark.circle.fill").foregroundStyle(isAns ? Color.good : Color.bad)
@@ -525,9 +524,7 @@ struct DailyRunner: View {
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(chosen == nil ? Color.clear : (isAns ? Color.good : (chosen == L ? Color.bad : .clear)), lineWidth: 1.5))
+                .mcGlass(chosen == nil ? .idle : (isAns ? .correct : (chosen == L ? .wrong : .idle)))
             }
             .buttonStyle(.plain)
         }

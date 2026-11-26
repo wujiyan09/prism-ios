@@ -165,3 +165,27 @@ extension View {
         if #available(iOS 26.0, *) { GlassEffectContainer(spacing: spacing) { self } } else { self }
     }
 }
+
+// MARK: - MC option glass
+
+enum MCState { case idle, selected, correct, wrong }
+
+extension View {
+    /// Full-width rounded Liquid Glass option row: selected = accent tint, correct = green, wrong = red.
+    @ViewBuilder func mcGlass(_ s: MCState) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        let tint: Color? = s == .selected ? .accentColor : s == .correct ? .green : s == .wrong ? .red : nil
+        if #available(iOS 26.0, *) {
+            self.glassEffect(tint.map { Glass.regular.tint($0.opacity(0.35)).interactive() } ?? Glass.regular.interactive(), in: shape)
+        } else {
+            self.background((tint?.opacity(0.18) ?? Color.cardBackground), in: shape)
+        }
+    }
+}
+
+/// A / B / C / D in the content font (Times New Roman).
+struct MCLetter: View {
+    let l: String
+    var color: Color = .accentColor
+    var body: some View { Text(l).font(Reading.font(18, weight: .bold)).foregroundStyle(color).frame(minWidth: 20, alignment: .leading) }
+}

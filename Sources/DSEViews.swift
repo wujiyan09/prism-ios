@@ -182,10 +182,11 @@ struct AnswerSheet: View {
                             s.a[n] = chosen ? nil : l
                             prog.sheets[y] = s
                         } label: {
-                            Text(l).font(.callout.bold())
+                            let _ = color
+                            Text(l).font(Reading.font(16, weight: .bold))
                                 .frame(width: 34, height: 30)
-                                .background(color.opacity(chosen || (st.done && l == k) ? 0.9 : 1), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                                .foregroundStyle(chosen || (st.done && l == k && k != "*") ? Color.white : Color.primary)
+                                .mcGlass(st.done && k != "*" && l == k ? .correct : (st.done && chosen && k != "*" ? .wrong : (chosen ? .selected : .idle)))
+                                .foregroundStyle(Color.primary)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("\(n) \(l)")

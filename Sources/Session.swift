@@ -289,7 +289,7 @@ struct OptionRow: View {
     var mark: Bool? = nil   // true = correct answer, false = your wrong choice
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(letter).font(.headline).frame(width: 22, alignment: .leading)
+            MCLetter(l: letter, color: .primary)
             RichText(html: html, code: code).foregroundStyle(Color.primary)
             Spacer(minLength: 0)
             if let mark {
@@ -299,7 +299,13 @@ struct OptionRow: View {
                 Image(systemName: "checkmark").bold().foregroundStyle(Color.accentColor)
             }
         }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .mcGlass(mark == true ? .correct : (mark == false ? .wrong : (selected ? .selected : .idle)))
         .contentShape(Rectangle())
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }

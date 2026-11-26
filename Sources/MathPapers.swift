@@ -267,7 +267,7 @@ struct PPQuestionView: View {
                         let correct = review && L[min(i, 5)] == q.a.trimmingCharacters(in: .whitespaces)
                         Button { if !review { picked = i } } label: {
                             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                                Text(L[min(i, 5)]).font(.headline.monospaced())
+                                MCLetter(l: L[min(i, 5)])
                                 MathText(text: t, size: 17)
                                 Spacer(minLength: 0)
                                 if correct { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
@@ -275,7 +275,7 @@ struct PPQuestionView: View {
                             }
                             .padding(12)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(picked == i ? Color.accentColor.opacity(0.15) : Color.cardBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .mcGlass(review ? (correct ? .correct : (picked == i ? .wrong : .idle)) : (picked == i ? .selected : .idle))
                         }
                         .buttonStyle(.plain)
                     }
