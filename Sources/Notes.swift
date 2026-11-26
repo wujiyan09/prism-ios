@@ -810,7 +810,15 @@ struct NoteCanvas: UIViewRepresentable {
         var loadedWidth: CGFloat = 0
         var loading = false
         private var pending: DispatchWorkItem?
-        init(_ p: NoteCanvas) { parent = p }
+        init(_ p: NoteCanvas) {
+            parent = p
+            super.init()
+            PickerRestore.observe(self) { [weak self] in
+                guard let self, self.parent.enabled, self.parent.tools, let v = self.canvas, v.window != nil, self.lastTouched else { return }
+                self.picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder()
+            }
+        }
+        var lastTouched = false
 
         func load() {
             guard let v = canvas, v.bounds.width > 10 else { return }
@@ -834,6 +842,7 @@ struct NoteCanvas: UIViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: w)
         }
         func canvasViewDidBeginUsingTool(_ v: PKCanvasView) {
+            lastTouched = true
             if parent.tools { picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder() }
         }
     }

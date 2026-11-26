@@ -58,6 +58,14 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
     private let picker = PKToolPicker()
     var enabled = false { didSet { canvases.values.forEach(apply) } }
 
+    override init() {
+        super.init()
+        PickerRestore.observe(self) { [weak self] in
+            guard let self, self.enabled, let c = self.canvases.values.first(where: { $0.window != nil }) else { return }
+            self.picker.setVisible(true, forFirstResponder: c); c.becomeFirstResponder()
+        }
+    }
+
     func reset(key: String, title: String) {
         if key != self.key { canvases = [:] }
         self.key = key; self.title = title
@@ -131,4 +139,18 @@ struct PDFInkSection: View {
             Button("全部删除", role: .destructive) { PDFInk.deleteAll(); items = [] }
         }
     }
+}
+
+/// Text fields (e.g. the DeepSeek panel) steal first responder and hide the 笔盘.
+/// When the keyboard goes away, canvases whose 笔盘 was on take it back.
+enum PickerRestore {
+    static func observe(_ owner: AnyObject, _ f: @escaping () -> Void) {
+        let t = NotificationCenter.default.addObserver(forName: UIResponder.keyboardDidHideNotification, object: nil, queue: .main) { [weak owner] _ in
+            guard owner != nil else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { f() }
+        }
+        objc_setAssociatedObject(owner, &tokenKey, Token(t), .OBJC_ASSOCIATION_RETAIN)
+    }
+    private static var tokenKey: UInt8 = 0
+    final class Token { let t: NSObjectProtocol; init(_ t: NSObjectProtocol) { self.t = t }; deinit { NotificationCenter.default.removeObserver(t) } }
 }

@@ -999,7 +999,14 @@ struct CanvasRep: UIViewRepresentable {
         var picker: PKToolPicker?
         var height: CGFloat = 4000
         var lastKey = ""
-        init(_ p: CanvasRep) { parent = p }
+        init(_ p: CanvasRep) {
+            parent = p
+            super.init()
+            PickerRestore.observe(self) { [weak self] in
+                guard let self, self.shown, let v = self.canvas, v.window != nil else { return }
+                self.picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder()
+            }
+        }
 
         /// Belt and braces: apply the picked tool directly too.
         func toolPickerSelectedToolDidChange(_ p: PKToolPicker) { canvas?.tool = p.selectedTool }
