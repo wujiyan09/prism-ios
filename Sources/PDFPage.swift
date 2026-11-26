@@ -5,6 +5,8 @@ import PDFKit
 struct PDFPage: View {
     let url: URL
     let title: String
+    var inkID: String? = nil      // stable ink key (local files move between installs)
+    var subject = "ict"
     @Environment(\.tr) private var T
     @State private var doc: PDFDocument?
     @State private var failed = false
@@ -22,7 +24,7 @@ struct PDFPage: View {
     var body: some View {
         Group {
             if let doc {
-                PDFKitView(doc: doc, onPage: { pageIndex = $0 }, ink: ink, inkKey: "pdf:" + url.absoluteString, inkTitle: title).ignoresSafeArea(edges: .bottom)
+                PDFKitView(doc: doc, onPage: { pageIndex = $0 }, ink: ink, inkKey: inkID ?? ("pdf:" + url.absoluteString), inkTitle: title).ignoresSafeArea(edges: .bottom)
             } else if failed {
                 ContentUnavailableView {
                     Label(T("Couldn't load the paper", "试卷下载失败"), systemImage: "wifi.exclamationmark")
@@ -46,13 +48,14 @@ struct PDFPage: View {
                 }
             }
         }
-        .deepSeek(doc.map { DSContext.pdfPage($0, pageIndex, title: title, url: url) })
+        .deepSeek(doc.map { DSContext.pdfPage($0, pageIndex, title: title, url: url, subject: subject) })
         .onChange(of: inkOn) { _, v in ink.enabled = v }
         .task { await load() }
     }
 
     private func load() async {
         failed = false
+        if url.isFileURL { doc = PDFDocument(url: url); failed = doc == nil; return }
         if let d = PDFDocument(url: file) { doc = d; return }
         do {
             var req = URLRequest(url: url, timeoutInterval: 120)
@@ -101,5 +104,34 @@ struct PDFKitView: UIViewRepresentable {
     }
     func updateUIView(_ v: PDFView, context: Context) {
         if v.document !== doc { v.document = doc }
+    }
+}
+
+/// 中文 範文 notes PDF (served by the content Worker; downloaded once, kept with the chapter).
+struct ZhNotesPDF: View {
+    let chapter: MChapter
+    @State private var url: URL?
+    @State private var failed = false
+    var body: some View {
+        Group {
+            if let url {
+                PDFPage(url: url, title: chapter.t + " 筆記", inkID: "zhnotes:" + chapter.id, subject: "zh")
+            } else if failed {
+                ContentUnavailableView {
+                    Label("筆記下載失敗", systemImage: "wifi.exclamationmark")
+                } actions: {
+                    Button("重试") { Task { await load() } }.glassButton(prominent: true)
+                }
+            } else {
+                ProgressView("正在下载筆記…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task { await load() }
+    }
+    private func load() async {
+        failed = false
+        if let u = MathContent.shared.local(chapter.notes), FileManager.default.fileExists(atPath: u.path) { url = u; return }
+        await MathContent.shared.ensure("zhpdf-" + chapter.id)
+        if let u = MathContent.shared.local(chapter.notes), FileManager.default.fileExists(atPath: u.path) { url = u } else { failed = true }
     }
 }

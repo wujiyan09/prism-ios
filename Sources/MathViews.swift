@@ -64,6 +64,7 @@ struct MChapter: Codable, Hashable, Identifiable {
     let t: String
     let book: String
     let pdf: String
+    var notes = ""          // 中文: 範文 notes PDF, e.g. "zh/pdf/z-lunren.pdf" (download group "zhpdf-<id>")
     var ki: [MKeyIdea]
     var cards: [MCard]
     var items: [MItem]
@@ -75,12 +76,13 @@ struct MChapter: Codable, Hashable, Identifiable {
     var nExamples: Int { items.isEmpty ? ne : examples.count }
     var nPractice: Int { items.isEmpty ? np : practice.count }
 
-    enum K: String, CodingKey { case id, n, t, book, pdf, ki, cards, items, nc, ne, np, sets }
+    enum K: String, CodingKey { case id, n, t, book, pdf, notes, ki, cards, items, nc, ne, np, sets }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         id = try c.decode(String.self, forKey: .id); n = try c.decode(Int.self, forKey: .n)
         t = try c.decode(String.self, forKey: .t); book = try c.decode(String.self, forKey: .book)
         pdf = try c.decodeIfPresent(String.self, forKey: .pdf) ?? ""
+        notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         ki = try c.decodeIfPresent([MKeyIdea].self, forKey: .ki) ?? []
         cards = try c.decodeIfPresent([MCard].self, forKey: .cards) ?? []
         items = try c.decodeIfPresent([MItem].self, forKey: .items) ?? []
@@ -468,7 +470,25 @@ struct MathCardPager: View {
     @State private var index: Int?
     private let lib = MathLibrary.shared
 
+    @AppStorage("zh.notesMode") private var mode = "pdf"
+
     var body: some View {
+        if let c = lib.chapter(chapterID), !c.notes.isEmpty {
+            Group {
+                if mode == "pdf" { ZhNotesPDF(chapter: c) } else { cardsBody }
+            }
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Picker("", selection: $mode) { Text("笔记 PDF").tag("pdf"); Text("知识卡").tag("cards") }
+                        .pickerStyle(.segmented).frame(width: 200)
+                }
+            }
+        } else {
+            cardsBody
+        }
+    }
+
+    @ViewBuilder private var cardsBody: some View {
         if let c = lib.chapter(chapterID), c.cards.isEmpty {
             DownloadOverlay().task { await MathContent.shared.ensure(c.id) }
         } else if let c = lib.chapter(chapterID), !c.cards.isEmpty {

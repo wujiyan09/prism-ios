@@ -541,6 +541,8 @@ struct DeepSeekPanel: View {
     @State private var msgs: [DSMessage] = []
     @State private var input = ""
     @State private var loadedKey = ""
+    @State private var follow = true
+    @State private var atBottom = true
     @State private var task: Task<Void, Never>?
     @State private var error: String?
     @State private var usePage = true
@@ -584,12 +586,26 @@ struct DeepSeekPanel: View {
                             Label(e, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red)
                         }
                         Color.clear.frame(height: 1).id("end")
+                            .onAppear { atBottom = true; follow = true }
+                            .onDisappear { atBottom = false }
                     }
                     .padding()
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .onChange(of: msgs.last?.text) { proxy.scrollTo("end", anchor: .bottom) }
-                .onChange(of: msgs.count) { proxy.scrollTo("end", anchor: .bottom) }
+                // Dragging up stops auto-follow; reaching the bottom again resumes it.
+                .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { v in if v.translation.height > 0 { follow = false } })
+                .onChange(of: msgs.last?.text) { if follow { proxy.scrollTo("end", anchor: .bottom) } }
+                .onChange(of: msgs.count) { follow = true; proxy.scrollTo("end", anchor: .bottom) }
+                .overlay(alignment: .bottom) {
+                    if !atBottom && !msgs.isEmpty {
+                        Button { follow = true; withAnimation { proxy.scrollTo("end", anchor: .bottom) } } label: {
+                            Image(systemName: "arrow.down").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+                        }
+                        .glassButton().buttonBorderShape(.circle).padding(.bottom, 10)
+                        .accessibilityLabel("跳到最新")
+                        .transition(.opacity)
+                    }
+                }
                 .onChange(of: grade?.summary) { _, v in if v != nil { withAnimation { proxy.scrollTo("grade", anchor: .top) } } }
             }
             Divider()
@@ -808,14 +824,18 @@ struct DeepSeekPanel: View {
         for h in history.suffix(16) where !h.text.isEmpty { payload.append(["role": h.role, "content": h.text]) }
         payload.append(["role": "user", "content": t])
         task = Task {
+            // Tokens are buffered and flushed ~10×/s so the list isn't re-laid out per token.
+            let b = DSBuffer()
             do {
                 try await DSClient.stream(payload, model: m) { d in
-                    if let i = msgs.indices.last { msgs[i].text += d }
+                    b.text += d
+                    if Date().timeIntervalSince(b.last) > 0.1, let i = msgs.indices.last { msgs[i].text += b.text; b.text = ""; b.last = Date() }
                 }
             } catch is CancellationError {
             } catch {
                 self.error = (error as? DSError)?.errorDescription ?? error.localizedDescription
             }
+            if !b.text.isEmpty, let i = msgs.indices.last { msgs[i].text += b.text; b.text = "" }
             if let l = msgs.last, l.role == "assistant", l.text.isEmpty { msgs.removeLast() }
             DSStore.shared.chats[chatKey] = msgs.isEmpty ? nil : DSChat(title: ctx.title, t: Date().timeIntervalSince1970, msgs: msgs)
             task = nil
@@ -1103,3 +1123,5 @@ extension View {
         }
     }
 }
+
+final class DSBuffer { var text = ""; var last = Date() }
