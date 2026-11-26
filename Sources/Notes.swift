@@ -74,7 +74,42 @@ final class NoteStore {
         if let d = UserDefaults.standard.data(forKey: "note.remote"), let r = try? JSONDecoder().decode([String: NoteSummary].self, from: d) { remote = r }
     }
     var sorted: [NoteDoc] { docs.values.sorted { $0.modified > $1.modified } }
-    var folders: [String] { Array(Set(docs.values.map(\.folder).filter { !$0.isEmpty })).sorted() }
+    /// Folder paths ("A", "A/B"); empty folders persist.
+    var folderList: [String] = (UserDefaults.standard.stringArray(forKey: "notes.folders") ?? []) { didSet { UserDefaults.standard.set(folderList, forKey: "notes.folders") } }
+    var folders: [String] {
+        var all = Set(folderList)
+        for d in docs.values where !d.folder.isEmpty {
+            var p = ""
+            for c in d.folder.split(separator: "/") { p = p.isEmpty ? String(c) : p + "/" + c; all.insert(p) }
+        }
+        return all.sorted()
+    }
+    func children(_ parent: String) -> [String] {
+        folders.filter { f in parent.isEmpty ? !f.contains("/") : (f.hasPrefix(parent + "/") && !f.dropFirst(parent.count + 1).contains("/")) }
+    }
+    static func leaf(_ f: String) -> String { String(f.split(separator: "/").last ?? "") }
+    func addFolder(_ parent: String, _ name: String) {
+        let n = name.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "/", with: "-")
+        guard !n.isEmpty else { return }
+        let p = parent.isEmpty ? n : parent + "/" + n
+        if !folderList.contains(p) { folderList.append(p) }
+    }
+    func renameFolder(_ f: String, _ name: String) {
+        let n = name.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "/", with: "-")
+        guard !n.isEmpty else { return }
+        let parent = f.split(separator: "/").dropLast().joined(separator: "/")
+        let to = parent.isEmpty ? n : parent + "/" + n
+        func map(_ x: String) -> String { x == f ? to : (x.hasPrefix(f + "/") ? to + x.dropFirst(f.count) : x) }
+        folderList = folderList.map(map)
+        if !folderList.contains(to) { folderList.append(to) }
+        for d in docs.values where d.folder == f || d.folder.hasPrefix(f + "/") { update(d.id) { $0.folder = map($0.folder) } }
+    }
+    func deleteFolder(_ f: String, deleteNotes: Bool) {
+        folderList.removeAll { $0 == f || $0.hasPrefix(f + "/") }
+        for d in docs.values where d.folder == f || d.folder.hasPrefix(f + "/") {
+            if deleteNotes { delete(d.id) } else { update(d.id) { $0.folder = "" } }
+        }
+    }
 
     func save(_ n: NoteDoc, touch: Bool = true) {
         var n = n
@@ -265,7 +300,11 @@ enum NoteRender {
 // MARK: - Library
 
 struct NotesLibraryView: View {
+    var folder = ""
     @State private var store = NoteStore.shared
+    @State private var newFolder = false
+    @State private var renameFolder: String?
+    @State private var deleteFolder: String?
     @State private var search = ""
     @State private var selection = Set<String>()
     @State private var edit: EditMode = .inactive
@@ -282,19 +321,37 @@ struct NotesLibraryView: View {
 
     private var shown: [NoteDoc] {
         let q = search.trimmingCharacters(in: .whitespaces)
-        return store.sorted.filter { q.isEmpty || $0.title.localizedCaseInsensitiveContains(q) || $0.folder.localizedCaseInsensitiveContains(q) }
+        if !q.isEmpty { return store.sorted.filter { $0.title.localizedCaseInsensitiveContains(q) && ($0.folder == folder || $0.folder.hasPrefix(folder.isEmpty ? "" : folder + "/")) } }
+        return store.sorted.filter { $0.folder == folder }
     }
-    private var groups: [(String, [NoteDoc])] {
-        let all = shown
-        var out: [(String, [NoteDoc])] = store.folders.map { f in (f, all.filter { $0.folder == f }) }.filter { !$0.1.isEmpty }
-        let loose = all.filter { $0.folder.isEmpty }
-        if !loose.isEmpty { out.append(("", loose)) }
-        return out
-    }
+    private var groups: [(String, [NoteDoc])] { shown.isEmpty ? [] : [("", shown)] }
 
     var body: some View {
         List(selection: $selection) {
-            if store.docs.isEmpty {
+            if search.isEmpty && !store.children(folder).isEmpty {
+                Section {
+                    ForEach(store.children(folder), id: \.self) { f in
+                        NavigationLink { NotesLibraryView(folder: f) } label: {
+                            HStack {
+                                Label(NoteStore.leaf(f), systemImage: "folder.fill")
+                                Spacer()
+                                Text("\(store.docs.values.filter { $0.folder == f || $0.folder.hasPrefix(f + "/") }.count)").foregroundStyle(.secondary)
+                            }
+                        }
+                        .dropDestination(for: String.self) { ids, _ in
+                            for id in ids { store.update(id) { $0.folder = f } }
+                            sync(); return !ids.isEmpty
+                        }
+                        .contextMenu {
+                            Button { field = NoteStore.leaf(f); renameFolder = f } label: { Label("重命名文件夹", systemImage: "pencil") }
+                            Button(role: .destructive) { deleteFolder = f } label: { Label("删除文件夹", systemImage: "trash") }
+                        }
+                        .swipeActions { Button("删除", role: .destructive) { deleteFolder = f } }
+                    }
+                }
+                .listRowBackground(Color.cardBackground)
+            }
+            if store.docs.isEmpty && folder.isEmpty {
                 ContentUnavailableView("还没有笔记", systemImage: "note.text", description: Text("右上角 + 新建空白笔记，或导入 PDF、照片、扫描。"))
                     .listRowBackground(Color.clear)
             }
@@ -303,6 +360,7 @@ struct NotesLibraryView: View {
                     ForEach(g.1) { n in
                         NavigationLink { NoteDocView(id: n.id) } label: { row(n) }
                             .tag(n.id)
+                            .draggable(n.id)
                             .swipeActions { Button("删除", role: .destructive) { confirm = [n.id] } }
                             .contextMenu {
                                 Button { field = n.title; rename = n } label: { Label("重命名", systemImage: "pencil") }
@@ -310,10 +368,10 @@ struct NotesLibraryView: View {
                                 Button(role: .destructive) { confirm = [n.id] } label: { Label("删除", systemImage: "trash") }
                             }
                     }
-                } header: { if !g.0.isEmpty { Label(g.0, systemImage: "folder") } else if !store.folders.isEmpty { Text("未分类") } }
+                } header: { if !store.children(folder).isEmpty { Text("笔记") } }
                 .listRowBackground(Color.cardBackground)
             }
-            if !store.remote.isEmpty && search.isEmpty {
+            if !store.remote.isEmpty && search.isEmpty && folder.isEmpty {
                 Section("其他设备") {
                     ForEach(Array(store.remote.values).sorted { $0.modified > $1.modified }, id: \.id) { s in
                         VStack(alignment: .leading, spacing: 2) {
@@ -328,19 +386,23 @@ struct NotesLibraryView: View {
         .environment(\.editMode, $edit)
         .searchable(text: $search, prompt: "搜索标题")
         .appList()
-        .navigationTitle("笔记")
+        .navigationTitle(folder.isEmpty ? "笔记" : NoteStore.leaf(folder))
         .navigationDestination(item: $open) { NoteDocView(id: $0) }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button { showNew = true } label: { Label("新建空白笔记", systemImage: "doc.badge.plus") }
+                    Button { field = ""; newFolder = true } label: { Label("新建文件夹", systemImage: "folder.badge.plus") }
                     Button { picker = .files } label: { Label("导入文件（PDF / 图片）", systemImage: "folder") }
                     Button { picker = .photos } label: { Label("从照片", systemImage: "photo.on.rectangle") }
                     if VNDocumentCameraViewController.isSupported { Button { picker = .scan } label: { Label("扫描纸本", systemImage: "doc.viewfinder") } }
                 } label: { Image(systemName: "plus") }
             }
-            ToolbarItem(placement: .secondaryAction) {
-                Button(edit == .active ? "完成" : "选择") { withAnimation { edit = edit == .active ? .inactive : .active; selection = [] } }
+            if edit == .active {
+                ToolbarItem(placement: .confirmationAction) { Button("完成") { withAnimation { edit = .inactive; selection = [] } }.bold() }
+            } else {
+                ToolbarItem(placement: .secondaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } } }
+                ToolbarItem(placement: .secondaryAction) { Button { field = ""; newFolder = true } label: { Label("新建文件夹", systemImage: "folder.badge.plus") } }
             }
             if edit == .active && !selection.isEmpty {
                 ToolbarItem(placement: .bottomBar) { Button("删除 \(selection.count) 份", role: .destructive) { confirm = Array(selection) } }
@@ -356,21 +418,42 @@ struct NotesLibraryView: View {
             TextField("名称", text: $field)
             Button("取消", role: .cancel) { pending = nil }
             Button("导入") {
-                if let p = pending { open = store.createFrom(title: field.isEmpty ? "导入的笔记" : field, pdf: p.doc).id }
+                if let p = pending { let n = store.createFrom(title: field.isEmpty ? "导入的笔记" : field, pdf: p.doc); store.update(n.id) { $0.folder = folder }; open = n.id }
                 pending = nil
             }
         } message: { Text("\(pending?.doc.pageCount ?? 0) 页") }
         .onChange(of: pending?.id) { _, _ in if pending != nil { field = "笔记 " + Date().formatted(date: .numeric, time: .omitted) } }
-        .sheet(isPresented: $showNew) { NavigationStack { NoteNewSheet { id in showNew = false; if let id { open = id } } } }
+        .sheet(isPresented: $showNew) { NavigationStack { NoteNewSheet { id in showNew = false; if let id { store.update(id) { $0.folder = folder }; open = id } } } }
+        .alert("新建文件夹", isPresented: $newFolder) {
+            TextField("名称", text: $field)
+            Button("取消", role: .cancel) {}
+            Button("新建") { store.addFolder(folder, field) }
+        }
+        .alert("重命名文件夹", isPresented: Binding(get: { renameFolder != nil }, set: { if !$0 { renameFolder = nil } })) {
+            TextField("名称", text: $field)
+            Button("取消", role: .cancel) { renameFolder = nil }
+            Button("好") { if let f = renameFolder { store.renameFolder(f, field); sync() }; renameFolder = nil }
+        }
+        .confirmationDialog("删除文件夹「\(deleteFolder.map(NoteStore.leaf) ?? "")」？", isPresented: Binding(get: { deleteFolder != nil }, set: { if !$0 { deleteFolder = nil } }), titleVisibility: .visible) {
+            Button("删除文件夹，笔记移到未分类") { if let f = deleteFolder { store.deleteFolder(f, deleteNotes: false); sync() }; deleteFolder = nil }
+            Button("连里面的笔记一起删除", role: .destructive) { if let f = deleteFolder { store.deleteFolder(f, deleteNotes: true); sync() }; deleteFolder = nil }
+        }
         .alert("重命名", isPresented: Binding(get: { rename != nil }, set: { if !$0 { rename = nil } })) {
             TextField("名称", text: $field)
             Button("取消", role: .cancel) { rename = nil }
             Button("好") { if let n = rename, !field.isEmpty { store.update(n.id) { $0.title = field } }; rename = nil; sync() }
         }
         .alert("移到文件夹", isPresented: Binding(get: { moving != nil }, set: { if !$0 { moving = nil } })) {
-            TextField("文件夹名称（留空 = 未分类）", text: $field)
+            TextField("文件夹路径，如 化学/UT3（留空 = 未分类）", text: $field)
             Button("取消", role: .cancel) { moving = nil }
-            Button("好") { if let n = moving { store.update(n.id) { $0.folder = field.trimmingCharacters(in: .whitespaces) } }; moving = nil; sync() }
+            Button("好") {
+                if let n = moving {
+                    let f = field.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: "/")
+                    store.update(n.id) { $0.folder = f }
+                    if !f.isEmpty && !store.folderList.contains(f) { store.folderList.append(f) }
+                }
+                moving = nil; sync()
+            }
         } message: { Text(store.folders.isEmpty ? "输入新文件夹名称" : "已有：" + store.folders.joined(separator: "、")) }
         .alert("导入失败", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {} message: { Text(error ?? "") }
     }

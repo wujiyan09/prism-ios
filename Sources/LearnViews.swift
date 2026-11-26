@@ -195,9 +195,10 @@ struct BookChaptersView: View {
             .navigationTitle("\(b.id) · \(b.name)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(selecting ? T("Done", "完成") : T("Select", "选择")) { withAnimation { selecting.toggle() } }
-                        .bold(selecting)
+                if selecting {
+                    ToolbarItem(placement: .confirmationAction) { Button(T("Done", "完成")) { withAnimation { selecting = false } }.bold() }
+                } else {
+                    ToolbarItem(placement: .primaryAction) { Button(T("Select", "选择")) { withAnimation { selecting = true } } }
                 }
                 if !selecting {
                     ToolbarItem(placement: .primaryAction) { FilterMenu(part: $part, status: $status, showPart: false) }

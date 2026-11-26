@@ -253,8 +253,10 @@ struct ImportLibraryView: View {
                     }
                 } label: { Image(systemName: "plus") }
             }
-            ToolbarItem(placement: .secondaryAction) {
-                Button(edit == .active ? "完成" : "选择") { withAnimation { edit = edit == .active ? .inactive : .active; selection = [] } }
+            if edit == .active {
+                ToolbarItem(placement: .confirmationAction) { Button("完成") { withAnimation { edit = .inactive; selection = [] } }.bold() }
+            } else {
+                ToolbarItem(placement: .secondaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } } }
             }
             if edit == .active && !selection.isEmpty {
                 ToolbarItem(placement: .bottomBar) {
@@ -313,10 +315,10 @@ struct ImportPickers: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .fileImporter(isPresented: Binding(get: { source == .files }, set: { if !$0 { source = nil } }),
-                          allowedContentTypes: [.pdf, .image, .item], allowsMultipleSelection: true) { r in
-                guard case .success(let urls) = r else { return }
-                handle(urls)
+            .onChange(of: source) { _, s in
+                guard s == .files else { return }
+                source = nil
+                FilePick.open { urls in handle(urls) }
             }
             .photosPicker(isPresented: Binding(get: { source == .photos }, set: { if !$0 { source = nil } }), selection: $photos, matching: .images)
             .onChange(of: photos) { _, items in
@@ -325,7 +327,9 @@ struct ImportPickers: ViewModifier {
                     var ims: [UIImage] = []
                     for it in items { if let d = try? await it.loadTransferable(type: Data.self), let im = UIImage(data: d) { ims.append(im) } }
                     photos = []
-                    done(ims.isEmpty ? nil : ImpPDF.from(images: ims), ims.isEmpty ? "没有读到图片" : nil)
+                    let d = ims.isEmpty ? nil : ImpPDF.from(images: ims)
+                    try? await Task.sleep(for: .milliseconds(600))   // let the picker finish dismissing
+                    done(d, ims.isEmpty ? "没有读到图片" : nil)
                 }
             }
             .fullScreenCover(isPresented: Binding(get: { source == .scan }, set: { if !$0 { source = nil } })) {
@@ -334,6 +338,10 @@ struct ImportPickers: ViewModifier {
     }
 
     private func handle(_ urls: [URL]) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { ImportPickers.read(urls, done) }
+    }
+
+    static func read(_ urls: [URL], _ done: (PDFDocument?, String?) -> Void) {
         var ims: [UIImage] = []
         let out = PDFDocument()
         for u in urls {
@@ -343,9 +351,10 @@ struct ImportPickers: ViewModifier {
                 if let d = try? Data(contentsOf: u), ImpBundle.restore(d) != nil || NoteBundle.restore(d) != nil { done(nil, nil) } else { done(nil, "这个导出包无法读取") }
                 return
             }
-            if let d = PDFDocument(url: u) {
+            guard let data = try? Data(contentsOf: u) else { continue }
+            if let d = PDFDocument(data: data) {
                 for i in 0..<d.pageCount { if let p = d.page(at: i) { out.insert(p, at: out.pageCount) } }
-            } else if let data = try? Data(contentsOf: u), let im = UIImage(data: data) { ims.append(im) }
+            } else if let im = UIImage(data: data) { ims.append(im) }
         }
         for im in ims { if let p = PDFKit.PDFPage(image: im) { out.insert(p, at: out.pageCount) } }
         done(out.pageCount > 0 ? out : nil, out.pageCount > 0 ? nil : "没有可以导入的 PDF 或图片")
@@ -1232,6 +1241,32 @@ struct ImportStorageSection: View {
         .listRowBackground(Color.cardBackground)
         .confirmationDialog("删除所有导入的试卷？", isPresented: $confirmAll, titleVisibility: .visible) {
             Button("全部删除", role: .destructive) { store.papers.keys.forEach { store.delete($0) } }
+        }
+    }
+}
+
+/// One UIKit document picker presented from the top view controller (copies files in, so no security-scope issues
+/// and no clash between several SwiftUI fileImporters in one navigation stack).
+enum FilePick {
+    private final class Del: NSObject, UIDocumentPickerDelegate {
+        let done: ([URL]) -> Void
+        init(_ d: @escaping ([URL]) -> Void) { done = d }
+        func documentPicker(_ c: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { done(urls); FilePick.del = nil }
+        func documentPickerWasCancelled(_ c: UIDocumentPickerViewController) { FilePick.del = nil }
+    }
+    private static var del: Del?
+    static func top() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        var vc = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.windows.first { $0.isKeyWindow }?.rootViewController
+        while let p = vc?.presentedViewController, !p.isBeingDismissed { vc = p }
+        return vc
+    }
+    static func open(types: [UTType] = [.pdf, .image, UTType(filenameExtension: "prismpaper") ?? .data], _ done: @escaping ([URL]) -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {   // let a closing Menu finish first
+            let p = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+            p.allowsMultipleSelection = true
+            let d = Del(done); del = d; p.delegate = d
+            top()?.present(p, animated: true)
         }
     }
 }

@@ -104,6 +104,20 @@ final class DailyStore {
         return UIImage(contentsOfFile: cache.appendingPathComponent("figs").appendingPathComponent(name).path)
     }
 
+    /// nil = day not available; true = submitted and every written part has a score.
+    func allMarked(_ date: String) -> Bool? {
+        guard let r = results[date] else { return nil }
+        var day = loaded[date]
+        if day == nil, let data = try? Data(contentsOf: cache.appendingPathComponent(date + ".json")) { day = try? JSONDecoder().decode(DailyDay.self, from: data) }
+        guard let day else { return nil }
+        guard r.submitted else { return false }
+        for q in day.questions where !q.isMC {
+            if let ps = q.parts, !ps.isEmpty { if ps.contains(where: { r.marks[q.id + "#" + $0.label] == nil }) { return false } }
+            else if r.marks[q.id] == nil { return false }
+        }
+        return true
+    }
+
     func score(_ day: DailyDay) -> (got: Int, tot: Int, done: Bool) {
         let r = results[day.date] ?? DailyResult()
         var got = 0, skip = 0   // unmarked long questions are left out of the total, not scored 0
@@ -457,6 +471,7 @@ struct DailyRunner: View {
         var r = store.results[date] ?? DailyResult()
         f(&r)
         store.results[date] = r
+        if store.allMarked(date) == true { ReviewStore.shared.finish("daily-" + date) }
     }
 
     private func submit() {

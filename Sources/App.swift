@@ -24,6 +24,10 @@ struct ICTApp: App {
                 .task { await MathContent.shared.sync() }
                 .task { await PortalSubmit.shared.flush() }
                 .task { SyncManager.shared.start() }
+                .onOpenURL { OpenIn.shared.receive($0) }
+                .sheet(item: Binding(get: { OpenIn.shared.item }, set: { OpenIn.shared.item = $0 })) { it in
+                    NavigationStack { OpenInSheet(item: it) }
+                }
                 .onChange(of: phase) { _, p in
                     if p == .active { Reminders.shared.reschedule(); Task { await PortalSubmit.shared.flush() } }
                     if p != .inactive { Task { await SyncManager.shared.sync() } }

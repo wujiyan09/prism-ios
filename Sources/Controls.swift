@@ -115,8 +115,21 @@ final class ReviewStore {
         pending[sheet] = Pending(title: title, route: route, t: Date().timeIntervalSince1970)
     }
     func finish(_ sheet: String) {
+        guard pending[sheet] != nil else { return }
         pending[sheet] = nil
         ScratchStore.shared.clear(sheet, force: true)
+    }
+    /// Drops stale entries: a daily is no longer pending once every written part has a score
+    /// (or the day is gone), and nothing stays pending for more than 30 days.
+    @MainActor func prune() {
+        let now = Date().timeIntervalSince1970
+        for (k, p) in pending {
+            if now - p.t > 30 * 86400 { finish(k); continue }
+            if k.hasPrefix("daily-") {
+                let date = String(k.dropFirst(6))
+                if let done = DailyStore.shared.allMarked(date), done { finish(k) }
+            }
+        }
     }
 }
 
@@ -127,6 +140,13 @@ struct PendingReviewRows: View {
     private var store: ReviewStore { ReviewStore.shared }
     var body: some View {
         ForEach(store.pending.sorted { $0.value.t > $1.value.t }, id: \.key) { k, p in
+            row(k, p)
+                .swipeActions { Button(T("Done", "已完成")) { store.finish(k) }.tint(.green) }
+                .contextMenu { Button { store.finish(k) } label: { Label(T("Mark as done", "标记为已完成"), systemImage: "checkmark") } }
+        }
+        .task { store.prune() }
+    }
+    @ViewBuilder private func row(_ k: String, _ p: ReviewStore.Pending) -> some View {
             Button {
                 let r: Route? = p.route.hasPrefix("item:") ? .mathItem(String(p.route.dropFirst(5)))
                     : p.route.hasPrefix("daily:") ? .daily(String(p.route.dropFirst(6))) : nil
@@ -145,7 +165,6 @@ struct PendingReviewRows: View {
             }
             .buttonStyle(.plain)
             .listRowBackground(Color.cardBackground)
-        }
     }
 }
 

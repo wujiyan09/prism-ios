@@ -312,8 +312,10 @@ struct MathBookView: View {
             .navigationTitle(T(b.name, b.nameZh))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(selecting ? T("Done", "完成") : T("Select", "选择")) { withAnimation { selecting.toggle() } }.bold(selecting)
+                if selecting {
+                    ToolbarItem(placement: .confirmationAction) { Button(T("Done", "完成")) { withAnimation { selecting = false } }.bold() }
+                } else {
+                    ToolbarItem(placement: .primaryAction) { Button(T("Select", "选择")) { withAnimation { selecting = true } } }
                 }
             }
         } else {

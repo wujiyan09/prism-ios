@@ -89,8 +89,11 @@ struct RootView: View {
                     let m = MathLibrary.shared
                     let mmc = m.chapters("math").reduce(0) { $0 + $1.sets.reduce(0) { $0 + $1.n } }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("ICT · \(lib.chapters.count) \(T("chapters", "章")) · \(t.cards) \(T("cards", "卡")) · \(t.mc) MC · \(lib.dseMC.count) DSE")
+                        let dl = lib.chapters.filter { !$0.cards.isEmpty }.count
+                        Text("ICT · \(lib.chapters.count) \(T("chapters", "章"))" + (dl < lib.chapters.count ? T(" · \(dl) downloaded", " · 已下载 \(dl)") : " · \(t.cards) \(T("cards", "卡")) · \(t.mc) MC") + " · \(lib.dseMC.count) DSE")
                         Text("\(T("Maths", "数学")) · \(m.chapters("math").count) \(T("chapters", "章")) · \(m.chapters("math").reduce(0) { $0 + $1.nCards }) \(T("cards", "卡")) · \(mmc) MC")
+                        if !m.chapters("zh").isEmpty { Text("中文 · \(m.chapters("zh").count) 篇範文 · \(m.chapters("zh").reduce(0) { $0 + $1.sets.reduce(0) { $0 + $1.n } }) MC") }
+                        if !m.chapters("chem").isEmpty { Text("\(T("Chemistry", "化学")) · \(m.chapters("chem").count) \(T("chapters", "章")) · \(m.chapters("chem").reduce(0) { $0 + $1.nCards }) \(T("cards", "卡")) · \(m.chapters("chem").reduce(0) { $0 + $1.sets.reduce(0) { $0 + $1.n } }) MC") }
                     }
                 }
             }
@@ -252,7 +255,7 @@ struct SubjectListView: View {
         .listStyle(.insetGrouped)
         .appList()
         .environment(\.editMode, $editing)
-        .toolbar { ToolbarItem(placement: .primaryAction) { EditButton().environment(\.editMode, $editing) } }
+        .toolbar { ToolbarItem(placement: .confirmationAction) { EditButton().environment(\.editMode, $editing) } }
         .navigationTitle(section.title(T))
     }
 
