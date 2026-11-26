@@ -419,7 +419,7 @@ struct NotesLibraryView: View {
             ToolbarItem(placement: .confirmationAction) { Button("完成") { withAnimation { edit = .inactive; selection = [] } }.bold() }
         } else {
             ToolbarItem(placement: .primaryAction) { Button { field = ""; newFolder = true } label: { Label("新建文件夹", systemImage: "folder.badge.plus") } }
-            ToolbarItem(placement: .primaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } }.tint(.primary) }
+            ToolbarItem(placement: .primaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } }.foregroundStyle(.primary) }
         }
         if edit == .active && !selection.isEmpty {
             ToolbarItem(placement: .bottomBar) { Button("删除 \(selection.count) 份", role: .destructive) { confirm = Array(selection) } }

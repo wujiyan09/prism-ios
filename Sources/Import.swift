@@ -256,7 +256,7 @@ struct ImportLibraryView: View {
             if edit == .active {
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { withAnimation { edit = .inactive; selection = [] } }.bold() }
             } else {
-                ToolbarItem(placement: .primaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } }.tint(.primary) }
+                ToolbarItem(placement: .primaryAction) { Button("选择") { withAnimation { edit = .active; selection = [] } }.foregroundStyle(.primary) }
             }
             if edit == .active && !selection.isEmpty {
                 ToolbarItem(placement: .bottomBar) {

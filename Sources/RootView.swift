@@ -256,7 +256,7 @@ struct SubjectListView: View {
         .listStyle(.insetGrouped)
         .appList()
         .environment(\.editMode, $editing)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { EditButton().environment(\.editMode, $editing).tint(.primary) } }
+        .toolbar { ToolbarItem(placement: .confirmationAction) { EditButton().environment(\.editMode, $editing).foregroundStyle(.primary) } }
         .navigationTitle(section.title(T))
     }
 
@@ -271,8 +271,14 @@ struct SubjectListView: View {
                 let s = prog.stat(chs.flatMap { $0.sets.flatMap { $0.qids } }.map { MathMC.key($0) })
                 return "已做 \(s.done) 道選擇題"
             }
+            if chs.isEmpty { return "範文未下载" }
             let n = chs.filter { prog.learned.contains($0.id) }.count
             return "\(chs.count) 篇範文 · 已學 \(n) 篇"
+        }
+        if sub.id == "chem" {
+            let chs = MathLibrary.shared.chapters("chem")
+            if chs.isEmpty { return T("Not downloaded", "课本未下载") }
+            if section == .learn { return T("\(chs.count) chapters", "\(chs.count) 章") }
         }
         if sub.id == "math" {
             let m = MathLibrary.shared
@@ -283,6 +289,7 @@ struct SubjectListView: View {
                 let s = prog.stat(mInfo.flatMap { $0.qids }.map { MathMC.key($0) })
                 return T("\(s.done) MC done", "已做 \(s.done) 道选择题")
             }
+            if m.chapters("math").isEmpty { return T("Not downloaded", "课本未下载") }
             return T("\(m.books("math").count) books · \(m.chapters("math").count) chapters", "\(m.books("math").count) 本课本 · \(m.chapters("math").count) 章")
         }
         guard sub.id == Library.subject.id else { return "" }
