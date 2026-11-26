@@ -1023,10 +1023,12 @@ struct CanvasRep: UIViewRepresentable {
         let co = context.coordinator
         let link = PadLink("scratch:" + itemID, canvas: v)
         link.host = { [weak co] in co?.under?.layer }
-        link.onScroll = { [weak v] y in
+        link.onScroll = { [weak v, weak co] y in
             guard let v else { return }
             let maxY = max(0, v.contentSize.height - v.bounds.height)
+            co?.padDriven = true
             v.setContentOffset(CGPoint(x: v.contentOffset.x, y: min(maxY, max(0, y * v.zoomScale))), animated: false)
+            co?.padDriven = false
         }
         co.link = link
         PadHub.shared.activate(PadSources.scratch(itemID, height: h))
@@ -1065,6 +1067,12 @@ struct CanvasRep: UIViewRepresentable {
         var lastKey = ""
         var addButton: UIButton?
         var link: PadLink?
+        var padDriven = false
+        func scrollViewDidScroll(_ sv: UIScrollView) {
+            guard !padDriven, let link, link.isOn, PadHub.shared.mainFollows, sv.zoomScale > 0 else { return }
+            let y = max(0, sv.contentOffset.y) / sv.zoomScale
+            if abs(PadHub.shared.scratchY - y) > 2 { PadHub.shared.scratchY = y }
+        }
 
         /// Content = pages + room for the 加一页 button under the last page.
         func layoutAdd(_ c: UIScrollView) {

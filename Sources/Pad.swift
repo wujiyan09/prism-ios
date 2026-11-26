@@ -204,6 +204,7 @@ final class PadLink {
     weak var canvas: PKCanvasView?
     private let live = LiveHost()
     private var on = false
+    var isOn: Bool { on }
     private var obs: NSObjectProtocol?
     var applying = false
     var host: () -> CALayer? = { nil }
@@ -314,7 +315,7 @@ struct PadView: View {
             Group {
                 if let s = hub.source, !s.pages.isEmpty {
                     let p = s.pages[s.continuous ? 0 : pageIndex]
-                    PadCanvas(page: p, continuous: s.continuous, followY: nil, zoom: $zoom)
+                    PadCanvas(page: p, continuous: s.continuous, followY: hub.mainFollows && s.continuous ? hub.scratchY : nil, zoom: $zoom)
                         .id(p.channel + "|\(Int(p.size.height))")
                         .ignoresSafeArea(edges: .bottom)
                 } else {
@@ -330,48 +331,75 @@ struct PadView: View {
         .onAppear { hub.padOpen = true; hub.padIndex = hub.index }
         .onDisappear { hub.padOpen = false }
         .onChange(of: phase) { _, p in hub.padOpen = p != .background }
-        .onChange(of: hub.source?.owner) { _, _ in hub.padIndex = hub.index }
+        .onChange(of: hub.source?.owner) { _, _ in if hub.mainFollows { hub.padIndex = hub.index } }
         .onChange(of: hub.padIndex) { _, i in
             guard hub.mainFollows, let o = hub.source?.owner, i != hub.index else { return }
             NotificationCenter.default.post(name: .padPage, object: o, userInfo: ["i": i])
         }
-        .onChange(of: hub.index) { _, i in if hub.padIndex != i { hub.padIndex = i } }
+        .onChange(of: hub.index) { _, i in if hub.mainFollows && hub.padIndex != i { hub.padIndex = i } }
+        .onChange(of: hub.mainFollows) { _, on in if on { hub.padIndex = hub.index } }
     }
 
     @ToolbarContentBuilder private var bar: some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarLeading) {
-            if let s = hub.source, !s.continuous {
-                Button { hub.padIndex = max(0, pageIndex - 1) } label: { Image(systemName: "chevron.up") }.disabled(pageIndex == 0)
-                Button { hub.padIndex = min(s.pages.count - 1, pageIndex + 1) } label: { Image(systemName: "chevron.down") }.disabled(pageIndex >= s.pages.count - 1)
-            }
-        }
         ToolbarItemGroup(placement: .topBarTrailing) {
             if abs(zoom - 1) > 0.01 { Button("\(Int(zoom * 100))%") { zoom = 1 } }
-            Toggle(isOn: Binding(get: { hub.mainFollows }, set: { hub.mainFollows = $0 })) {
-                Label("主窗口跟随", systemImage: hub.mainFollows ? "lock.fill" : "lock.open")
+            Button { hub.mainFollows.toggle() } label: {
+                Label(hub.mainFollows ? "已与主窗口同步" : "独立浏览", systemImage: hub.mainFollows ? "lock.fill" : "lock.open")
             }
-            .toggleStyle(.button)
         }
     }
 
-    /// The big screen isn't touchable: question controls live here.
-    private var controls: some View {
-        HStack(spacing: 10) {
-            Button { (hub.prev ?? KeyRouter.shared.pager?.prev)?() } label: { Label("上一题", systemImage: "chevron.left") }
-            Button { (hub.next ?? KeyRouter.shared.pager?.next)?() } label: { Label("下一题", systemImage: "chevron.right") }
+    private var paged: Bool { hub.source.map { !$0.continuous } ?? false }
+    private var hasQuestions: Bool { hub.prev != nil || hub.next != nil || KeyRouter.shared.pager != nil || hub.mcCount > 0 }
+
+    /// The big screen isn't touchable: page / question controls live here, as floating glass.
+    @ViewBuilder private var controls: some View {
+        let row = HStack(spacing: 12) {
+            if paged, let s = hub.source {
+                glass {
+                    HStack(spacing: 2) {
+                        Button { hub.padIndex = max(0, pageIndex - 1) } label: { Label("上一页", systemImage: "chevron.up") }.disabled(pageIndex == 0)
+                        Text("\(pageIndex + 1)/\(s.pages.count)").font(.subheadline.monospacedDigit()).padding(.horizontal, 6)
+                        Button { hub.padIndex = min(s.pages.count - 1, pageIndex + 1) } label: { Label("下一页", systemImage: "chevron.down") }.disabled(pageIndex >= s.pages.count - 1)
+                    }
+                }
+            }
+            if hasQuestions || !paged {
+                glass {
+                    HStack(spacing: 2) {
+                        Button { (hub.prev ?? KeyRouter.shared.pager?.prev)?() } label: { Label("上一题", systemImage: "chevron.left") }
+                        Button { (hub.next ?? KeyRouter.shared.pager?.next)?() } label: { Label("下一题", systemImage: "chevron.right") }
+                    }
+                }
+            }
             if hub.mcCount > 0 {
-                Divider().frame(height: 24)
-                ForEach(0..<min(hub.mcCount, 6), id: \.self) { i in
-                    Button { hub.pick(i) } label: { Text(["A", "B", "C", "D", "E", "F"][i]).font(.headline).frame(minWidth: 28) }
-                        .buttonStyle(.bordered).tint(hub.mcSelected == i ? Color.accentColor : Color.secondary)
+                glass {
+                    HStack(spacing: 4) {
+                        ForEach(0..<min(hub.mcCount, 6), id: \.self) { i in
+                            Button { hub.pick(i) } label: {
+                                Text(["A", "B", "C", "D", "E", "F"][i]).font(.headline).frame(minWidth: 30, minHeight: 30)
+                                    .foregroundStyle(hub.mcSelected == i ? Color.white : Color.primary)
+                                    .background(hub.mcSelected == i ? Color.accentColor : Color.clear, in: Circle())
+                            }
+                        }
+                    }
                 }
             }
             Spacer(minLength: 0)
-            Button { NotificationCenter.default.post(name: .padAskDS, object: nil) } label: { Label("问 DeepSeek", systemImage: "sparkles") }
+            glass {
+                Button { NotificationCenter.default.post(name: .padAskDS, object: nil) } label: { Label("问 DeepSeek", systemImage: "sparkles") }
+            }
         }
         .labelStyle(.titleAndIcon)
-        .padding(.horizontal, 16).padding(.vertical, 8)
-        .background(.bar)
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 16).padding(.bottom, 10).padding(.top, 4)
+        if #available(iOS 26.0, *) { GlassEffectContainer { row } } else { row }
+    }
+
+    @ViewBuilder private func glass<C: View>(@ViewBuilder _ c: () -> C) -> some View {
+        let v = c().padding(.horizontal, 12).frame(minHeight: 44)
+        if #available(iOS 26.0, *) { v.glassEffect(.regular.interactive(), in: .capsule) }
+        else { v.background(.regularMaterial, in: Capsule()) }
     }
 }
 
@@ -393,7 +421,10 @@ struct PadCanvas: UIViewRepresentable {
         v.contentInsetAdjustmentBehavior = .never
         v.alwaysBounceVertical = true
         v.bouncesZoom = true
-        if page.background() != nil { v.overrideUserInterfaceStyle = .light }
+        if page.background() != nil {
+            v.overrideUserInterfaceStyle = .light   // white paper: true ink colours, light tool palette
+            c.picker.colorUserInterfaceStyle = .light
+        }
         v.drawing = PadHub.shared.current(page.channel) ?? page.load()
         let under = UIView(frame: CGRect(origin: .zero, size: page.size))
         under.layer.anchorPoint = .zero
