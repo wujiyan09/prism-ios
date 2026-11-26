@@ -106,13 +106,13 @@ final class DailyStore {
 
     func score(_ day: DailyDay) -> (got: Int, tot: Int, done: Bool) {
         let r = results[day.date] ?? DailyResult()
-        var got = 0
+        var got = 0, skip = 0   // unmarked long questions are left out of the total, not scored 0
         for q in day.questions {
             if q.isMC { if r.mc[q.id] == q.answer { got += q.marks } }
-            else if let ps = q.parts, !ps.isEmpty { for p in ps { got += r.marks[q.id + "#" + p.label] ?? 0 } }
-            else { got += r.marks[q.id] ?? 0 }
+            else if let ps = q.parts, !ps.isEmpty { for p in ps { if let v = r.marks[q.id + "#" + p.label] { got += v } else { skip += p.marks } } }
+            else if let v = r.marks[q.id] { got += v } else { skip += q.marks }
         }
-        return (got, day.marks, r.submitted)
+        return (got, day.marks - skip, r.submitted)
     }
 }
 
@@ -510,9 +510,10 @@ struct DailyRunner: View {
                 guard chosen == nil, !r.submitted else { return }
                 binding { $0.mc[q.id] = L }
                 ProgressStore.shared.record("daily:" + q.id, ok: isAns)
-                if UserDefaults.standard.bool(forKey: "autoNext"), let d = store.loaded[date], index < d.questions.count - 1 {
+                // Instant feedback here: only move on after a right answer, and only after 1 s.
+                if isAns, UserDefaults.standard.bool(forKey: "autoNext"), let d = store.loaded[date], index < d.questions.count - 1 {
                     let here = index
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { if index == here { withAnimation { index += 1 } } }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { if index == here { withAnimation { index += 1 } } }
                 }
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -548,16 +549,32 @@ struct DailyRunner: View {
                         DailyText(text: p.text, size: 17)
                         Text("(\(p.marks))").font(.subheadline).foregroundStyle(.secondary)
                     }
-                    if revealed { answerBox(p.answer, key: q.id + "#" + p.label, max: p.marks, r) }
+                    if revealed { markBox(q, p.answer, key: q.id + "#" + p.label, max: p.marks, part: p.text, r) }
                 }
                 .padding(.vertical, 4)
             }
         } else if revealed, let a = q.answer ?? q.solution {
-            answerBox(a, key: q.id, max: q.marks, r)
+            markBox(q, a, key: q.id, max: q.marks, part: nil, r)
         }
-        if revealed { MarkControl(key: "daily:" + date + ":" + q.id).padding(.top, 4) }
         if !revealed {
             Text(T("Answers and self-marking open after 交卷.", "交卷后才能看答案和自评。")).font(.footnote).foregroundStyle(.secondary).padding(.top, 4)
+        }
+    }
+
+    /// Answer + 得分点 self-marking (+ DeepSeek on the scratch sheet). Unmarked stays nil = 未评分.
+    private func markBox(_ q: DailyQuestion, _ text: String, key: String, max: Int, part: String?, _ r: DailyResult) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(T("Answer", "答案"), systemImage: "text.book.closed").font(.subheadline.bold())
+                DailyText(text: text, size: 15)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            LongMarkCard(key: "daily:" + date + ":" + key, question: q.stem + (part.map { "\n" + $0 } ?? ""), scheme: text,
+                         sheetID: "daily-" + date, max: max,
+                         score: Binding(get: { (store.results[date] ?? DailyResult()).marks[key] },
+                                        set: { v in binding { $0.marks[key] = v } }))
         }
     }
 
@@ -593,10 +610,14 @@ struct DailyRunner: View {
         return ScrollView {
             VStack(spacing: 16) {
                 Image(systemName: "checkmark.seal.fill").font(.system(size: 54)).foregroundStyle(Color.accentColor)
+                let open = d.questions.filter { unmarked($0, r) }.count
                 Text("\(s.got) / \(s.tot)").font(.largeTitle.bold().monospacedDigit())
+                if open > 0 {
+                    Text(T("\(open) questions not marked yet (not counted)", "\(open) 题未评分（暂不计分）")).font(.subheadline.bold()).foregroundStyle(.orange)
+                }
                 if ReviewStore.shared.inReview("daily-" + date) {
-                    Text(T("Open each written question, read the answer and mark yourself, then tap Done.", "逐题看答案并自评，完成后按「完成」。")).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button(T("Done", "完成")) { ReviewStore.shared.finish("daily-" + date) }.glassButton(prominent: true)
+                    Text(T("Open each written question, mark the points yourself or let DeepSeek mark your scratch, then tap Settle.", "逐题按得分点自评，或让 DeepSeek 按草稿纸批改，然后按「结算」。")).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Button(T("Settle", "结算")) { ReviewStore.shared.finish("daily-" + date) }.glassButton(prominent: true)
                 }
                 if !mcs.isEmpty {
                     Text(T("MC \(mcGot)/\(mcs.count) correct", "选择题对 \(mcGot)/\(mcs.count) 题")).foregroundStyle(.secondary)
@@ -608,8 +629,12 @@ struct DailyRunner: View {
                                 Text("Q\(q.n)").font(.body.monospaced())
                                 Text(q.source ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 Spacer()
-                                Text("\(got(q, r))/\(q.marks)").font(.body.monospacedDigit().bold())
-                                    .foregroundStyle(got(q, r) == q.marks ? Color.good : (got(q, r) == 0 ? Color.bad : Color.orange))
+                                if unmarked(q, r) {
+                                    Text(T("Not marked", "未评分")).font(.subheadline.bold()).foregroundStyle(.secondary)
+                                } else {
+                                    Text("\(got(q, r))/\(q.marks)").font(.body.monospacedDigit().bold())
+                                        .foregroundStyle(got(q, r) == q.marks ? Color.good : (got(q, r) == 0 ? Color.bad : Color.orange))
+                                }
                                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
                             }
                             .padding(.vertical, 10)
@@ -625,6 +650,12 @@ struct DailyRunner: View {
             .frame(maxWidth: .infinity)
         }
         .softEdges()
+    }
+
+    private func unmarked(_ q: DailyQuestion, _ r: DailyResult) -> Bool {
+        if q.isMC { return false }
+        if let ps = q.parts, !ps.isEmpty { return ps.contains { r.marks[q.id + "#" + $0.label] == nil } }
+        return r.marks[q.id] == nil
     }
 
     private func got(_ q: DailyQuestion, _ r: DailyResult) -> Int {

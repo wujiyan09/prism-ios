@@ -19,6 +19,7 @@ private struct SavedState: Codable {
     var quiz = QuizPrefs()
     var learned: [String]? = nil
     var marks: [String: Bool]? = nil
+    var scores: [String: Int]? = nil
 }
 
 /// Study progress, shared by every window. Saved on device.
@@ -44,6 +45,12 @@ final class ProgressStore {
         if let ok { e.r.append(ok ? 1 : 0); e.r = Array(e.r.suffix(5)); e.last = Date().timeIntervalSince1970 }
         hist[key] = e.r.isEmpty ? nil : e
     }
+    /// Self-awarded marks for long questions (nil = 未评分). Synced as "sc/<key>". Also feeds ✓/✗ history (≥ half = ✓).
+    var scores: [String: Int] = [:] { didSet { save() } }
+    func setScore(_ key: String, _ v: Int?, max: Int) {
+        scores[key] = v
+        setMark(key, v.map { max > 0 ? $0 * 2 >= max : $0 > 0 })
+    }
     func toggleLearned(_ id: String) { if learned.contains(id) { learned.remove(id) } else { learned.insert(id) } }
 
     private var loading = false
@@ -56,14 +63,14 @@ final class ProgressStore {
     init() {
         loading = true
         if let d = try? Data(contentsOf: url), let s = try? JSONDecoder().decode(SavedState.self, from: d) {
-            hist = s.hist; runs = s.runs; sheets = s.sheets; seen = Set(s.seen); quiz = s.quiz; learned = Set(s.learned ?? []); marks = s.marks ?? [:]
+            hist = s.hist; runs = s.runs; sheets = s.sheets; seen = Set(s.seen); quiz = s.quiz; learned = Set(s.learned ?? []); marks = s.marks ?? [:]; scores = s.scores ?? [:]
         }
         loading = false
     }
 
     private func save() {
         guard !loading else { return }
-        let s = SavedState(hist: hist, runs: runs, sheets: sheets, seen: Array(seen), quiz: quiz, learned: Array(learned), marks: marks)
+        let s = SavedState(hist: hist, runs: runs, sheets: sheets, seen: Array(seen), quiz: quiz, learned: Array(learned), marks: marks, scores: scores)
         if let d = try? JSONEncoder().encode(s) { try? d.write(to: url, options: .atomic) }
     }
 

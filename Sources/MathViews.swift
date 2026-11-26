@@ -709,7 +709,12 @@ struct SplitPractice: View {
                             Text(T("Worked solution", "解析")).font(.subheadline.bold()).foregroundStyle(.secondary)
                             MathText(text: x, size: 17)
                         }
-                        MarkControl(key: MathItemKey.key(chapter, item)).padding(.top, 6)
+                        let k = MathItemKey.key(chapter, item)
+                        LongMarkCard(key: k, question: item.hasText ? (item.qt ?? "") : "（题目见附图）",
+                                     scheme: [item.at, item.sx].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"),
+                                     images: item.figImages, sheetID: "ch-" + chapter.id, max: nil,
+                                     score: Binding(get: { ProgressStore.shared.scores[k] }, set: { ProgressStore.shared.setScore(k, $0, max: 2) }))
+                            .padding(.top, 6)
                     }
                 }
                 .card()

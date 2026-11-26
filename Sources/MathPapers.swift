@@ -216,12 +216,19 @@ struct PPSetView: View {
             if let set, !set.qs.isEmpty {
                 let q = set.qs[min(index, set.qs.count - 1)]
                 WorkSplit(on: splitOn, sheetID: sheet, figs: splitOn ? q.figImages : [], ratio: 0.45) {
-                    PPQuestionView(q: q, label: set.al, splitOn: splitOn, review: review, picked: Binding(get: { picked[q.id] }, set: { picked[q.id] = $0 }))
+                    PPQuestionView(q: q, label: set.al, splitOn: splitOn, review: review, picked: Binding(get: { picked[q.id] }, set: { picked[q.id] = $0 }), sheetID: sheet)
                         .id(q.id)
                 } bar: {
                     PageCluster(index: index, count: set.qs.count,
                                 prev: index > 0 ? { index -= 1 } : nil,
                                 next: index < set.qs.count - 1 ? { index += 1 } : nil)
+                    if review {
+                        let t = tally(set)
+                        Text(T("\(t.got)/\(t.tot)", "得分 \(t.got)/\(t.tot)") + (t.open > 0 ? T(" · \(t.open) unmarked", " · \(t.open) 题未评分") : ""))
+                            .font(.subheadline.monospacedDigit().bold())
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .glassGroup()
+                    }
                 }
             } else {
                 DownloadOverlay()
@@ -242,21 +249,47 @@ struct PPSetView: View {
         .confirmationDialog(T("Hand in?", "确定交卷？"), isPresented: $confirmHandIn, titleVisibility: .visible) {
             Button(T("Submit", "交卷")) {
                 ReviewStore.shared.handIn(sheet, title: T("Past paper · ", "真题 · ") + info.t, route: "ppset:" + info.id)
+                for q in set?.qs ?? [] where q.o == nil {   // fresh attempt: clear old self-marks
+                    ProgressStore.shared.scores["pp:" + q.id] = nil
+                    UserDefaults.standard.removeObject(forKey: "lm.pp:" + q.id)
+                }
                 for q in set?.qs ?? [] where q.ty == "mc" {
                     if let p = picked[q.id] { ProgressStore.shared.setMark("pp:" + q.id, ["A", "B", "C", "D", "E", "F"][min(p, 5)] == q.a.trimmingCharacters(in: .whitespaces)) }
                 }
             }
             Button(T("Cancel", "取消"), role: .cancel) {}
         } message: { Text(T("Then answers open so you can mark each question ✓ or ✗. Your scratch sheet stays until you tap Done.", "交卷后可以看答案，逐题标 ✓ / ✗。草稿纸会保留到你按「完成」。")) }
-        .confirmationDialog(T("Finish self-marking?", "自评完成？"), isPresented: $confirmDone, titleVisibility: .visible) {
-            Button(T("Done", "完成")) { ReviewStore.shared.finish(sheet); picked = [:] }
+        .confirmationDialog(T("Settle score?", "结算？"), isPresented: $confirmDone, titleVisibility: .visible) {
+            Button(T("Settle", "结算")) {
+                if let set { let t = tally(set); ProgressStore.shared.saveRun(RunRecord(t: Date().timeIntervalSince1970, title: info.t, got: t.got, tot: t.tot)) }
+                ReviewStore.shared.finish(sheet); picked = [:]
+            }
             Button(T("Cancel", "取消"), role: .cancel) {}
-        } message: { Text(T("The scratch sheet will be deleted.", "草稿纸会被删除。")) }
+        } message: {
+            let t = set.map(tally) ?? (0, 0, 0)
+            Text(T("Score \(t.got)/\(t.tot)", "得分 \(t.got)/\(t.tot)") + (t.open > 0 ? T(" (\(t.open) unmarked, not counted)", "（\(t.open) 题未评分，不计入）") : "") + T(". The scratch sheet will be deleted.", "。草稿纸会被删除。"))
+        }
         .workingSession(sheet)
         .task {
             set = PP.set(info.id)
             if set == nil { await MathContent.shared.ensure("pp-" + info.id); set = PP.set(info.id) }
         }
+    }
+
+    /// Running total: MC from picks, long questions from self-marks; unmarked ones are left out (not 0).
+    private func tally(_ set: PPSet) -> (got: Int, tot: Int, open: Int) {
+        var got = 0, tot = 0, open = 0
+        for q in set.qs {
+            let mk = q.mk ?? 1
+            if q.o != nil {
+                tot += mk
+                if let p = picked[q.id], ["A", "B", "C", "D", "E", "F"][min(p, 5)] == q.a.trimmingCharacters(in: .whitespaces) { got += mk }
+                else if picked[q.id] == nil, ProgressStore.shared.mark("pp:" + q.id) == true { got += mk }
+            } else if let s = ProgressStore.shared.scores["pp:" + q.id] {
+                got += s; tot += q.mk ?? s
+            } else { open += 1 }
+        }
+        return (got, tot, open)
     }
 }
 
@@ -266,6 +299,7 @@ struct PPQuestionView: View {
     var splitOn = false
     let review: Bool
     @Binding var picked: Int?
+    var sheetID: String? = nil
     @Environment(\.tr) private var T
     private let L = ["A", "B", "C", "D", "E", "F"]
 
@@ -311,9 +345,15 @@ struct PPQuestionView: View {
                             Text(T("Worked solution", "解析")).font(.subheadline.bold()).foregroundStyle(.secondary)
                             MathText(text: q.ms, size: 17)
                         }
-                        MarkControl(key: "pp:" + q.id).padding(.top, 6)
+                        if q.o != nil { MarkControl(key: "pp:" + q.id).padding(.top, 6) }
                     }
                     .card()
+                    if q.o == nil {
+                        LongMarkCard(key: "pp:" + q.id, question: q.q, scheme: q.ms.isEmpty ? q.a : q.a + "\n" + q.ms,
+                                     images: q.figImages, sheetID: sheetID, max: q.mk,
+                                     score: Binding(get: { ProgressStore.shared.scores["pp:" + q.id] },
+                                                    set: { ProgressStore.shared.setScore("pp:" + q.id, $0, max: q.mk ?? 0) }))
+                    }
                 } else {
                     Text(T("Answers open after 交卷.", "交卷后才能看答案。")).font(.footnote).foregroundStyle(.secondary)
                 }

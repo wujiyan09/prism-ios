@@ -16,13 +16,14 @@ final class SyncManager: NSObject, ASWebAuthenticationPresentationContextProvidi
     var syncing = false
     var error: String?
     var configured: Bool?
-    var signedIn: Bool { token != nil }
+    /// Stored (observed) copy of the Keychain token, so views refresh the moment sign-in finishes.
+    private var tokenCache: String? = Keychain.get("sync.token")
+    var signedIn: Bool { tokenCache != nil }
 
     private var token: String? {
-        get { Keychain.get("sync.token") }
-        set { if let newValue { Keychain.set("sync.token", newValue) } else { Keychain.delete("sync.token") }; tokenTick += 1 }
+        get { tokenCache }
+        set { if let newValue { Keychain.set("sync.token", newValue) } else { Keychain.delete("sync.token") }; tokenCache = newValue }
     }
-    private var tokenTick = 0
     private var cursor: Int {
         get { UserDefaults.standard.integer(forKey: "sync.cursor") }
         set { UserDefaults.standard.set(newValue, forKey: "sync.cursor") }
@@ -153,6 +154,7 @@ enum SyncRecords {
         for k in p.seen { o["seen/" + k] = "1" }
         for k in p.learned { o["learned/" + k] = "1" }
         for (k, v) in p.marks { o["mark/" + k] = v ? "1" : "0" }
+        for (k, v) in p.scores { o["sc/" + k] = "\(v)" }
         o["quiz"] = j(p.quiz)
         for (k, v) in DailyStore.shared.results { o["daily/" + k] = j(v) }
         for e in ExamStore.shared.exams { o["exam/" + e.id.uuidString] = j(e) }
@@ -174,7 +176,7 @@ enum SyncRecords {
     static func apply(_ recs: [SyncManager.Rec]) {
         guard !recs.isEmpty else { return }
         let p = ProgressStore.shared
-        var hist = p.hist, runs = p.runs, sheets = p.sheets, seen = p.seen, learned = p.learned, quiz = p.quiz, marks = p.marks
+        var hist = p.hist, runs = p.runs, sheets = p.sheets, seen = p.seen, learned = p.learned, quiz = p.quiz, marks = p.marks, scores = p.scores
         var daily = DailyStore.shared.results
         var exams = ExamStore.shared.exams
         func split(_ k: String) -> (String, String) {
@@ -194,6 +196,7 @@ enum SyncRecords {
             case "seen": if r.d { seen.remove(id) } else { seen.insert(id) }
             case "learned": if r.d { learned.remove(id) } else { learned.insert(id) }
             case "mark": marks[id] = r.d ? nil : (r.v == "1")
+            case "sc": scores[id] = r.d ? nil : r.v.flatMap { Int($0) }
             case "quiz": if let x = d(r.v, QuizPrefs.self) { quiz = x }
             case "daily": daily[id] = r.d ? nil : d(r.v, DailyResult.self)
             case "exam":
@@ -215,6 +218,7 @@ enum SyncRecords {
         if recs.contains(where: { $0.k.hasPrefix("learned/") }) { p.learned = learned }
         if recs.contains(where: { $0.k == "quiz" }) { p.quiz = quiz }
         if recs.contains(where: { $0.k.hasPrefix("mark/") }) { p.marks = marks }
+        if recs.contains(where: { $0.k.hasPrefix("sc/") }) { p.scores = scores }
         if recs.contains(where: { $0.k.hasPrefix("daily/") }) { DailyStore.shared.results = daily }
         DSStore.shared.apply(ds)
         if recs.contains(where: { $0.k.hasPrefix("exam/") }) { ExamStore.shared.exams = exams.sorted { $0.date < $1.date } }

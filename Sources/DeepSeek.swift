@@ -679,22 +679,28 @@ struct DeepSeekPanel: View {
                     .onSubmit { send(input, shown: input) }
                     .padding(.leading, 16).padding(.vertical, 8)
                     .frame(minHeight: 44)
+                let empty = input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || grading
                 Group {
                     if task != nil {
                         Button { task?.cancel(); task = nil } label: {
-                            Image(systemName: "stop.fill").font(.system(size: 13, weight: .bold)).frame(width: 32, height: 32)
+                            Image(systemName: "stop.fill").font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.white).frame(width: 30, height: 30)
+                                .background(Color.accentColor, in: Circle())
                         }
                         .accessibilityLabel("停止")
                     } else {
                         Button { send(input, shown: input) } label: {
-                            Image(systemName: "arrow.up").font(.system(size: 15, weight: .bold)).frame(width: 32, height: 32)
+                            Image(systemName: "arrow.up").font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white).frame(width: 30, height: 30)
+                                .background(empty ? Color.secondary.opacity(0.35) : Color.accentColor, in: Circle())
                         }
                         .accessibilityLabel("发送")
-                        .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || grading)
+                        .disabled(empty)
                     }
                 }
-                .glassButton(prominent: true).buttonBorderShape(.circle)
-                .padding(.trailing, 6)
+                .buttonStyle(.plain)
+                .contentShape(Circle())
+                .padding(.trailing, 7)
             }
             .dsGlassCapsule()
         }

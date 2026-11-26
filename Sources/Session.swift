@@ -528,7 +528,8 @@ extension Session {
     /// "选好自动下一题": after an MC answer is picked, move on once the selection has been seen.
     func autoAdvance(from i: Int) {
         guard UserDefaults.standard.bool(forKey: "autoNext"), !submitted, mc[i] != nil, i < keys.count - 1 else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+        // 交卷-gated: no feedback before 交卷, so just wait 1 s.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self, self.index == i, self.mc[i] != nil, !self.submitted else { return }
             withAnimation(.snappy) { self.index = i + 1 }
         }

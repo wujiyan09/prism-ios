@@ -175,10 +175,12 @@ extension View {
     @ViewBuilder func mcGlass(_ s: MCState) -> some View {
         let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
         let tint: Color? = s == .selected ? .accentColor : s == .correct ? .green : s == .wrong ? .red : nil
+        // A clear hit layer on top, so LaTeX / text views inside never swallow the tap: the whole row is the button.
+        let hit = self.overlay { Color.clear.contentShape(shape) }.contentShape(shape)
         if #available(iOS 26.0, *) {
-            self.glassEffect(tint.map { Glass.regular.tint($0.opacity(0.35)).interactive() } ?? Glass.regular.interactive(), in: shape)
+            hit.glassEffect(tint.map { Glass.regular.tint($0.opacity(0.35)).interactive() } ?? Glass.regular.interactive(), in: shape)
         } else {
-            self.background((tint?.opacity(0.18) ?? Color.cardBackground), in: shape)
+            hit.background((tint?.opacity(0.18) ?? Color.cardBackground), in: shape)
         }
     }
 }
