@@ -15,7 +15,8 @@ enum PDFInk {
     }
     static func dir(_ key: String) -> URL { root.appendingPathComponent(safe(key), isDirectory: true) }
     static func load(_ key: String, _ page: Int) -> PKDrawing? {
-        (try? Data(contentsOf: dir(key).appendingPathComponent("\(page).drawing"))).flatMap { try? PKDrawing(data: $0) }
+        saveQ.sync {}   // a page written a moment ago may still be on its way to disk
+        return (try? Data(contentsOf: dir(key).appendingPathComponent("\(page).drawing"))).flatMap { try? PKDrawing(data: $0) }
     }
     /// Canvas width the drawing was made at (to flatten onto the page at the right scale).
     static func width(_ key: String, _ page: Int) -> CGFloat? {
@@ -29,6 +30,11 @@ enum PDFInk {
         try? d.dataRepresentation().write(to: f, options: .atomic)
         try? Data(title.utf8).write(to: dd.appendingPathComponent("title.txt"))
         if width > 0 { try? Data("\(Double(width))".utf8).write(to: dd.appendingPathComponent("\(page).w")) }
+    }
+    /// Writes happen here, one at a time, never on the main thread (PKDrawing is a value: safe to encode off-main).
+    static let saveQ = DispatchQueue(label: "pdfink.save", qos: .utility)
+    static func saveAsync(_ key: String, _ page: Int, _ d: PKDrawing, title: String, width: CGFloat = 0) {
+        saveQ.async { save(key, page, d, title: title, width: width) }
     }
     struct Entry: Identifiable { let id: String; let title: String; let size: Int; let date: Date; let pages: Int }
     static func papers() -> [Entry] {
@@ -56,7 +62,16 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
     var title = ""
     private var canvases: [Int: PKCanvasView] = [:]
     private var links: [Int: PadLink] = [:]
-    deinit { ToolSync.shared.unregister(picker) }
+    /// Pages written on since their last save; saved debounced, off-main. Untouched pages are never rewritten.
+    private var dirty: Set<Int> = []
+    private var pending: [Int: DispatchWorkItem] = [:]
+    private func flush(_ c: PKCanvasView) {
+        pending[c.tag]?.cancel(); pending[c.tag] = nil
+        guard dirty.remove(c.tag) != nil else { return }
+        PDFInk.saveAsync(key, c.tag, c.drawing, title: title, width: c.bounds.width)
+    }
+    func flushAll() { canvases.values.forEach(flush) }
+    deinit { flushAll(); ToolSync.shared.unregister(picker) }
     private let picker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
     var enabled = false { didSet { canvases.values.forEach(apply) } }
 
@@ -70,7 +85,7 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
     }
 
     func reset(key: String, title: String) {
-        if key != self.key { canvases = [:]; links.values.forEach { $0.tearDown() }; links = [:] }
+        if key != self.key { flushAll(); canvases = [:]; links.values.forEach { $0.tearDown() }; links = [:]; dirty = [] }
         self.key = key; self.title = title
     }
 
@@ -100,12 +115,19 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
 
     func pdfView(_ pdfView: PDFView, willEndDisplayingOverlayView overlayView: UIView, for page: PDFKit.PDFPage) {
         guard let c = overlayView as? PKCanvasView else { return }
-        PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width)
+        flush(c)
         canvases[c.tag] = nil
         links[c.tag]?.tearDown(); links[c.tag] = nil
     }
 
-    func canvasViewDrawingDidChange(_ c: PKCanvasView) { links[c.tag]?.changed(c.drawing); PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width) }
+    func canvasViewDrawingDidChange(_ c: PKCanvasView) {
+        links[c.tag]?.changed(c.drawing)
+        dirty.insert(c.tag)
+        pending[c.tag]?.cancel()
+        let w = DispatchWorkItem { [weak self, weak c] in if let self, let c { self.flush(c) } }
+        pending[c.tag] = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: w)
+    }
 
     private func apply(_ c: PKCanvasView) {
         c.isUserInteractionEnabled = enabled

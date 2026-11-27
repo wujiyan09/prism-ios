@@ -250,6 +250,7 @@ struct PDFKitView: UIViewRepresentable {
         return v
     }
     static func dismantleUIView(_ v: PDFView, coordinator: Coord) {
+        (v.pageOverlayViewProvider as? InkProvider)?.flushAll()   // closing: write only pages that changed, off-main
         if !coordinator.owner.isEmpty { PadHub.shared.deactivate(coordinator.owner) }
     }
     func updateUIView(_ v: PDFView, context: Context) {

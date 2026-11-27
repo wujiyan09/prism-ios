@@ -691,7 +691,7 @@ enum PadSources {
             return PadPage(channel: "note:" + key, size: CGSize(width: NoteRender.logicalWidth, height: NoteRender.logicalWidth * CGFloat(p.aspect)),
                            background: { NoteRender.background(id, p, width: 1400) },
                            load: { PDFInk.load(key, 0) ?? PKDrawing() },
-                           save: { d in PDFInk.save(key, 0, d, title: doc.title, width: NoteRender.logicalWidth) })
+                           save: { d in PDFInk.saveAsync(key, 0, d, title: doc.title, width: NoteRender.logicalWidth) })
         }
         return PadSource(owner: "note-" + id, title: doc.title, continuous: false, pages: pages)
     }
@@ -710,7 +710,7 @@ enum PadSources {
                                  },
                                  save: { d in
                                      let w = PDFInk.width(key, i) ?? size.width
-                                     PDFInk.save(key, i, d.transformed(using: CGAffineTransform(scaleX: w / size.width, y: w / size.width)), title: title, width: w)
+                                     PDFInk.saveAsync(key, i, d.transformed(using: CGAffineTransform(scaleX: w / size.width, y: w / size.width)), title: title, width: w)
                                  }))
         }
         return PadSource(owner: "pdf:" + key, title: title, continuous: false, pages: pages)
