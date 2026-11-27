@@ -78,7 +78,7 @@ struct ZhLongSetView: View {
         Group {
             if let f = file, !f.qs.isEmpty {
                 let q = f.qs[min(index, f.qs.count - 1)]
-                WorkSplit(on: splitOn && ZLInput.mode(q.id) == "hand", sheetID: sheet, figs: q.figImages, ratio: 0.5) {
+                WorkSplit(on: splitOn, sheetID: sheet, figs: q.figImages, ratio: 0.5) {
                     ZhLongQuestion(q: q, chapter: chapter, review: review, sheetID: sheet).id(q.id)
                         .environment(\.zhSerif, chapter?.isZh ?? true)
                 } bar: {
