@@ -298,7 +298,7 @@ final class LivePreview {
 enum InkCalib {
     private static var mem: [String: (a: CGFloat, b: CGFloat, op: CGFloat)] = {
         var out: [String: (CGFloat, CGFloat, CGFloat)] = [:]
-        for (k, v) in (UserDefaults.standard.dictionary(forKey: "ink.calib") as? [String: [Double]]) ?? [:] where v.count == 3 { out[k] = (v[0], v[1], v[2]) }
+        for (k, v) in (UserDefaults.standard.dictionary(forKey: "ink.calib") as? [String: [Double]]) ?? [:] where v.count == 3 { out[k] = (CGFloat(v[0]), CGFloat(v[1]), CGFloat(v[2])) }
         return out
     }()
     static func get(_ k: String) -> (a: CGFloat, b: CGFloat, op: CGFloat) {
