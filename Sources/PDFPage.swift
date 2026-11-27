@@ -129,6 +129,7 @@ struct PDFKitView: UIViewRepresentable {
             PadHub.shared.mainApplied = Date()
             let b = p.bounds(for: .mediaBox)
             if PadHub.syncZoom, r.width > 1, v.bounds.width > 1 {
+                v.maxScaleFactor = max(v.maxScaleFactor, v.scaleFactorForSizeToFit * DisplayInfo.maxZoom)
                 let z = min(v.maxScaleFactor, max(v.minScaleFactor, v.bounds.width / r.width))
                 if abs(z - v.scaleFactor) / max(z, 0.01) > 0.01 {
                     v.autoScales = false          // otherwise PDFKit re-fits and recentres, undoing x

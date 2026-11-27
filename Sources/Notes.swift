@@ -626,7 +626,7 @@ struct NoteDocView: View {
                                   let pi = doc.pages.firstIndex(where: { "note:" + NoteStore.inkKey(id, $0.id) == ch }) else { return }
                             let f = base / NoteRender.logicalWidth
                             if PadHub.syncZoom && !vctl.locked {
-                                let z = min(4, max(0.5, geo.size.width / (r.width * f + 32 * 0)))
+                                let z = min(DisplayInfo.maxZoom, max(0.5, geo.size.width / (r.width * f + 32 * 0)))
                                 if abs(z - zoom) > 0.01 { zoom = z }
                             }
                             var top = Self.pad
@@ -861,7 +861,7 @@ struct NotePageView: View {
     /// Background pixels = view width × screen scale × zoom (re-rendered in steps so zooming stays sharp).
     private func bgWidth(_ W: CGFloat) -> CGFloat {
         let z = max(1, pow(2, ceil(log2(max(1, zoom)))))
-        return min(4000, W * UIScreen.main.scale * z)
+        return min(4000, W * DisplayInfo.mainScale * z)
     }
 
     var body: some View {

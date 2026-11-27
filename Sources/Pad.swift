@@ -523,6 +523,7 @@ extension Notification.Name {
     static let padPage = Notification.Name("padPage")
     /// Viewport of a paged page, object = channel, userInfo["r"] = visible rect in page units (top-left origin).
     static let padViewport = Notification.Name("padViewport")
+    static let toolChanged = Notification.Name("toolChanged")
     static let mainViewport = Notification.Name("mainViewport")
 }
 
@@ -871,7 +872,7 @@ struct PadCanvas: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PKCanvasView {
         let c = context.coordinator
-        let v = QuietCanvas()
+        let v = QuietCanvas(); v.isPadCanvas = true
         v.drawingPolicy = .default
         v.backgroundColor = .clear
         v.isOpaque = false
@@ -1165,8 +1166,27 @@ final class QuietCanvas: PKCanvasView {
     /// so a stray tap while writing can't pop 全选 / 插入空白.
     private var parked: [(UIView, UIEditMenuInteraction)] = []
     private var lassoOn: Bool { tool is PKLassoTool }
-    override var tool: PKTool { didSet { sync() } }
-    override func didMoveToWindow() { super.didMoveToWindow(); sync() }
+    var isPadCanvas = false
+    private var lastLasso = false
+    private var obs: [NSObjectProtocol] = []
+    override func didMoveToWindow() {
+        super.didMoveToWindow(); lastLasso = lassoOn; sync()
+        if obs.isEmpty {
+            obs.append(NotificationCenter.default.addObserver(forName: .toolChanged, object: nil, queue: .main) { [weak self] _ in
+                DispatchQueue.main.async { guard let self, self.lassoOn != self.lastLasso else { return }; self.lastLasso = self.lassoOn; self.sync() }
+            })
+            // 手写板 open: it owns the tools, so the big-screen canvases give up the tool picker.
+            obs.append(NotificationCenter.default.addObserver(forName: .padState, object: nil, queue: .main) { [weak self] _ in
+                guard let self, !self.isPadCanvas, PadHub.shared.padOpen, self.isFirstResponder else { return }
+                self.resignFirstResponder()
+            })
+        }
+    }
+    override func becomeFirstResponder() -> Bool {
+        if !isPadCanvas && (PadHub.shared.padOpen || DSInput.holding) { return false }
+        return super.becomeFirstResponder()
+    }
+    deinit { obs.forEach { NotificationCenter.default.removeObserver($0) } }
     override func didAddSubview(_ v: UIView) { super.didAddSubview(v); if !lassoOn { park(v) } }
     private func park(_ v: UIView) {
         for i in v.interactions { if let m = i as? UIEditMenuInteraction { v.removeInteraction(m); parked.append((v, m)) } }
@@ -1211,6 +1231,7 @@ final class ToolSync: NSObject, PKToolPickerObserver {
     }
     func unregister(_ p: PKToolPicker) { p.removeObserver(self); pickers.removeAll { $0 === p } }
     func toolPickerSelectedToolDidChange(_ src: PKToolPicker) {
+        NotificationCenter.default.post(name: .toolChanged, object: nil)
         guard !busy, PadHub.shared.padOpen else { return }
         busy = true; defer { busy = false }
         for p in pickers where p !== src { p.selectedTool = src.selectedTool }
@@ -1347,7 +1368,7 @@ struct PadPagedCanvas: UIViewRepresentable {
         /// Ink re-rendered at screen scale × zoom, so it stays sharp.
         func sharpen() {
             guard let sv = scroll else { return }
-            let sc = min(UIScreen.main.scale * max(1, sv.zoomScale * (scales.first ?? 1)), 8)
+            let sc = min(DisplayInfo.scale(sv) * max(1, sv.zoomScale * (scales.first ?? 1)), 8)
             for w in wires { w.sharpen(sc * max(1, w.scale)) }
         }
         func show(_ i: Int, animated: Bool) {
@@ -1435,7 +1456,7 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
         view = UIView(frame: frame)
         view.backgroundColor = .white
         view.layer.shadowColor = UIColor.black.cgColor; view.layer.shadowOpacity = 0.12; view.layer.shadowRadius = 4; view.layer.shadowOffset = CGSize(width: 0, height: 2)
-        canvas = QuietCanvas(frame: CGRect(origin: .zero, size: page.size))
+        canvas = QuietCanvas(frame: CGRect(origin: .zero, size: page.size)); canvas.isPadCanvas = true
         super.init()
         // Everything inside works in page units; the wrapper scales it to the column width.
         let inner = UIView(frame: CGRect(origin: .zero, size: page.size))
@@ -1566,5 +1587,22 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
     func flush() {
         pending?.cancel(); pending = nil
         page.save(canvas.drawing)
+    }
+}
+
+
+/// The big screen's real size/resolution: zoom range and render sharpness come from it, not fixed numbers.
+enum DisplayInfo {
+    static var external: UIScreen? {
+        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen }.first { $0 != UIScreen.main }
+    }
+    /// Pixel scale of the screen a view is on (external monitor's own scale when it's there).
+    static func scale(_ v: UIView?) -> CGFloat { v?.window?.screen.scale ?? mainScale }
+    static var mainScale: CGFloat { (external ?? UIScreen.main).scale }
+    /// Max zoom on the big screen: enough for the pad's max-zoom region to fill the external width.
+    static var maxZoom: CGFloat {
+        guard let e = external else { return 4 }
+        let ratio = e.nativeBounds.width / e.nativeScale / max(1, UIScreen.main.bounds.width)
+        return max(4, (4 * ratio).rounded(.up))
     }
 }

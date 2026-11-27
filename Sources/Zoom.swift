@@ -18,7 +18,7 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
     func makeUIView(context: Context) -> UIScrollView {
         let sv = UIScrollView()
         sv.minimumZoomScale = 0.5
-        sv.maximumZoomScale = 4
+        sv.maximumZoomScale = DisplayInfo.maxZoom
         sv.bouncesZoom = true
         sv.alwaysBounceVertical = true
         sv.contentInsetAdjustmentBehavior = .never
@@ -46,7 +46,7 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
         c.parent = self
         c.host?.rootView = content()
         sv.minimumZoomScale = locked ? zoom : 0.5
-        sv.maximumZoomScale = locked ? zoom : 4
+        sv.maximumZoomScale = locked ? zoom : DisplayInfo.maxZoom
         if c.size != size, let hv = c.host?.view {
             c.size = size
             let z = sv.zoomScale
@@ -98,7 +98,7 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
         /// Re-render ink at the new scale so strokes stay sharp after zooming in.
         private func sharpen(_ v: UIView?, _ z: CGFloat) {
             guard let v else { return }
-            let scale = min(UIScreen.main.scale * max(1, z), 8)
+            let scale = min(DisplayInfo.mainScale * max(1, z), 8)
             func walk(_ x: UIView) {
                 if String(describing: type(of: x)).contains("Canvas") { x.contentScaleFactor = scale }
                 x.subviews.forEach(walk)

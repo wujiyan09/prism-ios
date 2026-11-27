@@ -984,7 +984,7 @@ struct CanvasRep: UIViewRepresentable {
         v.alwaysBounceVertical = true
         if #available(iOS 26.0, *) { v.topEdgeEffect.style = .hard }
         v.minimumZoomScale = 0.5
-        v.maximumZoomScale = 8   // wide external screens need more than 4× to show the same region as the pad at max
+        v.maximumZoomScale = DisplayInfo.maxZoom   // wide external screens need more than 4× to show the same region as the pad at max
         v.bouncesZoom = true
         var h: CGFloat = CanvasRep.pageH
         if let d = ScratchStore.shared.load(itemID) {
@@ -1072,7 +1072,7 @@ struct CanvasRep: UIViewRepresentable {
             ctl.applyLock = { [weak v] on in
                 guard let v else { return }
                 v.minimumZoomScale = on ? v.zoomScale : 0.5
-                v.maximumZoomScale = on ? v.zoomScale : 8
+                v.maximumZoomScale = on ? v.zoomScale : DisplayInfo.maxZoom
             }
             ctl.bind(key: "scratch:" + itemID)
             ctl.report(page: 0, of: Int((h / CanvasRep.pageH).rounded()))

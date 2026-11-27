@@ -42,7 +42,7 @@ final class ViewCtl {
         obs.append(nc.addObserver(forName: .canvasZoom, object: nil, queue: .main) { [weak self] n in
             guard let self, let v = self.view, v.window?.isKeyWindow == true, !self.locked else { return }
             let s = n.userInfo?["step"] as? Int ?? 0
-            self.setZoom?(s == 0 ? 1 : min(4, max(0.5, self.zoom * (s > 0 ? 1.25 : 0.8))))
+            self.setZoom?(s == 0 ? 1 : min(DisplayInfo.maxZoom, max(0.5, self.zoom * (s > 0 ? 1.25 : 0.8))))
         })
         obs.append(nc.addObserver(forName: .zoomLockChanged, object: nil, queue: .main) { [weak self] n in
             guard let self, (n.object as? String) == self.key else { return }
