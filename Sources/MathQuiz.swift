@@ -90,6 +90,7 @@ struct MathQuizHome: View {
         List {
             MathContentBanner()
             RecentSection(section: .quiz, subject: subj)
+            if subj == "chem" { AwardSchemeSection() }
             ForEach(lib.books(subj)) { b in
                 Section(T(b.name, b.nameZh)) {
                     ForEach(b.chs.filter { !$0.sets.isEmpty }) { c in
@@ -462,6 +463,91 @@ struct MathQuizRunner: View {
                 let ok = Dictionary(items.map { ($0.q.id, picked[$0.id] == $0.v.a ? 1 : 0) }, uniquingKeysWith: { a, _ in a })
                 PortalSubmit.shared.submit(setID: set.id, attempt: attempt, answers: set.qs.map { ok[$0.id] ?? 0 })
             }
+        }
+    }
+}
+
+
+// MARK: - 测验 › Award Scheme: every Award Scheme MC set and long question, by chapter.
+
+struct AwardSchemeSection: View {
+    @Environment(ProgressStore.self) private var prog
+    private var chapters: [MChapter] {
+        MathLibrary.shared.chapters("chem").filter { c in
+            c.sets.contains { $0.kind == "award" } || (ZhLong.load(c.id)?.qs.contains { ChemKind.key($0.src) == "award" } ?? false)
+        }
+    }
+    var body: some View {
+        let cs = chapters
+        if !cs.isEmpty {
+            Section {
+                ForEach(cs) { c in
+                    NavigationLink { AwardChapterView(chapterID: c.id) } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(c.label)
+                            let qs = c.sets.filter { $0.kind == "award" }.flatMap(\.qids).map { MathMC.key($0) }
+                            let st = prog.stat(qs)
+                            Text("\(qs.count) 道选择题 · 已做 \(st.done) · 长题在里面").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .listRowBackground(Color.cardBackground)
+                }
+            } header: { Text("Award Scheme") } footer: { Text("所有 Award Scheme 卷子的选择题和长题，按章节放在一起；章节页里也还有。") }
+        }
+    }
+}
+
+struct AwardChapterView: View {
+    let chapterID: String
+    @Environment(ProgressStore.self) private var prog
+    @State private var hasLong = false
+    var body: some View {
+        let c = MathLibrary.shared.chapter(chapterID)
+        let sets = (c?.sets ?? []).filter { $0.kind == "award" }
+        List {
+            MathContentBanner()
+            if !sets.isEmpty {
+                Section("选择题") {
+                    ForEach(sets) { s in
+                        NavigationLink(value: Route.mathQuiz(.set(s.id))) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) { Text(s.l).font(.headline); Text(s.t).font(.subheadline).foregroundStyle(.secondary) }
+                                Spacer()
+                                let st = prog.stat(s.qids.map { MathMC.key($0) })
+                                Text(st.done > 0 ? "\(st.correct)/\(st.total)" : "\(s.n)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            }
+                        }
+                        if let full = MathMC.shared.set(s.id) {
+                            let f = ChemKind.filters(full.qs.map { ($0.tg, $0.asg) })
+                            if !f.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(f, id: \.self) { x in
+                                            NavigationLink(value: Route.mathQuiz(.set(s.id + "|" + x))) { Text(ChemKind.chip(x)).font(.caption.bold()) }
+                                                .buttonStyle(.bordered).buttonBorderShape(.capsule)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .listRowBackground(Color.cardBackground)
+            }
+            if hasLong {
+                Section("长题") {
+                    NavigationLink { ZhLongSetView(chapterID: chapterID, src: "award") } label: { Label("长题 · Award Scheme", systemImage: "text.alignleft") }
+                }
+                .listRowBackground(Color.cardBackground)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .appList()
+        .navigationTitle(c.map { "Award Scheme · Ch\($0.n)" } ?? "Award Scheme")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await MathContent.shared.ensure(chapterID) }
+        .task(id: MathContent.shared.loading.count) {
+            hasLong = ZhLong.load(chapterID)?.qs.contains { ChemKind.key($0.src) == "award" } ?? false
         }
     }
 }
