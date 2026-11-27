@@ -820,7 +820,7 @@ struct DSOffer: ViewModifier {
                             .foregroundStyle(.secondary)
                     }
                     .padding(.horizontal, 16).padding(.vertical, 10)
-                    .background(.regularMaterial, in: Capsule())
+                    .glassBackground(Capsule())
                     .shadow(radius: 6, y: 2)
                     .padding(.bottom, 80)
                     .transition(.move(edge: .bottom).combined(with: .opacity))

@@ -1603,7 +1603,7 @@ private struct GlassCard: ViewModifier {
         if #available(iOS 26.0, *) {
             content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         } else {
-            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            content.glassBackground(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 }
@@ -1619,7 +1619,7 @@ struct DownloadOverlay: View {
             Text(T("Downloading…", "正在下载…")).font(.subheadline).foregroundStyle(.secondary)
         }
         .padding(24)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .glassBackground(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

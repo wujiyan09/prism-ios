@@ -220,7 +220,7 @@ struct ZhLongQuestion: View {
                             ForEach([("不会", 0.0), ("部分对", 0.5), ("全对", 1.0)], id: \.0) { o in
                                 let m = q.mk ?? 2
                                 Button(o.0) { ProgressStore.shared.setScore("zl:" + q.id, Int((Double(m) * o.1).rounded()), max: m) }
-                                    .buttonStyle(.bordered)
+                                    .glassButton()
                             }
                         }
                     }

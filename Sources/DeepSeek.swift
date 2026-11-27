@@ -1179,7 +1179,7 @@ extension View {
         if #available(iOS 26.0, *) {
             self.glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         } else {
-            self.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            self.glassBackground(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
     }
 }
@@ -1208,7 +1208,7 @@ extension View {
         if #available(iOS 26.0, *) {
             self.clipShape(shape).glassEffect(.regular, in: shape)
         } else {
-            self.background(.thickMaterial, in: shape).clipShape(shape).shadow(color: .black.opacity(0.2), radius: 10)
+            self.glassBackground(shape).clipShape(shape).shadow(color: .black.opacity(0.2), radius: 10)
         }
     }
 }

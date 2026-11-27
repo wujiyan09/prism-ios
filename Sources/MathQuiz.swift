@@ -183,7 +183,7 @@ struct MathSetsView: View {
                             HStack(spacing: 8) {
                                 ForEach(fs, id: \.self) { f in
                                     NavigationLink(value: Route.mathQuiz(.set(s.id + "|" + f))) { Text(ChemKind.chip(f)).font(.caption.bold()) }
-                                        .buttonStyle(.bordered).buttonBorderShape(.capsule)
+                                        .glassButton().buttonBorderShape(.capsule)
                                 }
                             }
                         }
@@ -536,7 +536,7 @@ struct AwardChapterView: View {
                                     HStack(spacing: 8) {
                                         ForEach(f, id: \.self) { x in
                                             NavigationLink(value: Route.mathQuiz(.set(s.id + "|" + x))) { Text(ChemKind.chip(x)).font(.caption.bold()) }
-                                                .buttonStyle(.bordered).buttonBorderShape(.capsule)
+                                                .glassButton().buttonBorderShape(.capsule)
                                         }
                                     }
                                 }

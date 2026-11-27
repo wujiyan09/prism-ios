@@ -38,7 +38,7 @@ struct PageCluster<Extra: View>: View {
         if #available(iOS 26.0, *) {
             GlassEffectContainer { row.glassEffect(.regular.interactive(), in: .capsule) }
         } else {
-            row.background(.regularMaterial, in: Capsule())
+            row.glassBackground(Capsule())
         }
     }
 }

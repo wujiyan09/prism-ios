@@ -98,7 +98,7 @@ struct ViewHUD: View {
         .padding(.horizontal, 8).frame(minHeight: 36)
         Group {
             if #available(iOS 26.0, *) { row.glassEffect(.regular.interactive(), in: .capsule) }
-            else { row.background(.regularMaterial, in: Capsule()) }
+            else { row.glassBackground(Capsule()) }
         }
         .padding(10)
     }
@@ -119,7 +119,7 @@ struct PageJump: View {
                     Text("第 \(n) / \(ctl.count) 页").font(.body.monospacedDigit()).lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 }
                     .onChange(of: n) { _, v in field = "\(v)" }
-                Button("前往", action: go).buttonStyle(.borderedProminent)
+                Button("前往", action: go).glassButton(prominent: true)
             }
             ScrollViewReader { proxy in
                 ScrollView {

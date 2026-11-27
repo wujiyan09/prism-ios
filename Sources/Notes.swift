@@ -728,7 +728,7 @@ struct NoteDocView: View {
         .navigationDestination(item: $newPaper) { nid in ImportPaperView(id: nid) }
         .sheet(isPresented: $showPages) { NavigationStack { NotePagesSheet(id: id, current: $current) } }
         .sheet(item: $editing) { it in NavigationStack { NoteTextEditor(docID: id, item: it) } }
-        .sheet(item: $share) { s in ActivitySheet(url: s.url) }
+        .sheet(item: $share) { s in RangeShareSheet(url: s.url, current: pageIndex) }
         .sheet(isPresented: $camera) { CameraPicker { im in camera = false; if let im { insert(im) } }.ignoresSafeArea() }
         .importPickers(source: $imgSource, photos: $imgPhotos) { d, _ in
             guard let d else { return }
@@ -977,7 +977,7 @@ struct NoteItemView: View {
                         if item.kind == "text" { Button { editing = item } label: { Image(systemName: "pencil") } }
                         Button(role: .destructive) { delete() } label: { Image(systemName: "trash") }
                     }
-                    .font(.callout).padding(6).background(.regularMaterial, in: Capsule()).offset(y: -36)
+                    .font(.callout).padding(6).glassBackground(Capsule()).offset(y: -36)
                 }
             }
             .offset(x: item.x * W + drag.width, y: item.y * W + drag.height)
