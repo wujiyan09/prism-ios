@@ -192,7 +192,7 @@ extension View {
         if #available(iOS 26.0, *) {
             if prominent { self.buttonStyle(.glassProminent) } else { self.buttonStyle(.glass) }
         } else {
-            if prominent { self.glassButton(prominent: true) } else { self.glassButton() }
+            if prominent { self.buttonStyle(.borderedProminent) } else { self.buttonStyle(.bordered) }
         }
     }
     /// Groups neighbouring glass buttons so they blend (e.g. ✓ / ✗).

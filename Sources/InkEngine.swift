@@ -1452,13 +1452,3 @@ struct QuickPen: View {
     }
 }
 
-extension View {
-    /// Liquid Glass buttons on iOS 26; bordered styles before.
-    @ViewBuilder func glassButton(prominent: Bool = false) -> some View {
-        if #available(iOS 26.0, *) {
-            if prominent { self.buttonStyle(.glassProminent) } else { self.buttonStyle(.glass) }
-        } else {
-            if prominent { self.buttonStyle(.borderedProminent) } else { self.buttonStyle(.bordered) }
-        }
-    }
-}
