@@ -136,6 +136,23 @@ enum ImpPDF {
         for im in images { if let p = PDFKit.PDFPage(image: im) { d.insert(p, at: d.pageCount) } }
         return d
     }
+    /// Photos / scans → PDF without blocking the UI: pages drawn into PDF data off the main thread (no PDFKit
+    /// objects cross threads); the PDFDocument itself is created on the main thread from that data.
+    @MainActor static func fromAsync(images: [UIImage]) async -> PDFDocument {
+        let data: Data = await withCheckedContinuation { c in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let first = images.first?.size ?? CGSize(width: 595, height: 842)
+                let r = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: first))
+                c.resume(returning: r.pdfData { ctx in
+                    for im in images {
+                        ctx.beginPage(withBounds: CGRect(origin: .zero, size: im.size), pageInfo: [:])
+                        im.draw(in: CGRect(origin: .zero, size: im.size))
+                    }
+                })
+            }
+        }
+        return PDFDocument(data: data) ?? from(images: images)
+    }
     static func pageImage(_ d: PDFDocument, _ i: Int, width: CGFloat = 1400) -> UIImage? {
         guard let p = d.page(at: i) else { return nil }
         let b = p.bounds(for: .mediaBox)
@@ -365,13 +382,13 @@ struct ImportPickers: ViewModifier {
                     var ims: [UIImage] = []
                     for it in items { if let d = try? await it.loadTransferable(type: Data.self), let im = UIImage(data: d) { ims.append(im) } }
                     photos = []
-                    let d = ims.isEmpty ? nil : ImpPDF.from(images: ims)
+                    let d = ims.isEmpty ? nil : await ImpPDF.fromAsync(images: ims)
                     try? await Task.sleep(for: .milliseconds(600))   // let the picker finish dismissing
                     done(d, ims.isEmpty ? "没有读到图片" : nil)
                 }
             }
             .fullScreenCover(isPresented: Binding(get: { source == .scan }, set: { if !$0 { source = nil } })) {
-                DocScanner { ims in source = nil; if !ims.isEmpty { done(ImpPDF.from(images: ims), nil) } }.ignoresSafeArea()
+                DocScanner { ims in source = nil; if !ims.isEmpty { busy = true; Task { let d = await ImpPDF.fromAsync(images: ims); busy = false; done(d, nil) } } }.ignoresSafeArea()
             }
     }
 
