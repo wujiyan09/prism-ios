@@ -844,7 +844,11 @@ struct DeepSeekPanel: View {
         var payload: [[String: Any]] = [["role": "system", "content": DSClient.systemPrompt]]
         payload.append(DSClient.message("user", DSPart(text: ci.text, images: ci.images), vision: m.vision))
         payload.append(["role": "assistant", "content": "好的，我看到了。请问。"])
-        for h in history.suffix(16) where !h.text.isEmpty { payload.append(["role": h.role, "content": h.text]) }
+        // History by token budget (~32K tokens; CJK ≈ 1 token/char, other text ≈ 4 chars/token), newest first.
+        func toks(_ t: String) -> Int { t.unicodeScalars.reduce(0) { $0 + ($1.value > 0x2E7F ? 4 : 1) } / 4 + 4 }
+        var budget = 32_000, kept: [DSMessage] = []
+        for h in history.reversed() where !h.text.isEmpty { let c = toks(h.text); if c > budget { break }; budget -= c; kept.append(h) }
+        for h in kept.reversed() { payload.append(["role": h.role, "content": h.text]) }
         payload.append(["role": "user", "content": t])
         task = Task {
             // Tokens are buffered and flushed ~10×/s so the list isn't re-laid out per token.
