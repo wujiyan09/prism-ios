@@ -382,6 +382,12 @@ enum InkPaletteHost {
         set { UserDefaults.standard.set(newValue ?? -1, forKey: "ink.palette.corner"); refresh() }
     }
     static let disc: CGFloat = 56
+    /// Docked to a side edge → vertical palette ("l" / "r"); otherwise horizontal.
+    static var edge: String? {
+        get { UserDefaults.standard.string(forKey: "ink.palette.edge").flatMap { $0.isEmpty ? nil : $0 } }
+        set { UserDefaults.standard.set(newValue ?? "", forKey: "ink.palette.edge") }
+    }
+    static var vertical: Bool { corner == nil && edge != nil }
     static func place(_ v: UIView, in w: UIWindow) {
         let m: CGFloat = 6
         let sa = w.safeAreaInsets
@@ -390,6 +396,15 @@ enum InkPaletteHost {
             let x = c % 2 == 0 ? sa.left + m + disc / 2 : w.bounds.width - sa.right - m - disc / 2
             let y = c < 2 ? sa.top + m + disc / 2 : w.bounds.height - m - disc / 2
             v.center = CGPoint(x: x, y: y); return
+        }
+        if let e = edge {
+            let size = v.sizeThatFits(CGSize(width: 200, height: w.bounds.height - sa.top - 20))
+            v.bounds = CGRect(origin: .zero, size: CGSize(width: size.width, height: min(size.height, w.bounds.height - sa.top - 20)))
+            let hw = v.bounds.width / 2, hh = v.bounds.height / 2
+            let fy = UserDefaults.standard.object(forKey: "ink.palette.y") as? Double ?? 0.5
+            let x = e == "l" ? sa.left + m + hw : w.bounds.width - sa.right - m - hw
+            v.center = CGPoint(x: x, y: min(w.bounds.height - hh - m, max(sa.top + hh + m, CGFloat(fy) * w.bounds.height)))
+            return
         }
         let size = v.sizeThatFits(CGSize(width: w.bounds.width - 20, height: 200))
         v.bounds = CGRect(origin: .zero, size: CGSize(width: min(size.width, w.bounds.width - 20), height: size.height))
@@ -412,7 +427,13 @@ enum InkPaletteHost {
         if (left || right) && (top || bottom) {
             UserDefaults.standard.set(-1, forKey: "ink.palette.corner")
             UserDefaults.standard.set((top ? 0 : 2) + (right ? 1 : 0), forKey: "ink.palette.corner")
+        } else if left || right {
+            // Side edge: dock vertically there.
+            UserDefaults.standard.set(-1, forKey: "ink.palette.corner")
+            edge = left ? "l" : "r"
+            UserDefaults.standard.set(Double(p.y / max(1, w.bounds.height)), forKey: "ink.palette.y")
         } else {
+            edge = nil
             UserDefaults.standard.set(-1, forKey: "ink.palette.corner")
             UserDefaults.standard.set(Double(p.x / max(1, w.bounds.width)), forKey: "ink.palette.x")
             UserDefaults.standard.set(Double(p.y / max(1, w.bounds.height)), forKey: "ink.palette.y")
@@ -423,7 +444,7 @@ enum InkPaletteHost {
     static func expand(in w: UIWindow?) {
         guard let c = corner else { return }
         let fx: Double = c % 2 == 0 ? 0 : 1, fy: Double = c < 2 ? 0 : 1
-        UserDefaults.standard.set(fx, forKey: "ink.palette.x"); UserDefaults.standard.set(fy, forKey: "ink.palette.y")
+        UserDefaults.standard.set(fx, forKey: "ink.palette.x"); UserDefaults.standard.set(fy, forKey: "ink.palette.y"); edge = nil
         corner = nil
         if let w, let h = hosts[ObjectIdentifier(w)] { update(); UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0) { place(h.view, in: w) } }
     }
@@ -505,11 +526,13 @@ struct InkPalette: View {
     }
     private var full: some View {
         let t = picker.selectedTool
-        return HStack(spacing: 8) {
-            Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary).accessibilityHidden(true)
+        let vert = InkPaletteHost.vertical
+        let L = vert ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+        return L {
+            Image(systemName: vert ? "line.3.vertical" : "line.3.horizontal").foregroundStyle(.tertiary).accessibilityHidden(true)
             Button { canvas?.undo() } label: { Image(systemName: "arrow.uturn.backward") }.keyboardShortcut("z", modifiers: .command)
             Button { canvas?.redo() } label: { Image(systemName: "arrow.uturn.forward") }.keyboardShortcut("z", modifiers: [.command, .shift])
-            Divider().frame(height: 32)
+            Divider().frame(width: vert ? 32 : nil, height: vert ? nil : 32)
             ForEach(presets.presets) { p in
                 Button { if t.presetID == p.id { quick = p.id } else { picker.select(p) } } label: {
                     ZStack {
@@ -520,18 +543,19 @@ struct InkPalette: View {
                     .overlay(Circle().stroke(t.presetID == p.id ? Color.accentColor : .clear, lineWidth: 2))
                 }
                 .contextMenu { Button("编辑笔", systemImage: "slider.horizontal.3") { editing = true } }
-                .popover(isPresented: Binding(get: { quick == p.id }, set: { if !$0 { quick = nil } })) {
+                .popover(isPresented: Binding(get: { quick == p.id }, set: { if !$0 { quick = nil } }),
+                         arrowEdge: InkPaletteHost.edge == "l" ? .trailing : InkPaletteHost.edge == "r" ? .leading : ((UserDefaults.standard.object(forKey: "ink.palette.y") as? Double ?? 0) > 0.5 ? .bottom : .top)) {
                     QuickPen(id: p.id, picker: picker).presentationCompactAdaptation(.popover)
                 }
                 .accessibilityLabel("\(p.kind.title)")
             }
-            Divider().frame(height: 32)
+            Divider().frame(width: vert ? 32 : nil, height: vert ? nil : 32)
             tool(.eraser); tool(.pixelEraser); tool(.lasso); tool(.laser)
             Button { editing = true } label: { Image(systemName: "slider.horizontal.3") }
         }
         .font(.title3)
         .buttonStyle(.borderless)
-        .padding(.horizontal, 16).frame(minHeight: 60)
+        .padding(vert ? .vertical : .horizontal, 16).frame(minWidth: vert ? 60 : nil, minHeight: vert ? nil : 60)
         .glassBackground(Capsule())
         .sheet(isPresented: $editing) { InkPresetEditor(picker: picker) }
     }

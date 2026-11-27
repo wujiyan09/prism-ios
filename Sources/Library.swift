@@ -56,12 +56,18 @@ final class Library {
         return try? JSONDecoder().decode(Manifest.self, from: d)
     }
 
+    static var hasCache: Bool { FileManager.default.fileExists(atPath: cacheDir.appendingPathComponent("manifest.json").path) }
     func load() async {
         let hasCache = Self.manifest(at: Self.cacheDir.appendingPathComponent("manifest.json")) != nil
         if hasCache {
             let result = await Task.detached(priority: .userInitiated) { Self.build(fromCache: true) }.value
             apply(result)
-            await refresh()
+            // Update check at most every 3 hours, remembered across launches.
+            let last = UserDefaults.standard.double(forKey: "lib.lastCheck." + Self.subject.cacheName)
+            if Date().timeIntervalSince1970 - last > 3 * 3600 {
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lib.lastCheck." + Self.subject.cacheName)
+                Task { await refresh() }
+            }
         } else {
             await firstDownload()
         }

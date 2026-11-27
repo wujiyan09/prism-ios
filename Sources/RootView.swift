@@ -10,8 +10,12 @@ struct RootView: View {
     var body: some View {
         let T = Tr(en: lang == "en")
         Group {
-            if !lib.loaded || lib.needsDownload {
+            if lib.needsDownload || (!lib.loaded && !Library.hasCache) {
+                // Only a real first download (nothing on disk) gets this screen.
                 DownloadView()
+            } else if !lib.loaded {
+                // Content is on disk and being read in (a moment): quiet launch screen, never "正在下载".
+                Color.appBackground.ignoresSafeArea().overlay { ProgressView().controlSize(.small).opacity(0.6) }
             } else if hsc == .compact && UIDevice.current.userInterfaceIdiom != .pad {
                 // iPad keeps one layout at every window size (Stage Manager / Split View): switching layouts rebuilt the navigation and closed the open document.
                 tabs(T)

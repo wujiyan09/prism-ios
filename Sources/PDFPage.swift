@@ -16,7 +16,19 @@ struct PDFPage: View {
     @State private var inkOn = false
     @State private var vctl = ViewCtl()
 
+    /// Downloaded papers live in Application Support (Caches can be purged by iOS → re-download on every open).
     private var file: URL {
+        let name0 = url.absoluteString.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? url.lastPathComponent
+        let fn = String(name0.suffix(120)) + ".pdf"
+        let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("papers", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        let old = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("papers/" + fn)
+        if !FileManager.default.fileExists(atPath: d.appendingPathComponent(fn).path), FileManager.default.fileExists(atPath: old.path) {
+            try? FileManager.default.moveItem(at: old, to: d.appendingPathComponent(fn))
+        }
+        return d.appendingPathComponent(fn)
+    }
+    private var fileOld: URL {
         let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("papers", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         let name = url.absoluteString.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? url.lastPathComponent

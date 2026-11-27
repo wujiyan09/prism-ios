@@ -1225,7 +1225,7 @@ struct PadPagedCanvas: UIViewRepresentable {
 
     static func dismantleUIView(_ sv: UIScrollView, coordinator c: Coord) {
         c.wires.forEach { $0.tearDown() }
-        for w in c.wires where w.canvas.isFirstResponder { c.picker.setVisible(false, forFirstResponder: w.canvas) }
+        for w in c.wires where w.near && w.canvas.isFirstResponder { c.picker.setVisible(false, forFirstResponder: w.canvas) }
         if let o = c.vpObs { NotificationCenter.default.removeObserver(o) }
         ToolSync.shared.unregister(c.picker)
     }
@@ -1361,7 +1361,6 @@ struct PadPagedCanvas: UIViewRepresentable {
 final class PadPageWire: NSObject, InkCanvasDelegate {
     let page: PadPage
     let view: UIView
-    let canvas: QuietCanvas
     let scale: CGFloat
     private let index: Int
     private var applying = false
@@ -1429,7 +1428,6 @@ final class PadPageWire: NSObject, InkCanvasDelegate {
         view.backgroundColor = .white
         view.layer.shadowColor = UIColor.black.cgColor; view.layer.shadowOpacity = 0.12; view.layer.shadowRadius = 4; view.layer.shadowOffset = CGSize(width: 0, height: 2)
         view.layer.shadowPath = UIBezierPath(rect: CGRect(origin: .zero, size: frame.size)).cgPath   // no offscreen shadow pass
-        canvas = QuietCanvas(frame: CGRect(origin: .zero, size: page.size)); canvas.isPadCanvas = true
         super.init()
         // Everything inside works in page units; the wrapper scales it to the column width.
         let inner = UIView(frame: CGRect(origin: .zero, size: page.size))
@@ -1440,20 +1438,11 @@ final class PadPageWire: NSObject, InkCanvasDelegate {
         // Page image is rendered lazily, only for pages near the screen (was: every page rendered at 2× on open).
         bgView.frame = inner.bounds; bgView.contentMode = .scaleToFill
         inner.addSubview(bgView)
-        canvas.overrideUserInterfaceStyle = .light
         for (img, r) in page.figures() {
             let iv = UIImageView(image: img); iv.frame = r; iv.contentMode = .scaleAspectFit; iv.backgroundColor = .white
             inner.addSubview(iv)
         }
-        canvas.backgroundColor = .clear
-        canvas.isOpaque = false
-        canvas.isScrollEnabled = false
-        canvas.drawingPolicy = .pencilOnly
-        canvas.contentSize = page.size
-        canvas.tool = picker.selectedTool
-        canvas.delegate = self
         self.inner = inner   // canvas is added (and its drawing loaded) only when the page comes near the screen
-        picker.addObserver(canvas)
         PadHub.shared.listen(page.channel, self) { [weak self] d in
             guard let self, self.loaded else { return }   // far pages reload from the hub when they come back
             self.liveInk.committed()
@@ -1463,39 +1452,59 @@ final class PadPageWire: NSObject, InkCanvasDelegate {
             guard let self, self.loaded else { return }
             self.liveInk.apply(l, k: 1, to: self.canvas) { self.applying = $0 }
         }
-        let pen = PenTap(target: nil, action: nil)
-        let ch = page.channel
-        pen.onBegin = { [weak self] in
-            PadHub.shared.strokeSeq += 1
-            self?.lasso.begin()
-            PadHub.shared.live("hover:" + ch, nil)
-        }
-        pen.onCancel = { PadHub.shared.live(ch, nil) }
-        pen.onPoints = { [weak self, weak pen] pts, fs in
-            guard let self, let p = self.picker else { return }
-            let (k0, color, width) = PadHub.describe(p.selectedTool)
-            guard k0 != .other, !PadHub.inkKinds.contains(k0) else { return }
-            self.penFed = true
-            self.lastPts = pts
-            let kind = self.lasso.kind(k0, pts)
-            PadHub.shared.live(ch, .init(points: pts, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? self.lasso.poly : [], az: pen?.az ?? [], alt: pen?.alt ?? [], ts: pen?.ts ?? []))
-        }
-        pen.onEnd = { [weak self] in
-            guard let self else { return }
-            self.lasso.end(self.lastPts)
-            let id = PadHub.shared.strokeSeq
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                if PadHub.shared.strokeSeq == id, self?.committed != id { PadHub.shared.live(ch, nil) }
-            }
-        }
-        canvas.addGestureRecognizer(pen)
-        canvas.onActive = { st in PadHub.shared.live(ch, st.map { .init(points: [], color: $0.color, width: $0.width, kind: .pen, stroke: $0) }) }
-        canvas.onLiveDrawing = { [weak self] d in if let self { PadHub.shared.publish(ch, d, from: self) } }
-        canvas.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
         NotificationCenter.default.addObserver(forName: .noteInkFlush, object: nil, queue: .main) { [weak self] _ in self?.flush() }
     }
 
+    /// The PencilKit-style canvas is made only when the page first comes near the screen (lazy wrappers:
+    /// a 100-page document no longer builds 100 canvases on open).
+    private var canvasMade = false
+    private(set) lazy var canvas: QuietCanvas = {
+        canvasMade = true
+        let canvas = QuietCanvas(frame: CGRect(origin: .zero, size: page.size)); canvas.isPadCanvas = true
+        let picker = self.picker
+        let ch = page.channel
+            canvas.overrideUserInterfaceStyle = .light
+            canvas.backgroundColor = .clear
+            canvas.isOpaque = false
+            canvas.isScrollEnabled = false
+            canvas.drawingPolicy = .pencilOnly
+            canvas.contentSize = page.size
+            canvas.tool = picker?.selectedTool ?? .defaultPen
+            canvas.delegate = self
+            picker?.addObserver(canvas)
+            let pen = PenTap(target: nil, action: nil)
+            pen.onBegin = { [weak self] in
+                PadHub.shared.strokeSeq += 1
+                self?.lasso.begin()
+                PadHub.shared.live("hover:" + ch, nil)
+            }
+            pen.onCancel = { PadHub.shared.live(ch, nil) }
+            pen.onPoints = { [weak self, weak pen] pts, fs in
+                guard let self, let p = self.picker else { return }
+                let (k0, color, width) = PadHub.describe(p.selectedTool)
+                guard k0 != .other, !PadHub.inkKinds.contains(k0) else { return }
+                self.penFed = true
+                self.lastPts = pts
+                let kind = self.lasso.kind(k0, pts)
+                PadHub.shared.live(ch, .init(points: pts, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? self.lasso.poly : [], az: pen?.az ?? [], alt: pen?.alt ?? [], ts: pen?.ts ?? []))
+            }
+            pen.onEnd = { [weak self] in
+                guard let self else { return }
+                self.lasso.end(self.lastPts)
+                let id = PadHub.shared.strokeSeq
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    if PadHub.shared.strokeSeq == id, self?.committed != id { PadHub.shared.live(ch, nil) }
+                }
+            }
+            canvas.addGestureRecognizer(pen)
+            canvas.onActive = { st in PadHub.shared.live(ch, st.map { .init(points: [], color: $0.color, width: $0.width, kind: .pen, stroke: $0) }) }
+            canvas.onLiveDrawing = { [weak self] d in if let self { PadHub.shared.publish(ch, d, from: self) } }
+            canvas.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
+        return canvas
+    }()
+
     func sharpen(_ s: CGFloat) {
+        guard canvasMade else { return }
         canvas.extraScale = s / max(1, DisplayInfo.scale(canvas))
     }
 
@@ -1503,7 +1512,7 @@ final class PadPageWire: NSObject, InkCanvasDelegate {
         flush()
         PadHub.shared.stop(self)
         PadHub.shared.stopLive(self)
-        picker?.removeObserver(canvas)
+        if canvasMade { picker?.removeObserver(canvas) }
     }
 
     @objc func drawing(_ g: UIGestureRecognizer) {
