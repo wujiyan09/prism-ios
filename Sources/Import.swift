@@ -579,12 +579,12 @@ struct ImportPaperView: View {
             WorkSplit(on: splitOn && (hand || !q.isMC), sheetID: sheet, figs: []) {
                 ImportQuestionView(id: id, qid: q.id, doc: doc, sheetID: sheet)
                     .id(q.id)
-                    .deepSeek(ImpCtx.question(p, q, doc: doc, sheet: splitOn ? sheet : nil))
             } bar: {
                 PageCluster(index: index, count: p.qs.count,
                             prev: index > 0 ? { index -= 1 } : nil,
                             next: index < p.qs.count - 1 ? { index += 1 } : nil)
             }
+            .deepSeek(ImpCtx.question(p, q, doc: doc, sheet: splitOn ? sheet : nil))
         }
     }
 

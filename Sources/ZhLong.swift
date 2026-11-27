@@ -78,10 +78,9 @@ struct ZhLongSetView: View {
         Group {
             if let f = file, !f.qs.isEmpty {
                 let q = f.qs[min(index, f.qs.count - 1)]
-                WorkSplit(on: splitOn && ZLInput.mode(q.id) == "hand", sheetID: sheet, figs: [], ratio: 0.5) {
+                WorkSplit(on: splitOn && ZLInput.mode(q.id) == "hand", sheetID: sheet, figs: q.figImages, ratio: 0.5) {
                     ZhLongQuestion(q: q, chapter: chapter, review: review, sheetID: sheet).id(q.id)
                         .environment(\.zhSerif, chapter?.isZh ?? true)
-                        .deepSeek(ctx(q))
                 } bar: {
                     let fs = src == "award" ? ChemKind.filters(all.map { ($0.tg, $0.asg) }) : []
                     if !fs.isEmpty {
@@ -94,6 +93,7 @@ struct ZhLongSetView: View {
                                 prev: index > 0 ? { index -= 1 } : nil,
                                 next: index < f.qs.count - 1 ? { index += 1 } : nil)
                 }
+                .deepSeek(ctx(q))   // panel at the far right: question | scratch | DeepSeek
             } else if file != nil {
                 ContentUnavailableView(T("No long questions yet", "这一课还没有长答题"), systemImage: "text.alignleft")
             } else {

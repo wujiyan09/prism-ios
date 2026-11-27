@@ -1385,7 +1385,12 @@ struct CanvasRep: UIViewRepresentable {
             for p in placed {
                 guard let d = p.png, let img = UIImage(data: d) else { imageViews.append(UIImageView()); continue }
                 let w = CGFloat(p.w), hgt = w * img.size.height / max(img.size.width, 1)
-                let iv = UIImageView(image: img)
+                // Decode once at a sensible size (≤ 4× its on-paper width) so pinch-zoom doesn't decode/scale a huge PNG each frame.
+                let px = min(img.size.width * img.scale, w * 4)
+                let small = img.size.width * img.scale > px * 1.2
+                    ? UIGraphicsImageRenderer(size: CGSize(width: px, height: px * img.size.height / max(img.size.width, 1)), format: { let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f }()).image { _ in img.draw(in: CGRect(x: 0, y: 0, width: px, height: px * img.size.height / max(img.size.width, 1))) }
+                    : (img.preparingForDisplay() ?? img)
+                let iv = UIImageView(image: small)
                 iv.frame = CGRect(x: p.x, y: p.y, width: w, height: hgt)
                 iv.contentMode = .scaleAspectFit
                 iv.layer.borderColor = UIColor.systemGray4.cgColor
