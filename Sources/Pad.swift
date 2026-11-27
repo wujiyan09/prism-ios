@@ -84,18 +84,29 @@ final class PadHub {
     func forget(_ ch: String) { latest[ch] = nil }
 
     // Live mid-stroke preview (pad → main), points in logical units. nil points = clear.
-    enum Kind { case pen, pencil, marker, eraser, bitmapEraser, lasso, lassoDrag, other }
+    enum Kind { case pen, pencil, marker, eraser, bitmapEraser, lasso, lassoDrag, monoline, fountain, reed, watercolor, crayon, other }
     /// width: logical units; forces: 0…1 per point (empty = constant width).
     struct Live { var points: [CGPoint]; var color: UIColor; var width: CGFloat; var forces: [CGFloat] = []; var kind: Kind = .pen
         /// lassoDrag: the selection outline (logical units) the drag started from.
-        var poly: [CGPoint] = [] }
+        var poly: [CGPoint] = []
+        /// Pencil azimuth (radians, view space) and altitude (0 = flat … π/2 = upright) per point; empty = unknown.
+        var az: [CGFloat] = []
+        var alt: [CGFloat] = [] }
     static func describe(_ t: PKTool) -> (Kind, UIColor, CGFloat) {
         if let i = t as? PKInkingTool {
             switch i.inkType {
             case .pen: return (.pen, i.color, i.width)
             case .pencil: return (.pencil, i.color, i.width)
             case .marker: return (.marker, i.color, i.width)
-            default: return (.other, i.color, i.width)
+            default:
+                // Newer inks (some only exist on newer iOS): match by raw value so every inking tool streams.
+                let r = i.inkType.rawValue.lowercased()
+                if r.contains("monoline") { return (.monoline, i.color, i.width) }
+                if r.contains("fountain") { return (.fountain, i.color, i.width) }
+                if r.contains("reed") { return (.reed, i.color, i.width) }
+                if r.contains("watercolor") { return (.watercolor, i.color, i.width) }
+                if r.contains("crayon") { return (.crayon, i.color, i.width) }
+                return (.pen, i.color, i.width)
             }
         }
         if let e = t as? PKEraserTool {
@@ -162,14 +173,17 @@ final class LivePreview {
         var alpha: CGFloat = 1
         var base = l.width * k
         switch l.kind {
-        case .pencil: alpha = 0.75
+        case .pencil: alpha = 0.8
+        case .crayon: alpha = 0.85
         case .marker: alpha = 0.5
+        case .watercolor: alpha = 0.4
         case .bitmapEraser: colour = paper
         default: break
         }
         layer.lineDashPattern = l.kind == .lasso ? [6, 5] : nil
         if l.kind == .lasso { base = 2; colour = .systemBlue }
-        if l.kind == .lasso || l.kind == .marker || l.kind == .bitmapEraser || l.forces.count != pts.count {
+        layer.opacity = 1
+        if l.kind == .lasso || l.kind == .bitmapEraser || (l.kind == .monoline && l.az.isEmpty) {
             // Constant width: one stroked path.
             buckets.forEach { $0.path = nil }
             // Smooth: quad curves through midpoints.
@@ -187,28 +201,57 @@ final class LivePreview {
             layer.fillColor = nil
             layer.strokeColor = colour.withAlphaComponent(alpha).cgColor
             layer.lineWidth = max(1, base)
-            layer.lineCap = l.kind == .marker ? .square : .round
+            layer.lineCap = .round
             return
         }
-        // Pressure-sensitive (pen / pencil): continuous round-capped segments, grouped into width buckets
-        // (one sublayer per bucket) so the line never breaks up into dots.
-        if l.kind == .pencil { base *= 0.8 }
-        func w(_ i: Int) -> CGFloat { max(0.6, base * (0.35 + 0.9 * min(1, l.forces[i]))) }
-        let n = 8
+        // Variable width per point: pressure, tilt (altitude) and nib angle (azimuth vs. stroke direction).
+        // Drawn opaque in width buckets; the layer's own opacity gives see-through inks one even transparency.
+        let hasF = l.forces.count == pts.count, hasA = l.az.count == pts.count && l.alt.count == pts.count
+        func f(_ i: Int) -> CGFloat { hasF ? min(1, max(0, l.forces[i])) : 0.5 }
+        func tilt(_ i: Int) -> CGFloat { hasA ? max(0, 1 - l.alt[i] / (.pi / 2)) : 0 }   // 0 upright … 1 flat
+        func nib(_ i: Int) -> CGFloat {
+            // |sin(direction − nib angle)|: wide across the nib, thin along it.
+            guard hasA, pts.count > 1 else { return 0.7 }
+            let a = pts[max(0, i - 1)], b = pts[min(pts.count - 1, max(1, i))]
+            let dir = atan2(b.y - a.y, b.x - a.x)
+            return abs(sin(dir - l.az[i]))
+        }
+        func w(_ i: Int) -> CGFloat {
+            switch l.kind {
+            case .monoline: return base
+            case .pencil: return base * 0.8 * (0.6 + 0.6 * f(i)) * (1 + 2.5 * tilt(i))
+            case .crayon: return base * (0.7 + 0.5 * f(i)) * (1 + 1.5 * tilt(i))
+            case .marker: return base * (0.35 + 0.65 * nib(i)) * (1 + 0.5 * tilt(i))
+            case .fountain: return base * (0.35 + 0.9 * f(i)) * (0.35 + 0.65 * nib(i))
+            case .reed: return base * (0.15 + 0.85 * nib(i))
+            case .watercolor: return base * (0.6 + 0.8 * f(i))
+            default: return base * (0.35 + 0.9 * f(i))
+            }
+        }
+        if l.kind == .pencil || l.kind == .crayon {
+            // Flatter pencil = lighter shading.
+            let t = (0..<pts.count).map(tilt).reduce(0, +) / CGFloat(max(1, pts.count))
+            alpha *= 1 - 0.45 * t
+        }
+        let n = 10
         while buckets.count < n { let b = CAShapeLayer(); b.fillColor = nil; b.lineCap = .round; b.lineJoin = .round; layer.addSublayer(b); buckets.append(b) }
-        let lo = max(0.6, base * 0.35), hi = max(lo + 0.01, base * 1.25)
+        let ws = (0..<pts.count).map { max(0.6, w($0)) }
+        let lo = ws.min() ?? 1, hi = max(lo + 0.01, ws.max() ?? 1)
         var paths = (0..<n).map { _ in CGMutablePath() }
         if pts.count == 1 { paths[0].move(to: pts[0]); paths[0].addLine(to: CGPoint(x: pts[0].x + 0.1, y: pts[0].y)) }
         for i in pts.indices.dropFirst() {
-            let ww = (w(i - 1) + w(i)) / 2
+            let ww = (ws[i - 1] + ws[i]) / 2
             let b = min(n - 1, max(0, Int(((ww - lo) / (hi - lo)) * CGFloat(n))))
             paths[b].move(to: pts[i - 1]); paths[b].addLine(to: pts[i])
         }
         layer.path = nil
-        let c = colour.withAlphaComponent(alpha).cgColor
+        layer.opacity = Float(alpha)
+        let c = colour.withAlphaComponent(1).cgColor
+        let cap: CAShapeLayerLineCap = l.kind == .marker || l.kind == .reed ? .butt : .round
         for (k2, b) in buckets.enumerated() {
             b.path = paths[k2].isEmpty ? nil : paths[k2]
             b.strokeColor = c
+            b.lineCap = cap
             b.lineWidth = lo + (hi - lo) * (CGFloat(k2) + 0.5) / CGFloat(n)
         }
     }
@@ -291,6 +334,10 @@ final class LiveHost {
 /// Watches pen touches on the pad without interfering with PencilKit, streaming points (incl. coalesced) to the main window.
 final class PenTap: UIGestureRecognizer, UIGestureRecognizerDelegate {
     var onPoints: (([CGPoint], [CGFloat]) -> Void)?
+    /// Azimuth / altitude per streamed point (same count as the points).
+    private(set) var az: [CGFloat] = []
+    private(set) var alt: [CGFloat] = []
+    private var azs: [CGFloat] = [], alts: [CGFloat] = []
     private var fs: [CGFloat] = []
     var onEnd: (() -> Void)?
     var onBegin: (() -> Void)?
@@ -304,7 +351,7 @@ final class PenTap: UIGestureRecognizer, UIGestureRecognizerDelegate {
     }
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
     override func touchesBegan(_ t: Set<UITouch>, with e: UIEvent) {
-        pts = []; fs = []; onBegin?(); add(t, e)
+        pts = []; fs = []; azs = []; alts = []; onBegin?(); add(t, e)
     }
     override func touchesMoved(_ t: Set<UITouch>, with e: UIEvent) { add(t, e) }
     override func touchesEnded(_ t: Set<UITouch>, with e: UIEvent) { add(t, e); finish() }
@@ -312,9 +359,11 @@ final class PenTap: UIGestureRecognizer, UIGestureRecognizerDelegate {
     private func add(_ t: Set<UITouch>, _ e: UIEvent) {
         guard let v = view, let touch = t.first else { return }
         func f(_ t: UITouch) -> CGFloat { t.maximumPossibleForce > 0 ? t.force / t.maximumPossibleForce : 0.5 }
-        for c in e.coalescedTouches(for: touch) ?? [touch] { pts.append(c.location(in: v)); fs.append(f(c)) }
+        for c in e.coalescedTouches(for: touch) ?? [touch] { pts.append(c.location(in: v)); fs.append(f(c)); azs.append(c.azimuthAngle(in: v)); alts.append(c.altitudeAngle) }
         var show = pts, sf = fs
-        for p in e.predictedTouches(for: touch) ?? [] { show.append(p.location(in: v)); sf.append(f(p)) }
+        var a = azs, b = alts
+        for p in e.predictedTouches(for: touch) ?? [] { show.append(p.location(in: v)); sf.append(f(p)); a.append(p.azimuthAngle(in: v)); b.append(p.altitudeAngle) }
+        az = a; alt = b
         onPoints?(show, sf)
     }
     private func finish() { pts = []; onEnd?(); state = .failed }
@@ -674,7 +723,7 @@ struct PadCanvas: UIViewRepresentable {
             if let ch = c?.parent.page.channel { PadHub.shared.live("hover:" + ch, nil) }   // hover dot off at pen-down
         }
         pen.onCancel = { [weak c] in if let ch = c?.parent.page.channel { PadHub.shared.live(ch, nil) } }
-        pen.onPoints = { [weak c, weak v] pts, fs in
+        pen.onPoints = { [weak c, weak v, weak pen] pts, fs in
             guard let c, let v else { return }
             let (k0, color, width) = PadHub.describe(c.picker.selectedTool)
             guard k0 != .other else { return }
@@ -683,7 +732,7 @@ struct PadCanvas: UIViewRepresentable {
             let lp = pts.map { CGPoint(x: $0.x / z, y: $0.y / z) }
             c.lastPts = lp
             let kind = c.lasso.kind(k0, lp)
-            PadHub.shared.live(c.parent.page.channel, .init(points: lp, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? c.lasso.poly : []))
+            PadHub.shared.live(c.parent.page.channel, .init(points: lp, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? c.lasso.poly : [], az: pen?.az ?? [], alt: pen?.alt ?? []))
         }
         // Fallback that always works: follow PencilKit's own drawing recogniser (if the pen watcher gets no touches).
         v.drawingGestureRecognizer.addTarget(c, action: #selector(Coord.drawing(_:)))
@@ -1184,14 +1233,14 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
             PadHub.shared.live("hover:" + ch, nil)
         }
         pen.onCancel = { PadHub.shared.live(ch, nil) }
-        pen.onPoints = { [weak self] pts, fs in
+        pen.onPoints = { [weak self, weak pen] pts, fs in
             guard let self, let p = self.picker else { return }
             let (k0, color, width) = PadHub.describe(p.selectedTool)
             guard k0 != .other else { return }
             self.penFed = true
             self.lastPts = pts
             let kind = self.lasso.kind(k0, pts)
-            PadHub.shared.live(ch, .init(points: pts, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? self.lasso.poly : []))
+            PadHub.shared.live(ch, .init(points: pts, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? self.lasso.poly : [], az: pen?.az ?? [], alt: pen?.alt ?? []))
         }
         pen.onEnd = { [weak self] in
             guard let self else { return }
