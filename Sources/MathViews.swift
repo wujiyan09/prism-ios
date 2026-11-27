@@ -1052,6 +1052,10 @@ struct CanvasRep: UIViewRepresentable {
             co?.padDriven = false
         }
         co.link = link
+        co.addObs = NotificationCenter.default.addObserver(forName: .padAddPage, object: nil, queue: .main) { [weak co] n in
+            guard let co, (n.object as? String) == "scratch:" + co.parent.itemID else { return }
+            co.addPage()
+        }
         link.live.dark = { [weak v] in v?.traitCollection.userInterfaceStyle == .dark }
         PadHub.shared.activate(PadSources.scratch(itemID, height: h))
         if let ctl {
@@ -1106,6 +1110,8 @@ struct CanvasRep: UIViewRepresentable {
         var lastKey = ""
         var addButton: UIButton?
         var link: PadLink?
+        var addObs: NSObjectProtocol?
+        deinit { if let addObs { NotificationCenter.default.removeObserver(addObs) } }
         var padDriven = false
         var cmd: CmdZoom?
         func scrollViewDidScroll(_ sv: UIScrollView) {

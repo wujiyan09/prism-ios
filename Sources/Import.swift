@@ -455,6 +455,8 @@ struct ImportPaperView: View {
     @State private var confirmSubmit = false
     @State private var confirmSettle = false
     @State private var confirmParse = false
+    @State private var showQuiz = false
+    @State private var newPaper: String?
 
     private var p: ImpPaper? { store.papers[id] }
     private var sheet: String { "imp-" + id }
@@ -476,6 +478,16 @@ struct ImportPaperView: View {
             if let d { store.setMS(id, d); ms = store.ms(id) }
         }
         .sheet(isPresented: $showEdit) { NavigationStack { ImportEditSheet(id: id) } }
+        .sheet(isPresented: $showQuiz) {
+            if let d = doc, let p {
+                NavigationStack {
+                    PDFQuizSheet(title: p.name, subject: p.subject, chapters: p.chapters, pageCount: d.pageCount,
+                                 page: { i in (ImpPDF.pageImage(d, i, width: 1400), d.page(at: i)?.string ?? "") },
+                                 pdf: { d }, startPage: page, onDone: { nid in DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { newPaper = nid } })
+                }
+            }
+        }
+        .navigationDestination(item: $newPaper) { nid in ImportPaperView(id: nid) }
         .sheet(isPresented: $showMark) { NavigationStack { ImportInkMarkSheet(id: id) } }
         .sheet(item: $share) { s in ActivitySheet(url: s.url) }
         .confirmationDialog("确定交卷？", isPresented: $confirmSubmit, titleVisibility: .visible) {
@@ -641,6 +653,7 @@ struct ImportPaperView: View {
                     Button { withAnimation { splitOn.toggle() } } label: { Image(systemName: splitOn ? "rectangle.split.2x1.fill" : "rectangle.split.2x1") }
                 }
                 Menu {
+                    Button { showQuiz = true } label: { Label("根据此 PDF 出题", systemImage: "sparkles.rectangle.stack") }.disabled(doc == nil)
                     if p.mode == "cards" {
                         Button { showEdit = true } label: { Label("编辑 / 合并 / 拆分题目", systemImage: "pencil") }.disabled(p.qs.isEmpty)
                         if !remainingPages.isEmpty && !p.qs.isEmpty { Button { confirmParse = true } label: { Label("解析剩下的页", systemImage: "sparkles") } }

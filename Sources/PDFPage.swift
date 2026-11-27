@@ -106,6 +106,16 @@ struct PDFKitView: UIViewRepresentable {
             let r = v.convert(p.bounds(for: .mediaBox), from: p)
             b.isHidden = r.maxY > v.bounds.height + 40
         }
+        var inkTitle = ""
+        func addPage() {
+            guard let v = view, let d = v.document else { return }
+            PDFExtra.add(d, key: inkKey)
+            v.layoutDocumentView()
+            if let p = d.page(at: d.pageCount - 1) { v.go(to: p) }
+            PadHub.shared.activate(PadSources.pdf(d, key: inkKey, title: inkTitle))
+            updateAdd()
+        }
+        @objc func padAdd(_ n: Notification) { if !owner.isEmpty, (n.object as? String) == owner { addPage() } }
         var kvo: NSKeyValueObservation?
         var vpObs: NSObjectProtocol?
         /// Pad moved within a page: show the same rect.
@@ -160,14 +170,9 @@ struct PDFKitView: UIViewRepresentable {
             PDFExtra.apply(doc, key: inkKey)
             let add = Self.addButton()
             add.isHidden = doc.pageCount > 1
-            add.addAction(UIAction { [weak v, weak co = context.coordinator, inkKey = self.inkKey, inkTitle = self.inkTitle] _ in
-                guard let v, let d = v.document else { return }
-                PDFExtra.add(d, key: inkKey)
-                v.layoutDocumentView()
-                if let p = d.page(at: d.pageCount - 1) { v.go(to: p) }
-                PadHub.shared.activate(PadSources.pdf(d, key: inkKey, title: inkTitle))
-                co?.updateAdd()
-            }, for: .primaryActionTriggered)
+            context.coordinator.inkTitle = inkTitle
+            add.addAction(UIAction { [weak co = context.coordinator] _ in co?.addPage() }, for: .primaryActionTriggered)
+            NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coord.padAdd(_:)), name: .padAddPage, object: nil)
             v.addSubview(add)
             add.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([

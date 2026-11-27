@@ -248,6 +248,13 @@ struct StorageView: View {
         let total = sizes.values.reduce(0, +)
         Form {
             Section {
+                NavigationLink { DriveBackupView() } label: {
+                    LabeledContent {
+                        Text(DriveBackup.shared.signedIn ? (DriveBackup.shared.lastBackup.map { $0.formatted(.relative(presentation: .named)) } ?? "已登录") : "未开启")
+                    } label: { Label("Google 云端硬盘备份", systemImage: "externaldrive.badge.icloud") }
+                }
+            }
+            Section {
                 LabeledContent(T("Maths on this device", "数学（本机）"), value: fmt(total))
                 Stepper(value: Binding(get: { c.capMB }, set: { c.capMB = $0; c.evict() }), in: 100...2000, step: 100) {
                     LabeledContent(T("Limit", "上限"), value: "\(c.capMB) MB")

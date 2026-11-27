@@ -52,7 +52,11 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
             sv.contentSize = CGSize(width: size.width * z, height: size.height * z)
             hv.center = CGPoint(x: sv.contentSize.width / 2, y: sv.contentSize.height / 2)
         }
-        if !sv.isZooming && !sv.isZoomBouncing && abs(sv.zoomScale - zoom) > 0.001 { sv.setZoomScale(zoom, animated: true) }
+        if !sv.isZooming && !sv.isZoomBouncing && abs(sv.zoomScale - zoom) > 0.001 {
+            sv.setZoomScale(zoom, animated: jump == nil)
+            let z = zoom
+            DispatchQueue.main.asyncAfter(deadline: .now() + (jump == nil ? 0.35 : 0)) { [weak sv, weak c] in c?.sharpenNow(sv, z) }
+        }
         if let y = jump {
             DispatchQueue.main.async {
                 let maxY = max(-sv.contentInset.top, sv.contentSize.height - sv.bounds.height + sv.contentInset.bottom)
@@ -87,6 +91,7 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
             s.alwaysBounceHorizontal = s.contentSize.width > s.bounds.width + 1
             if ix > 0 && abs(s.contentOffset.x + ix) > 0.5 { s.contentOffset.x = -ix }
         }
+        func sharpenNow(_ s: UIScrollView?, _ z: CGFloat) { if let s { sharpen(viewForZooming(in: s), z) } }
         /// Re-render ink at the new scale so strokes stay sharp after zooming in.
         private func sharpen(_ v: UIView?, _ z: CGFloat) {
             guard let v else { return }

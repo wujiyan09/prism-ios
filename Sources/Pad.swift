@@ -84,9 +84,11 @@ final class PadHub {
     func forget(_ ch: String) { latest[ch] = nil }
 
     // Live mid-stroke preview (pad → main), points in logical units. nil points = clear.
-    enum Kind { case pen, pencil, marker, eraser, bitmapEraser, lasso, other }
+    enum Kind { case pen, pencil, marker, eraser, bitmapEraser, lasso, lassoDrag, other }
     /// width: logical units; forces: 0…1 per point (empty = constant width).
-    struct Live { var points: [CGPoint]; var color: UIColor; var width: CGFloat; var forces: [CGFloat] = []; var kind: Kind = .pen }
+    struct Live { var points: [CGPoint]; var color: UIColor; var width: CGFloat; var forces: [CGFloat] = []; var kind: Kind = .pen
+        /// lassoDrag: the selection outline (logical units) the drag started from.
+        var poly: [CGPoint] = [] }
     static func describe(_ t: PKTool) -> (Kind, UIColor, CGFloat) {
         if let i = t as? PKInkingTool {
             switch i.inkType {
@@ -152,7 +154,7 @@ final class LivePreview {
     func show(_ l: PadHub.Live?, k: CGFloat, in host: CALayer, dark: Bool = false) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        guard let l, l.points.count > 0, l.kind != .eraser else { layer.path = nil; buckets.forEach { $0.path = nil }; return }
+        guard let l, l.points.count > 0, l.kind != .eraser, l.kind != .lassoDrag else { layer.path = nil; buckets.forEach { $0.path = nil }; return }
         if layer.superlayer !== host { host.addSublayer(layer) }
         let pts = l.points.map { CGPoint(x: $0.x * k, y: $0.y * k) }
         var colour = l.color
@@ -227,6 +229,40 @@ final class LivePreview {
             layer.strokeColor = UIColor.white.withAlphaComponent(0.8).cgColor
             layer.lineWidth = 1
         }
+    }
+}
+
+/// Pad side: remembers the last lasso outline so a pen-down inside it is reported as a drag of the selection.
+final class LassoTrack {
+    private(set) var poly: [CGPoint] = []
+    private var decided = false
+    private var dragging = false
+    private var first: CGPoint = .zero
+    private var last: CGPoint = .zero
+    func begin() { decided = false; dragging = false }
+    /// Kind to stream for these points (logical units).
+    func kind(_ k: PadHub.Kind, _ pts: [CGPoint]) -> PadHub.Kind {
+        guard k == .lasso, let p = pts.first else { if k != .lasso && !decided { decided = true; dragging = false }; return k }
+        if !decided { decided = true; first = p; dragging = poly.count > 2 && LassoTrack.inside(p, poly) }
+        if let l = pts.last { last = l }
+        return dragging ? .lassoDrag : .lasso
+    }
+    /// Stroke ended (pts = full lasso path when not dragging).
+    func end(_ pts: [CGPoint]) {
+        guard decided else { return }
+        if dragging { let dx = last.x - first.x, dy = last.y - first.y; poly = poly.map { CGPoint(x: $0.x + dx, y: $0.y + dy) } }
+        else if pts.count > 2 { poly = pts }
+        decided = false; dragging = false
+    }
+    func clear() { poly = [] }
+    static func inside(_ p: CGPoint, _ poly: [CGPoint]) -> Bool {
+        var c = false; var j = poly.count - 1
+        for i in poly.indices {
+            let a = poly[i], b = poly[j]
+            if (a.y > p.y) != (b.y > p.y), p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x { c.toggle() }
+            j = i
+        }
+        return c
     }
 }
 
@@ -305,6 +341,8 @@ final class PadLink {
     private var obs: NSObjectProtocol?
     var applying = false
     private let eraseTap = NSObject()
+    private let lassoTap = NSObject()
+    private var drag: (PKDrawing, Set<Int>)?
     var host: () -> CALayer? = { nil }
     /// Main-canvas units per logical unit.
     var k: () -> CGFloat = { 1 }
@@ -342,11 +380,34 @@ final class PadLink {
             }
             if keep.count != old.count { self.applying = true; c.drawing = PKDrawing(strokes: keep); self.applying = false }
         }
+        // Live lasso drag: move the selected strokes with the pad's pen before the commit arrives.
+        PadHub.shared.listenLive(channel, lassoTap) { [weak self] l in
+            guard let self, let c = self.canvas else { return }
+            guard let l, l.kind == .lassoDrag, let a = l.points.first, let b = l.points.last else { self.drag = nil; return }
+            let s = self.k()
+            if self.drag == nil {
+                let poly = l.poly.map { CGPoint(x: $0.x * s, y: $0.y * s) }
+                let base = c.drawing
+                var sel = Set<Int>()
+                for (i, st) in base.strokes.enumerated() {
+                    let pts = st.path.interpolatedPoints(by: .distance(4)).map { $0.location.applying(st.transform) }
+                    guard !pts.isEmpty else { continue }
+                    let n = pts.filter { LassoTrack.inside($0, poly) }.count
+                    if n * 2 >= pts.count { sel.insert(i) }
+                }
+                self.drag = (base, sel)
+            }
+            guard let (base, sel) = self.drag, !sel.isEmpty else { return }
+            let t = CGAffineTransform(translationX: (b.x - a.x) * s, y: (b.y - a.y) * s)
+            var out = base.strokes
+            for i in sel { var st = out[i]; st.transform = st.transform.concatenating(t); out[i] = st }
+            self.applying = true; c.drawing = PKDrawing(strokes: out); self.applying = false
+        }
         PadHub.shared.listenPos(channel, self) { [weak self] y, w in self?.onScroll?(y, w) }
     }
     func tearDown() {
         guard on else { return }; on = false
-        PadHub.shared.stop(self); PadHub.shared.stopPos(self); PadHub.shared.stopLive(eraseTap); live.detach()
+        PadHub.shared.stop(self); PadHub.shared.stopPos(self); PadHub.shared.stopLive(eraseTap); PadHub.shared.stopLive(lassoTap); drag = nil; live.detach()
     }
     /// Main canvas changed (finger/pencil on the main window): mirror to the pad.
     func changed(_ d: PKDrawing) {
@@ -440,11 +501,19 @@ struct PadView: View {
         NavigationStack {
             Group {
                 if let s = hub.source, !s.pages.isEmpty {
-                    let p = s.pages[s.continuous ? 0 : pageIndex]
-                    PadCanvas(page: p, continuous: s.continuous, followY: hub.mainFollows && s.continuous ? hub.scratchY : nil,
-                              followW: hub.mainFollows && s.continuous ? hub.scratchW : nil, zoom: $zoom, locked: zlock)
-                        .id(p.channel + "|\(Int(p.size.height))")
+                    if s.continuous {
+                        let p = s.pages[0]
+                        PadCanvas(page: p, continuous: true, followY: hub.mainFollows ? hub.scratchY : nil,
+                                  followW: hub.mainFollows ? hub.scratchW : nil, zoom: $zoom, locked: zlock)
+                            .id(p.channel + "|\(Int(p.size.height))")
+                            .ignoresSafeArea(edges: .bottom)
+                    } else {
+                        PadPagedCanvas(source: s, index: pageIndex, zoom: $zoom, locked: zlock) { i in
+                            if hub.padIndex != i { hub.padIndex = i }
+                        }
+                        .id(s.owner + "|\(s.pages.count)|" + s.title)
                         .ignoresSafeArea(edges: .bottom)
+                    }
                 } else {
                     ContentUnavailableView("没有可书写的页面", systemImage: "pencil.slash",
                                            description: Text("在主窗口打开草稿纸、笔记或 PDF 试卷，这里会自动跟上。"))
@@ -526,6 +595,14 @@ struct PadView: View {
                 }
             }
             Spacer(minLength: 0)
+            if let s = hub.source {
+                glass {
+                    Button {
+                        if !s.continuous { hub.padIndex = s.pages.count }   // jump to the new last page once it exists
+                        NotificationCenter.default.post(name: .padAddPage, object: s.owner)
+                    } label: { Label("加一页", systemImage: "plus") }
+                }
+            }
             glass {
                 Button { NotificationCenter.default.post(name: .padAskDS, object: nil) } label: { Label("问 DeepSeek", systemImage: "sparkles") }
             }
@@ -593,21 +670,26 @@ struct PadCanvas: UIViewRepresentable {
         let pen = PenTap(target: nil, action: nil)
         pen.onBegin = { [weak c] in
             PadHub.shared.strokeSeq += 1
+            c?.lasso.begin()
             if let ch = c?.parent.page.channel { PadHub.shared.live("hover:" + ch, nil) }   // hover dot off at pen-down
         }
         pen.onCancel = { [weak c] in if let ch = c?.parent.page.channel { PadHub.shared.live(ch, nil) } }
         pen.onPoints = { [weak c, weak v] pts, fs in
             guard let c, let v else { return }
-            let (kind, color, width) = PadHub.describe(c.picker.selectedTool)
-            guard kind != .other else { return }
+            let (k0, color, width) = PadHub.describe(c.picker.selectedTool)
+            guard k0 != .other else { return }
             let z = max(v.zoomScale, 0.0001)
             c.penFed = true
-            PadHub.shared.live(c.parent.page.channel, .init(points: pts.map { CGPoint(x: $0.x / z, y: $0.y / z) }, color: color, width: width, forces: fs, kind: kind))
+            let lp = pts.map { CGPoint(x: $0.x / z, y: $0.y / z) }
+            c.lastPts = lp
+            let kind = c.lasso.kind(k0, lp)
+            PadHub.shared.live(c.parent.page.channel, .init(points: lp, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? c.lasso.poly : []))
         }
         // Fallback that always works: follow PencilKit's own drawing recogniser (if the pen watcher gets no touches).
         v.drawingGestureRecognizer.addTarget(c, action: #selector(Coord.drawing(_:)))
         pen.onEnd = { [weak c] in
             // Preview stays until this stroke's PKStroke commits; fallback if PencilKit drops it (e.g. a tap).
+            if let c { c.lasso.end(c.lastPts) }
             guard let ch = c?.parent.page.channel else { return }
             let id = PadHub.shared.strokeSeq
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { if PadHub.shared.strokeSeq == id, c?.committed != id { PadHub.shared.live(ch, nil) } }
@@ -724,6 +806,8 @@ struct PadCanvas: UIViewRepresentable {
             }
         }
         var following = false
+        let lasso = LassoTrack()
+        var lastPts: [CGPoint] = []
         var committed = -1
         private var applying = false
         private var pending: DispatchWorkItem?
@@ -845,5 +929,345 @@ final class ToolSync: NSObject, PKToolPickerObserver {
         guard !busy, PadHub.shared.padOpen else { return }
         busy = true; defer { busy = false }
         for p in pickers where p !== src { p.selectedTool = src.selectedTool }
+    }
+}
+
+// MARK: - Paged sources on the pad: all pages in one vertical, zoomable scroll (like the main window).
+
+extension Notification.Name {
+    /// Pad asked for a blank page at the end (object = source owner).
+    static let padAddPage = Notification.Name("padAddPage")
+}
+
+struct PadPagedCanvas: UIViewRepresentable {
+    let source: PadSource
+    /// Page the hub wants shown (page buttons / jump / main window).
+    let index: Int
+    @Binding var zoom: CGFloat
+    var locked = false
+    /// Pad scrolled into another page.
+    var onPage: (Int) -> Void
+
+    func makeCoordinator() -> Coord { Coord(self) }
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let c = context.coordinator
+        let sv = UIScrollView()
+        sv.delegate = c
+        sv.contentInsetAdjustmentBehavior = .never
+        sv.alwaysBounceVertical = true
+        sv.bouncesZoom = true
+        sv.backgroundColor = .systemGroupedBackground
+        sv.panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        sv.pinchGestureRecognizer?.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        let box = UIView()
+        sv.addSubview(box)
+        c.box = box
+        c.scroll = sv
+        let L = source.pages.first?.size.width ?? 1000
+        c.L = L
+        var y: CGFloat = Coord.gap
+        for (i, p) in source.pages.enumerated() {
+            let f = L / max(1, p.size.width)
+            let h = p.size.height * f
+            let frame = CGRect(x: 0, y: y, width: L, height: h)
+            c.tops.append(y); c.scales.append(f); c.heights.append(h)
+            let w = PadPageWire(page: p, picker: c.picker, frame: frame, scale: f, index: i)
+            box.addSubview(w.view)
+            c.wires.append(w)
+            y += h + Coord.gap
+        }
+        let addB = PDFKitView.addButton()
+        addB.addAction(UIAction { [owner = source.owner] _ in
+            NotificationCenter.default.post(name: .padAddPage, object: owner)
+        }, for: .primaryActionTriggered)
+        addB.frame = CGRect(x: (L - 160) / 2, y: y + 10, width: 160, height: 48)
+        box.addSubview(addB)
+        y += 80
+        c.total = y
+        box.frame = CGRect(x: 0, y: 0, width: L, height: y)
+        sv.contentSize = box.frame.size
+        c.vpObs = NotificationCenter.default.addObserver(forName: .mainViewport, object: nil, queue: .main) { [weak c] n in
+            guard PadHub.shared.mainFollows, let ch = n.object as? String, let r = n.userInfo?["r"] as? CGRect else { return }
+            c?.mainMoved(ch, r)
+        }
+        DispatchQueue.main.async {
+            c.fit()
+            c.show(index, animated: false)
+            if let first = c.wires.first?.canvas {
+                c.picker.setVisible(true, forFirstResponder: first)
+                first.becomeFirstResponder()
+            }
+        }
+        return sv
+    }
+
+    func updateUIView(_ sv: UIScrollView, context: Context) {
+        let c = context.coordinator
+        c.parent = self
+        if sv.bounds.width > 10 && abs(sv.bounds.width - c.fitted) > 1 { c.fit() }
+        if c.base > 0 {
+            sv.minimumZoomScale = locked ? sv.zoomScale : c.base * 0.5
+            sv.maximumZoomScale = locked ? sv.zoomScale : c.base * 4
+            let target = c.base * zoom
+            if !sv.isZooming && !c.following && abs(sv.zoomScale - target) > 0.001 { sv.setZoomScale(target, animated: true) }
+        }
+        if index != c.shownIndex {
+            c.shownIndex = index
+            // Ignore the echo of our own scrolling.
+            if Date().timeIntervalSince(c.userScrolled) > 0.6 { c.show(index, animated: true) }
+        }
+    }
+
+    static func dismantleUIView(_ sv: UIScrollView, coordinator c: Coord) {
+        c.wires.forEach { $0.tearDown() }
+        if let first = c.wires.first?.canvas { c.picker.setVisible(false, forFirstResponder: first) }
+        if let o = c.vpObs { NotificationCenter.default.removeObserver(o) }
+        ToolSync.shared.unregister(c.picker)
+    }
+
+    final class Coord: NSObject, UIScrollViewDelegate {
+        static let gap: CGFloat = 24
+        var parent: PadPagedCanvas
+        weak var scroll: UIScrollView?
+        var box: UIView?
+        var wires: [PadPageWire] = []
+        var tops: [CGFloat] = [], scales: [CGFloat] = [], heights: [CGFloat] = []
+        var L: CGFloat = 1000, total: CGFloat = 0
+        var base: CGFloat = 0, fitted: CGFloat = 0
+        var shownIndex = -1
+        var following = false
+        var userScrolled = Date.distantPast
+        var vpObs: NSObjectProtocol?
+        let picker: PKToolPicker = { let p = PKToolPicker(); ToolSync.shared.register(p); return p }()
+        init(_ p: PadPagedCanvas) { parent = p; shownIndex = p.index }
+
+        func viewForZooming(in s: UIScrollView) -> UIView? { box }
+        func fit() {
+            guard let sv = scroll, sv.bounds.width > 10 else { return }
+            fitted = sv.bounds.width
+            base = sv.bounds.width / L
+            sv.minimumZoomScale = base * 0.5
+            sv.maximumZoomScale = base * 4
+            following = true
+            sv.zoomScale = base * parent.zoom
+            following = false
+            center(sv); sharpen()
+        }
+        func center(_ s: UIScrollView) {
+            let ix = max(0, (s.bounds.width - s.contentSize.width) / 2)
+            let inset = UIEdgeInsets(top: 0, left: ix, bottom: 0, right: ix)
+            if s.contentInset != inset { s.contentInset = inset }
+        }
+        /// Ink re-rendered at screen scale × zoom, so it stays sharp.
+        func sharpen() {
+            guard let sv = scroll else { return }
+            let sc = min(UIScreen.main.scale * max(1, sv.zoomScale * (scales.first ?? 1)), 8)
+            for w in wires { w.sharpen(sc * max(1, w.scale)) }
+        }
+        func show(_ i: Int, animated: Bool) {
+            guard let sv = scroll, tops.indices.contains(i) else { return }
+            let maxY = max(0, sv.contentSize.height - sv.bounds.height)
+            following = true
+            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: min(maxY, max(0, (tops[i] - Coord.gap / 2) * sv.zoomScale))), animated: animated)
+            following = false
+        }
+        func page(atY y: CGFloat) -> Int {
+            var best = 0
+            for (i, t) in tops.enumerated() where t - Coord.gap <= y { best = i }
+            return best
+        }
+        func scrollViewDidZoom(_ s: UIScrollView) { center(s); report(s) }
+        func scrollViewDidEndZooming(_ s: UIScrollView, with view: UIView?, atScale z: CGFloat) {
+            sharpen()
+            if base > 0 { let r = z / base; DispatchQueue.main.async { self.parent.zoom = r } }
+        }
+        func scrollViewDidScroll(_ s: UIScrollView) { report(s) }
+        private func report(_ s: UIScrollView) {
+            guard !following, s.zoomScale > 0 else { return }
+            let z = s.zoomScale
+            let top = max(0, s.contentOffset.y) / z
+            let mid = (s.contentOffset.y + s.bounds.height / 2) / z
+            let pi = page(atY: mid)
+            if s.isTracking || s.isDragging || s.isDecelerating || s.isZooming { userScrolled = Date() }
+            if pi != shownIndex, Date().timeIntervalSince(userScrolled) < 0.6 {
+                shownIndex = pi
+                DispatchQueue.main.async { self.parent.onPage(pi) }
+            }
+            guard Date().timeIntervalSince(PadHub.shared.padApplied) > 0.35, PadHub.shared.mainFollows else { return }
+            // Visible rect in the units of the page at the top of the view.
+            let ti = page(atY: top + 1)
+            guard wires.indices.contains(ti) else { return }
+            let f = scales[ti]
+            let x = max(0, s.contentOffset.x + s.contentInset.left) / z
+            let r = CGRect(x: x / f, y: (top - tops[ti]) / f, width: s.bounds.width / z / f, height: s.bounds.height / z / f)
+            NotificationCenter.default.post(name: .padViewport, object: wires[ti].page.channel, userInfo: ["r": r])
+        }
+        /// Main window scrolled/zoomed a page: show the same rect.
+        func mainMoved(_ ch: String, _ r: CGRect) {
+            guard let sv = scroll, let i = wires.firstIndex(where: { $0.page.channel == ch }), r.width > 1 else { return }
+            guard Date().timeIntervalSince(userScrolled) > 0.6 else { return }
+            PadHub.shared.padApplied = Date()
+            following = true; defer { following = false }
+            let f = scales[i]
+            if PadHub.syncZoom, !parent.locked {
+                sv.zoomScale = min(sv.maximumZoomScale, max(sv.minimumZoomScale, sv.bounds.width / (r.width * f)))
+                center(sv)
+            }
+            let z = sv.zoomScale
+            let maxY = max(0, sv.contentSize.height - sv.bounds.height)
+            sv.contentOffset = CGPoint(x: sv.contentOffset.x, y: min(maxY, max(0, (tops[i] + r.minY * f) * z)))
+            if shownIndex != i { shownIndex = i; DispatchQueue.main.async { self.parent.onPage(i) } }
+        }
+    }
+}
+
+/// One page inside the paged pad: background + PencilKit canvas in the page's own logical units,
+/// with the same live sync as the single-page pad (preview, hover, erase, lasso, commit, save).
+final class PadPageWire: NSObject, PKCanvasViewDelegate {
+    let page: PadPage
+    let view: UIView
+    let canvas: QuietCanvas
+    let scale: CGFloat
+    private let index: Int
+    private var applying = false
+    private var pending: DispatchWorkItem?
+    private var committed = -1
+    private var penFed = false
+    private var dpts: [CGPoint] = []
+    private let lasso = LassoTrack()
+    private var lastPts: [CGPoint] = []
+    private weak var picker: PKToolPicker?
+    private var figObs: NSObjectProtocol?
+
+    init(page: PadPage, picker: PKToolPicker, frame: CGRect, scale f: CGFloat, index: Int) {
+        self.page = page; self.scale = f; self.index = index; self.picker = picker
+        view = UIView(frame: frame)
+        view.backgroundColor = .white
+        view.layer.shadowColor = UIColor.black.cgColor; view.layer.shadowOpacity = 0.12; view.layer.shadowRadius = 4; view.layer.shadowOffset = CGSize(width: 0, height: 2)
+        canvas = QuietCanvas(frame: CGRect(origin: .zero, size: page.size))
+        super.init()
+        // Everything inside works in page units; the wrapper scales it to the column width.
+        let inner = UIView(frame: CGRect(origin: .zero, size: page.size))
+        inner.layer.anchorPoint = .zero
+        inner.layer.position = .zero
+        inner.transform = CGAffineTransform(scaleX: f, y: f)
+        view.addSubview(inner)
+        if let bg = page.background() {
+            let iv = UIImageView(image: bg); iv.frame = inner.bounds; iv.contentMode = .scaleToFill
+            inner.addSubview(iv)
+            canvas.overrideUserInterfaceStyle = .light
+        }
+        for (img, r) in page.figures() {
+            let iv = UIImageView(image: img); iv.frame = r; iv.contentMode = .scaleAspectFit; iv.backgroundColor = .white
+            inner.addSubview(iv)
+        }
+        canvas.backgroundColor = .clear
+        canvas.isOpaque = false
+        canvas.isScrollEnabled = false
+        canvas.drawingPolicy = .pencilOnly
+        canvas.contentSize = page.size
+        canvas.drawing = PadHub.shared.current(page.channel) ?? page.load()
+        canvas.tool = picker.selectedTool
+        canvas.delegate = self
+        inner.addSubview(canvas)
+        picker.addObserver(canvas)
+        PadHub.shared.listen(page.channel, self) { [weak self] d in
+            guard let self else { return }
+            self.applying = true; self.canvas.drawing = d; self.applying = false
+        }
+        let pen = PenTap(target: nil, action: nil)
+        let ch = page.channel
+        pen.onBegin = { [weak self] in
+            PadHub.shared.strokeSeq += 1
+            self?.lasso.begin()
+            PadHub.shared.live("hover:" + ch, nil)
+        }
+        pen.onCancel = { PadHub.shared.live(ch, nil) }
+        pen.onPoints = { [weak self] pts, fs in
+            guard let self, let p = self.picker else { return }
+            let (k0, color, width) = PadHub.describe(p.selectedTool)
+            guard k0 != .other else { return }
+            self.penFed = true
+            self.lastPts = pts
+            let kind = self.lasso.kind(k0, pts)
+            PadHub.shared.live(ch, .init(points: pts, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? self.lasso.poly : []))
+        }
+        pen.onEnd = { [weak self] in
+            guard let self else { return }
+            self.lasso.end(self.lastPts)
+            let id = PadHub.shared.strokeSeq
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                if PadHub.shared.strokeSeq == id, self?.committed != id { PadHub.shared.live(ch, nil) }
+            }
+        }
+        canvas.addGestureRecognizer(pen)
+        canvas.drawingGestureRecognizer.addTarget(self, action: #selector(drawing(_:)))
+        canvas.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
+    }
+
+    func sharpen(_ s: CGFloat) {
+        func walk(_ x: UIView) { x.contentScaleFactor = s; x.subviews.forEach(walk) }
+        walk(canvas)
+    }
+
+    func tearDown() {
+        flush()
+        PadHub.shared.stop(self)
+        picker?.removeObserver(canvas)
+    }
+
+    @objc func drawing(_ g: UIGestureRecognizer) {
+        let ch = page.channel
+        switch g.state {
+        case .began:
+            dpts = []
+            if !penFed { PadHub.shared.strokeSeq += 1 }
+            PadHub.shared.live("hover:" + ch, nil)
+            fallthrough
+        case .changed:
+            guard !penFed, let p = picker else { return }
+            dpts.append(g.location(in: canvas))
+            let (kind, color, width) = PadHub.describe(p.selectedTool)
+            guard kind != .other else { return }
+            PadHub.shared.live(ch, .init(points: dpts, color: color, width: width, kind: kind))
+        case .cancelled, .failed:
+            dpts = []; penFed = false; PadHub.shared.live(ch, nil)
+        default:
+            dpts = []; penFed = false
+            let id = PadHub.shared.strokeSeq
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                if PadHub.shared.strokeSeq == id, self?.committed != id { PadHub.shared.live(ch, nil) }
+            }
+        }
+    }
+
+    @objc func hovered(_ g: UIHoverGestureRecognizer) {
+        let ch = "hover:" + page.channel
+        switch g.state {
+        case .began, .changed:
+            guard let p = picker else { return }
+            let (kind, color, w) = PadHub.describe(p.selectedTool)
+            let lift = g.zOffset
+            let eraser = kind == .eraser || kind == .bitmapEraser
+            PadHub.shared.live(ch, .init(points: [g.location(in: canvas)], color: color, width: eraser ? w : max(6, w) * (1 + 2 * lift), kind: kind))
+        default:
+            PadHub.shared.live(ch, nil)
+        }
+    }
+
+    func canvasViewDrawingDidChange(_ v: PKCanvasView) {
+        guard !applying else { return }
+        PadHub.shared.publish(page.channel, v.drawing, from: self)
+        committed = PadHub.shared.strokeSeq
+        PadHub.shared.live(page.channel, nil)
+        pending?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.flush() }
+        pending = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: w)
+    }
+    func flush() {
+        pending?.cancel(); pending = nil
+        page.save(canvas.drawing)
     }
 }

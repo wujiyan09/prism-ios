@@ -556,6 +556,8 @@ struct NoteDocView: View {
     @State private var selected: String?
     @State private var editing: NoteItem?
     @State private var showPages = false
+    @State private var showQuiz = false
+    @State private var newPaper: String?
     @AppStorage("notes.dsScope") private var scope = "all"
     @State private var ctx: DSContext?
     @State private var share: ShareItem?
@@ -595,6 +597,20 @@ struct NoteDocView: View {
                             }
                         }
                         .onChange(of: showPages) { _, v in if !v, let c = current { jump = offset(doc, base, c) } }
+                        .onReceive(NotificationCenter.default.publisher(for: .padViewport)) { n in
+                            // 手写板 scrolled/zoomed: show the same part of the same page.
+                            guard PadHub.shared.mainFollows, let ch = n.object as? String, let r = n.userInfo?["r"] as? CGRect, r.width > 1,
+                                  let pi = doc.pages.firstIndex(where: { "note:" + NoteStore.inkKey(id, $0.id) == ch }) else { return }
+                            let f = base / NoteRender.logicalWidth
+                            if PadHub.syncZoom && !vctl.locked {
+                                let z = min(4, max(0.5, geo.size.width / (r.width * f + 32 * 0)))
+                                if abs(z - zoom) > 0.01 { zoom = z }
+                            }
+                            var top = Self.pad
+                            for q in doc.pages.prefix(pi) { top += blockH(q, base) + Self.gap }
+                            jump = top + r.minY * f
+                            if current != doc.pages[pi].id { current = doc.pages[pi].id }
+                        }
                         .onReceive(NotificationCenter.default.publisher(for: .padPage)) { n in
                             guard (n.object as? String) == "note-" + id, let i = n.userInfo?["i"] as? Int, doc.pages.indices.contains(i) else { return }
                             current = doc.pages[i].id; jump = offset(doc, base, doc.pages[i].id)
@@ -625,6 +641,13 @@ struct NoteDocView: View {
             if let s = PadSources.note(id) { PadHub.shared.activate(s, index: pageIndex) }
         }
         .onDisappear { PadHub.shared.deactivate("note-" + id) }
+        .onReceive(NotificationCenter.default.publisher(for: .padAddPage)) { n in
+            guard (n.object as? String) == "note-" + id, let doc else { return }
+            let last = doc.pages.last
+            let p = NotePage(style: last?.src == nil ? last?.style ?? "lined" : "lined", size: last?.size ?? [595, 842])
+            store.update(id) { $0.pages.append(p) }
+            current = p.id
+        }
         .onChange(of: current) { _, _ in PadHub.shared.setIndex("note-" + id, pageIndex) }
         .onChange(of: doc?.pages.count ?? 0) { _, _ in if let s = PadSources.note(id) { PadHub.shared.activate(s, index: pageIndex, force: true) } }
         .task(id: "\(scope)|\(current ?? "")|\(Int(doc?.modified ?? 0))") {
@@ -632,6 +655,22 @@ struct NoteDocView: View {
             if !Task.isCancelled { ctx = makeContext() }
         }
         .onChange(of: showTools) { _, _ in selected = nil }
+        .sheet(isPresented: $showQuiz) {
+            if let doc {
+                NavigationStack {
+                    PDFQuizSheet(title: doc.title, subject: "笔记", pageCount: doc.pages.count,
+                                 page: { i in
+                                     guard doc.pages.indices.contains(i) else { return (nil, "") }
+                                     let p = doc.pages[i]
+                                     let t = p.items.compactMap { $0.kind == "text" ? $0.text : nil }.joined(separator: "\n")
+                                     return (NoteRender.background(id, p, width: 1400), t)
+                                 },
+                                 pdf: { ImpPDF.from(images: doc.pages.map { NoteRender.background(id, $0, width: 1400) }) },
+                                 startPage: pageIndex, onDone: { nid in DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { newPaper = nid } })
+                }
+            }
+        }
+        .navigationDestination(item: $newPaper) { nid in ImportPaperView(id: nid) }
         .sheet(isPresented: $showPages) { NavigationStack { NotePagesSheet(id: id, current: $current) } }
         .sheet(item: $editing) { it in NavigationStack { NoteTextEditor(docID: id, item: it) } }
         .sheet(item: $share) { s in ActivitySheet(url: s.url) }
@@ -649,7 +688,7 @@ struct NoteDocView: View {
 
     // MARK: pages layout (unscaled points; ZoomScroll scales natively)
 
-    private static let gap: CGFloat = 18, caption: CGFloat = 20, pad: CGFloat = 12
+    private static let gap: CGFloat = 18, caption: CGFloat = 0, pad: CGFloat = 12
     private func blockH(_ p: NotePage, _ base: CGFloat) -> CGFloat { base * CGFloat(p.aspect) + Self.caption }
     private func contentHeight(_ doc: NoteDoc, _ base: CGFloat) -> CGFloat {
         var h = Self.pad * 2
@@ -672,11 +711,8 @@ struct NoteDocView: View {
     private func pagesStack(_ doc: NoteDoc, _ base: CGFloat) -> some View {
         VStack(spacing: Self.gap) {
             ForEach(Array(doc.pages.enumerated()), id: \.element.id) { i, p in
-                VStack(spacing: 4) {
-                    NotePageView(docID: id, page: p, tool: tool, showTools: showTools, selected: $selected, editing: $editing)
-                        .frame(width: base, height: base * CGFloat(p.aspect))
-                    Text("\(i + 1) / \(doc.pages.count)").font(.caption2).foregroundStyle(.secondary).frame(height: Self.caption - 4)
-                }
+                NotePageView(docID: id, page: p, tool: tool, showTools: showTools, selected: $selected, editing: $editing, zoom: zoom)
+                    .frame(width: base, height: base * CGFloat(p.aspect))
             }
         }
         .padding(.horizontal, 16).padding(.vertical, Self.pad)
@@ -772,6 +808,7 @@ struct NoteDocView: View {
                     ForEach(NotePaper.allCases) { s in Button(s.name) { addPage(style: s.rawValue) } }
                 } label: { Label("在后面加一页", systemImage: "plus.rectangle.on.rectangle") }
             } label: { Image(systemName: "plus.circle") }
+            Button { showQuiz = true } label: { Image(systemName: "sparkles.rectangle.stack") }.accessibilityLabel("根据此 PDF 出题")
             Button { showPages = true } label: { Image(systemName: "square.grid.2x2") }.accessibilityLabel("页面")
             Menu {
                 Button { field = doc?.title ?? ""; rename = true } label: { Label("重命名", systemImage: "pencil") }
@@ -794,7 +831,13 @@ struct NotePageView: View {
     let showTools: Bool
     @Binding var selected: String?
     @Binding var editing: NoteItem?
+    var zoom: CGFloat = 1
     @State private var bg: UIImage?
+    /// Background pixels = view width × screen scale × zoom (re-rendered in steps so zooming stays sharp).
+    private func bgWidth(_ W: CGFloat) -> CGFloat {
+        let z = max(1, pow(2, ceil(log2(max(1, zoom)))))
+        return min(4000, W * UIScreen.main.scale * z)
+    }
 
     var body: some View {
         GeometryReader { g in
@@ -809,7 +852,7 @@ struct NotePageView: View {
                     .allowsHitTesting(tool == .pen)
             }
             .onTapGesture { if tool == .select { selected = nil } }
-            .task(id: Int(W)) { if W > 10 { bg = NoteRender.background(docID, page, width: min(2000, W * 2)) } }
+            .task(id: "\(Int(W))|\(Int(bgWidth(W)))") { if W > 10 { bg = NoteRender.background(docID, page, width: bgWidth(W)) } }
         }
         .aspectRatio(CGFloat(1 / page.aspect), contentMode: .fit)
         .clipShape(Rectangle())
