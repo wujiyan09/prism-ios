@@ -483,7 +483,7 @@ final class PadLink {
                 guard let self else { return }
                 let s = max(self.k(), 0.0001)
                 var x = st
-                if s != 1 { x?.transform = x!.transform.concatenating(CGAffineTransform(scaleX: 1 / s, y: 1 / s)) }
+                if s != 1, var y = x { y.transform = y.transform.concatenating(CGAffineTransform(scaleX: 1 / s, y: 1 / s)); x = y }
                 PadHub.shared.live("m:" + self.channel, x.map { .init(points: [], color: $0.color, width: $0.width / s, kind: .pen, stroke: $0) })
             }
             c.onLiveDrawing = { [weak self] d in self?.changed(d) }
