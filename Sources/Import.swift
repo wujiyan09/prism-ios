@@ -339,12 +339,18 @@ struct ImportPickers: ViewModifier {
     @Binding var photos: [PhotosPickerItem]
     let done: (PDFDocument?, String?) -> Void
     @State private var busy = false
+    @State private var busyText = "正在导入…"
+    @State private var busyProgress: Double?
 
     func body(content: Content) -> some View {
         content
             .overlay {
                 if busy {
-                    ProgressView("正在导入…").padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)).transition(.opacity)
+                    VStack(spacing: 8) {
+                        if let p = busyProgress { ProgressView(value: p).frame(width: 180) } else { ProgressView() }
+                        Text(busyText).font(.subheadline)
+                    }
+                    .padding(20).glassBackground(RoundedRectangle(cornerRadius: 16)).transition(.opacity)
                 }
             }
             .onChange(of: source) { _, s in
@@ -371,7 +377,8 @@ struct ImportPickers: ViewModifier {
 
     private func handle(_ urls: [URL]) {
         // Feedback right away; reading/merging the PDF happens off the main thread.
-        busy = true
+        busy = true; busyText = "正在导入…"; busyProgress = nil
+        let t0 = Date()
         let done = self.done
         // Copy the picked files now, while the picker's security-scoped URLs are still valid (they can vanish after
         // the callback returns); parse the copies in the background.
@@ -382,6 +389,21 @@ struct ImportPickers: ViewModifier {
         let access = urls.map { $0.startAccessingSecurityScopedResource() }
         DispatchQueue.global(qos: .userInitiated).async {
             var local: [URL] = []
+            // Files still in iCloud: start the download and show its progress instead of a silent wait.
+            let cloud = urls.filter { ((try? $0.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]))?.ubiquitousItemDownloadingStatus).map { $0 != .current } ?? false }
+            if !cloud.isEmpty {
+                cloud.forEach { try? FileManager.default.startDownloadingUbiquitousItem(at: $0) }
+                DispatchQueue.main.async { busyText = "正在从 iCloud 下载…" }
+                let total = max(1, cloud.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) })
+                for _ in 0..<600 {
+                    let pending = cloud.filter { ((try? $0.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]))?.ubiquitousItemDownloadingStatus) != .current }
+                    if pending.isEmpty { break }
+                    let have = cloud.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize) ?? 0) }
+                    DispatchQueue.main.async { busyProgress = min(1, Double(have) / Double(total)) }
+                    Thread.sleep(forTimeInterval: 0.2)
+                }
+                DispatchQueue.main.async { busyText = "正在导入…"; busyProgress = nil }
+            }
             for (u, ok) in zip(urls, access) {
                 let dst = tmp.appendingPathComponent(u.lastPathComponent)
                 var err: NSError?
@@ -395,7 +417,7 @@ struct ImportPickers: ViewModifier {
             var result: (PDFDocument?, String?) = (nil, nil)
             ImportPickers.read(local.isEmpty ? urls : local) { d, e in result = (d, e) }
             // Wait for the picker to finish dismissing, or the next sheet can't be presented (that was the 108 regression).
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0, 0.6 - Date().timeIntervalSince(t0))) {
                 busy = false
                 // Hand the UI a document created on the main thread (from the copied file: lazy, cheap); a
                 // PDFDocument built on a background queue must not be used by PDFKit views on main.
@@ -416,7 +438,6 @@ struct ImportPickers: ViewModifier {
         // re-building it page by page; saving later is a file copy.
         if urls.count == 1, let u = urls.first, u.pathExtension.lowercased() == "pdf", let d = PDFDocument(url: u), d.pageCount > 0 {
             var a = d.documentAttributes ?? [:]; a[PDFDocumentAttribute.titleAttribute] = u.deletingPathExtension().lastPathComponent; d.documentAttributes = a
-            for i in 0..<d.pageCount { _ = d.page(at: i)?.bounds(for: .mediaBox) }   // parse page sizes here (background), not on main
             done(d, nil); return
         }
         let out = PDFDocument()
@@ -578,7 +599,7 @@ struct ImportPaperView: View {
         }
         .navigationDestination(item: $newPaper) { nid in ImportPaperView(id: nid) }
         .sheet(isPresented: $showMark) { NavigationStack { ImportInkMarkSheet(id: id) } }
-        .sheet(item: $share) { s in ActivitySheet(url: s.url) }
+        .sheet(item: $share) { s in RangeShareSheet(url: s.url, current: page) }
         .padSubmit(p.map { !$0.submitted } ?? false) { update { $0.submitted = true } }
         .confirmationDialog("确定交卷？", isPresented: $confirmSubmit, titleVisibility: .visible) {
             Button("交卷") { update { $0.submitted = true } }
@@ -801,6 +822,62 @@ struct ImportPaperView: View {
 }
 
 struct ShareItem: Identifiable { let id = UUID(); let url: URL }
+
+/// Every PDF export: choose 全部 / 当前页 / 自定义 (e.g. "1-3,5") before sharing. Other files are shared as they are.
+struct RangeShareSheet: View {
+    let url: URL
+    var current: Int = 0
+    @State private var mode = 0
+    @State private var custom = ""
+    @State private var out: URL?
+    @State private var count = 0
+    var body: some View {
+        if url.pathExtension.lowercased() != "pdf" || count == 1 { ActivitySheet(url: url) }
+        else if let out { ActivitySheet(url: out) }
+        else {
+            NavigationStack {
+                Form {
+                    Picker("范围", selection: $mode) {
+                        Text("全部 \(count) 页").tag(0); Text("当前页（第 \(current + 1) 页）").tag(1); Text("自定义").tag(2)
+                    }.pickerStyle(.inline)
+                    if mode == 2 {
+                        TextField("例如 1-3,5", text: $custom).keyboardType(.numbersAndPunctuation)
+                        if !custom.isEmpty && pages.isEmpty { Text("页码无效").font(.caption).foregroundStyle(.red) }
+                    }
+                }
+                .navigationTitle("导出范围").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("导出") { out = Self.subset(url, pages) }.disabled(pages.isEmpty) } }
+            }
+            .onAppear { if count == 0 { count = PDFDocument(url: url)?.pageCount ?? 0 } }
+            .task { if count == 0 { count = PDFDocument(url: url)?.pageCount ?? 0 } }
+        }
+    }
+    private var pages: [Int] {
+        switch mode {
+        case 0: return Array(0..<count)
+        case 1: return [min(max(0, current), max(0, count - 1))]
+        default: return Self.parse(custom, count)
+        }
+    }
+    static func parse(_ s: String, _ n: Int) -> [Int] {
+        var r: [Int] = []
+        for part in s.replacingOccurrences(of: "，", with: ",").split(separator: ",") {
+            let ab = part.replacingOccurrences(of: "–", with: "-").split(separator: "-").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+            if ab.count == 1, (1...max(1, n)).contains(ab[0]) { r.append(ab[0] - 1) }
+            else if ab.count == 2, ab[0] >= 1, ab[1] <= n, ab[0] <= ab[1] { r += (ab[0] - 1)...(ab[1] - 1) }
+            else { return [] }
+        }
+        return r
+    }
+    static func subset(_ url: URL, _ pages: [Int]) -> URL {
+        guard let src = PDFDocument(url: url), pages.count < src.pageCount || pages != Array(0..<src.pageCount) else { return url }
+        let d = PDFDocument()
+        for (k, i) in pages.enumerated() { if let p = src.page(at: i)?.copy() as? PDFPage { d.insert(p, at: k) } }
+        let o = url.deletingLastPathComponent().appendingPathComponent(url.deletingPathExtension().lastPathComponent + "（第\(pages.count == 1 ? "\(pages[0] + 1)" : "\(pages.first! + 1)-\(pages.last! + 1)")页）.pdf")
+        if let data = d.dataRepresentation() { try? data.write(to: o, options: .atomic); return o }
+        return url
+    }
+}
 struct ActivitySheet: UIViewControllerRepresentable {
     let url: URL
     func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: [url], applicationActivities: nil) }

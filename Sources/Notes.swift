@@ -728,7 +728,7 @@ struct NoteDocView: View {
         .navigationDestination(item: $newPaper) { nid in ImportPaperView(id: nid) }
         .sheet(isPresented: $showPages) { NavigationStack { NotePagesSheet(id: id, current: $current) } }
         .sheet(item: $editing) { it in NavigationStack { NoteTextEditor(docID: id, item: it) } }
-        .sheet(item: $share) { s in ActivitySheet(url: s.url) }
+        .sheet(item: $share) { s in RangeShareSheet(url: s.url, current: pageIndex) }
         .sheet(isPresented: $camera) { CameraPicker { im in camera = false; if let im { insert(im) } }.ignoresSafeArea() }
         .importPickers(source: $imgSource, photos: $imgPhotos) { d, _ in
             guard let d else { return }

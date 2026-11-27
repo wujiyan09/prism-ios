@@ -13,6 +13,24 @@ struct PadPage {
     let save: (InkDrawing) -> Void
     /// Images placed on the sheet (scratch figures), in logical units.
     var figures: () -> [(UIImage, CGRect)] = { [] }
+    /// Same image as `background`, but safe to call off the main thread (own PDFDocument). Pages with it never
+    /// render on main when they come near the screen.
+    var backgroundAsync: (() async -> UIImage?)? = nil
+}
+
+/// Pad page images for PDFs: a private PDFDocument per file, used only on this queue (PDFKit isn't thread-safe).
+enum PadBG {
+    static let q = DispatchQueue(label: "pad.bg", qos: .userInitiated)
+    nonisolated(unsafe) private static var docs: [URL: PDFDocument] = [:]
+    static func thumb(_ url: URL, _ i: Int, _ size: CGSize) async -> UIImage? {
+        await withCheckedContinuation { c in
+            q.async {
+                let d = docs[url] ?? PDFDocument(url: url)
+                if let d { docs[url] = d }
+                c.resume(returning: d?.page(at: i)?.thumbnail(of: CGSize(width: size.width * 2, height: size.height * 2), for: .mediaBox))
+            }
+        }
+    }
 }
 
 struct PadSource {
@@ -534,13 +552,16 @@ enum PadSources {
             return PadPage(channel: "note:" + key, size: CGSize(width: NoteRender.logicalWidth, height: NoteRender.logicalWidth * CGFloat(p.aspect)),
                            background: { NoteRender.background(id, p, width: 1400) },
                            load: { PDFInk.load(key, 0) ?? InkDrawing() },
-                           save: { d in PDFInk.saveAsync(key, 0, d, title: doc.title, width: NoteRender.logicalWidth, erased: true) })
+                           save: { d in PDFInk.saveAsync(key, 0, d, title: doc.title, width: NoteRender.logicalWidth, erased: true) },
+                           backgroundAsync: { await NoteRender.renderOffMain(id, p, width: 1400) })
         }
+        for p in doc.pages { let k = NoteStore.inkKey(id, p.id); InkBitmapCache.prewarm({ PDFInk.load(k, 0) }) }
         return PadSource(owner: "note-" + id, title: doc.title, continuous: false, pages: pages)
     }
 
     static func pdf(_ doc: PDFDocument, key: String, title: String) -> PadSource {
         var pages: [PadPage] = []
+        let url = doc.documentURL.flatMap { $0.isFileURL ? $0 : nil }
         for i in 0..<doc.pageCount {
             guard let pg = doc.page(at: i) else { continue }
             let size = pg.bounds(for: .mediaBox).size
@@ -554,8 +575,10 @@ enum PadSources {
                                  save: { d in
                                      let w = PDFInk.width(key, i) ?? size.width
                                      PDFInk.saveAsync(key, i, d.transformed(using: CGAffineTransform(scaleX: w / size.width, y: w / size.width)), title: title, width: w, erased: true)
-                                 }))
+                                 },
+                                 backgroundAsync: url.map { u in { await PadBG.thumb(u, i, size) } }))
         }
+        for i in 0..<doc.pageCount { InkBitmapCache.prewarm({ PDFInk.load(key, i) }) }   // decode every page's ink in the background
         return PadSource(owner: "pdf:" + key, title: title, continuous: false, pages: pages)
     }
 }
@@ -1353,6 +1376,7 @@ final class PadPageWire: NSObject, InkCanvasDelegate {
     private var figObs: NSObjectProtocol?
     private let bgView = UIImageView()
     private var bgShown = false
+    private var nearGen = 0
     private weak var inner: UIView?
     /// Drawing loaded into the canvas (only for pages near the screen).
     private(set) var loaded = false
@@ -1362,10 +1386,31 @@ final class PadPageWire: NSObject, InkCanvasDelegate {
     func setNear(_ near: Bool) {
         guard near != bgShown else { return }
         bgShown = near
+        nearGen += 1
         if near {
-            bgView.image = page.background()
-            applying = true; canvas.drawing = PadHub.shared.current(page.channel) ?? page.load(); applying = false
-            loaded = true
+            let gen = nearGen, pg = page
+            if let bga = pg.backgroundAsync {
+                Task { @MainActor [weak self] in
+                    let im = await bga()
+                    guard let self, self.nearGen == gen else { return }
+                    self.bgView.image = im
+                }
+            } else { bgView.image = pg.background() }
+            if let live = PadHub.shared.current(pg.channel) {
+                applying = true; canvas.drawing = live; applying = false; loaded = true
+            } else {
+                // Ink file read + decode off the main thread (was a stall when scrolling into a heavy page).
+                PDFInk.loadQ.async { [weak self] in
+                    let d = pg.load()
+                    DispatchQueue.main.async {
+                        guard let self, self.nearGen == gen, self.bgShown else { return }
+                        var m = PadHub.shared.current(pg.channel) ?? d
+                        if self.dirty { m.strokes += self.canvas.drawing.strokes.filter { s in !m.strokes.contains { $0.id == s.id } } }   // drawn before the file arrived
+                        self.applying = true; self.canvas.drawing = m; self.applying = false
+                        self.loaded = true
+                    }
+                }
+            }
             if canvas.superview == nil, let inner { inner.addSubview(canvas) }
         } else {
             flush()

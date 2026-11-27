@@ -75,6 +75,7 @@ enum PDFInk {
     }
     /// Writes happen here, one at a time, never on the main thread (InkDrawing is a value: safe to encode off-main).
     static let saveQ = DispatchQueue(label: "pdfink.save", qos: .utility)
+    static let loadQ = DispatchQueue(label: "pdfink.load", qos: .userInitiated, attributes: .concurrent)
     static func saveAsync(_ key: String, _ page: Int, _ d: InkDrawing, title: String, width: CGFloat = 0, erased: Bool = false) {
         // The latest drawing is what a reload must see, even before the write lands (no waiting on saveQ).
         if !d.strokes.isEmpty || erased { mem.setObject(Box(d.strokes.isEmpty ? nil : d), forKey: dir(key).appendingPathComponent("\(page).drawing").path as NSString) }

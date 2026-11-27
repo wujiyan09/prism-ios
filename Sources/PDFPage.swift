@@ -11,6 +11,7 @@ struct PDFPage: View {
     @State private var doc: PDFDocument?
     @State private var failed = false
     @State private var pageIndex = 0
+    @State private var share: ShareItem?
     @State private var ink = InkProvider()
     @State private var inkOn = false
     @State private var vctl = ViewCtl()
@@ -47,10 +48,11 @@ struct PDFPage: View {
                 ToolbarItem(placement: .primaryAction) { InkToggle(on: $inkOn) }
                 ToolbarItem(placement: .primaryAction) { PadButton() }
                 ToolbarItem(placement: .primaryAction) {
-                    ShareLink(item: file) { Label(T("Share", "分享"), systemImage: "square.and.arrow.up") }
+                    Button { share = ShareItem(url: file) } label: { Label(T("Share", "分享"), systemImage: "square.and.arrow.up") }
                 }
             }
         }
+        .sheet(item: $share) { s in RangeShareSheet(url: s.url, current: pageIndex) }
         .deepSeek(doc.map { DSContext.pdfPage($0, pageIndex, title: title, url: url, subject: subject) })
         .onChange(of: inkOn) { _, v in ink.enabled = v }
         .task { await load() }
