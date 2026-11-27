@@ -2,7 +2,13 @@ import Foundation
 import Observation
 
 struct HistEntry: Codable { var r: [Int] = []; var last: Double = 0 }
-struct RunRecord: Codable, Identifiable { var t: Double; var title: String; var got: Int; var tot: Int; var id: Double { t } }
+struct RunQ: Codable, Hashable { var l: String; var ok: Bool?; var key: String? = nil }
+struct RunRecord: Codable, Identifiable {
+    var t: Double; var title: String; var got: Int; var tot: Int
+    /// Per-question results (new records only; older ones just have the score).
+    var qs: [RunQ]? = nil
+    var id: Double { t }
+}
 struct SheetState: Codable { var a: [Int: String] = [:]; var done = false; var score = 0 }
 struct QuizPrefs: Codable {
     var n = 20
@@ -116,5 +122,75 @@ final class ProgressStore {
 
     func reset() {
         hist = [:]; runs = []; sheets = [:]; seen = []; learned = []
+    }
+}
+
+import SwiftUI
+
+// MARK: - 练习记录 (every 交卷 / 结算 result, newest first)
+
+struct RunHistoryView: View {
+    @State private var prog = ProgressStore.shared
+    var filter: String? = nil
+    private var runs: [RunRecord] { filter.map { f in prog.runs.filter { $0.title == f } } ?? prog.runs }
+    var body: some View {
+        List {
+            if runs.isEmpty {
+                ContentUnavailableView("还没有练习记录", systemImage: "checklist", description: Text("交卷或结算后，成绩和每题对错会记在这里。"))
+                    .listRowBackground(Color.clear)
+            }
+            ForEach(runs) { r in
+                NavigationLink { RunDetailView(run: r) } label: { RunRow(run: r) }
+                    .listRowBackground(Color.cardBackground)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .appList()
+        .navigationTitle(filter == nil ? "练习记录" : "成绩")
+    }
+}
+
+struct RunRow: View {
+    let run: RunRecord
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(run.title).lineLimit(2)
+                Text(Date(timeIntervalSince1970: run.t).formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text("\(run.got)/\(run.tot)").font(.headline.monospacedDigit())
+                .foregroundStyle(run.tot > 0 && run.got * 2 >= run.tot ? Color.green : Color.orange)
+        }
+    }
+}
+
+struct RunDetailView: View {
+    let run: RunRecord
+    var body: some View {
+        List {
+            Section {
+                HStack { Text("得分"); Spacer(); Text("\(run.got)/\(run.tot)").font(.title3.bold().monospacedDigit()) }
+                Text(Date(timeIntervalSince1970: run.t).formatted(date: .complete, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+            }
+            .listRowBackground(Color.cardBackground)
+            Section("每题") {
+                if let qs = run.qs, !qs.isEmpty {
+                    ForEach(Array(qs.enumerated()), id: \.offset) { _, q in
+                        HStack(alignment: .top) {
+                            Image(systemName: q.ok == true ? "checkmark.circle.fill" : (q.ok == false ? "xmark.circle.fill" : "minus.circle"))
+                                .foregroundStyle(q.ok == true ? Color.green : (q.ok == false ? Color.red : Color.secondary))
+                            Text(q.l.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)).font(.callout).lineLimit(3)
+                        }
+                    }
+                } else {
+                    Text("这条记录是旧版本存的，只有总分。").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .listRowBackground(Color.cardBackground)
+        }
+        .appScreen()
+        .navigationTitle(run.title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

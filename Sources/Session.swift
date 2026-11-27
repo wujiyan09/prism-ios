@@ -1,3 +1,4 @@
+import PencilKit
 import SwiftUI
 import Observation
 
@@ -78,7 +79,12 @@ final class Session: Identifiable {
 
     func saveRun(_ lib: Library, _ prog: ProgressStore) {
         let s = score(lib)
-        prog.saveRun(RunRecord(t: started, title: title, got: s.got, tot: s.tot))
+        let qs: [RunQ] = keys.enumerated().map { i, k in
+            let it = lib.items[k]
+            let ok: Bool? = it.map { it in it.type == .mc ? (mc[i].map { _ in it.cancel || mc[i] == it.a }) : prog.mark(k) } ?? nil
+            return RunQ(l: "\(i + 1). " + String((it?.q ?? k).prefix(60)), ok: ok, key: k)
+        }
+        prog.saveRun(RunRecord(t: started, title: title, got: s.got, tot: s.tot, qs: qs))
     }
 
     func setSelfMark(_ i: Int, _ j: Int, _ v: Int, _ lib: Library, _ prog: ProgressStore) {
@@ -145,9 +151,26 @@ struct PagerCommands: Commands {
                     .disabled(pager?.choose == nil)
             }
             Divider()
-            Button(T("Submit", "交卷")) { pager?.submit?() }
+            Button(T("Submit", "交卷")) {
+                if let f = pager?.submit { f() } else if PadHub.shared.canSubmit { NotificationCenter.default.post(name: .padSubmit, object: nil) }
+            }
                 .keyboardShortcut(.return, modifiers: .command)
         }
+        CommandMenu(T("Tools", "工具")) {
+            Button(T("Pen", "钢笔")) { ToolSync.shared.select(InkTool(kind: .pen, color: .black, width: 2.5)) }.keyboardShortcut("1", modifiers: .command)
+            Button(T("Highlighter", "荧光笔")) { ToolSync.shared.select(InkTool(kind: .marker, color: .systemYellow, width: 15)) }.keyboardShortcut("2", modifiers: .command)
+            Button(T("Monoline", "单线笔")) { ToolSync.shared.select(InkTool(kind: .monoline, color: .black, width: 2)) }.keyboardShortcut("3", modifiers: .command)
+            Button(T("Eraser", "橡皮擦")) { ToolSync.shared.select(InkTool(kind: .eraser, color: .clear, width: 20)) }.keyboardShortcut("e", modifiers: .command)
+            Button(T("Lasso", "套索")) { ToolSync.shared.select(InkTool(kind: .lasso, color: .clear, width: 1)) }.keyboardShortcut("l", modifiers: .command)
+            Divider()
+            Button(T("Show/hide pad tools", "手写板显示/隐藏工具")) { NotificationCenter.default.post(name: .padToggleTools, object: nil) }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+            Button(T("Add page", "加一页")) { if let s = PadHub.shared.source { NotificationCenter.default.post(name: .padAddPage, object: s.owner) } }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            Button(T("Ask DeepSeek", "问 DeepSeek")) { NotificationCenter.default.post(name: .padAskDS, object: nil) }
+                .keyboardShortcut("k", modifiers: .command)
+        }
+
     }
 }
 
@@ -211,6 +234,7 @@ struct SessionView: View {
             .confirmationDialog(T("Quit without submitting?", "不交卷直接退出？"), isPresented: $confirmQuit, titleVisibility: .visible) {
                 Button(T("Quit", "退出"), role: .destructive) { scene.session = nil }
             }
+            .padSubmit(!session.submitted) { session.submit(lib, prog) }
             .confirmationDialog(T("\(unanswered) unanswered. Submit anyway?", "还有 \(unanswered) 题没做，确定交卷？"), isPresented: $confirmSubmit, titleVisibility: .visible) {
                 Button(T("Submit anyway", "仍然交卷")) { session.submit(lib, prog) }
             }

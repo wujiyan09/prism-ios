@@ -94,12 +94,12 @@ struct QuizBuilderView: View {
                     Text("—").foregroundStyle(.secondary)
                 }
                 ForEach(prog.runs.prefix(10)) { r in
-                    HStack {
+                    NavigationLink { RunDetailView(run: r) } label: { HStack {
                         Text(r.title).lineLimit(2)
                         Spacer()
                         Text("\(r.got)/\(r.tot) · \(Date(timeIntervalSince1970: r.t).formatted(date: .abbreviated, time: .omitted))")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    }
+                    } }
                 }
             }
             .listRowBackground(Color.cardBackground)

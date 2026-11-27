@@ -198,6 +198,8 @@ struct PPSchoolPaper: View {
                 }
             }
         }
+        .noteRecent(.mathPaper(info.id), title, "学校卷")
+        .padSubmit(!info.p.isEmpty && !ReviewStore.shared.inReview(sheet)) { ReviewStore.shared.handIn(sheet, title: T("School paper · ", "学校卷 · ") + title, route: "paper:" + info.id); showMS = true }
         .confirmationDialog(T("Hand in?", "确定交卷？"), isPresented: $confirmHandIn, titleVisibility: .visible) {
             Button(T("Submit", "交卷")) { ReviewStore.shared.handIn(sheet, title: T("School paper · ", "学校卷 · ") + title, route: "paper:" + info.id); showMS = true }
             Button(T("Cancel", "取消"), role: .cancel) {}
@@ -293,17 +295,9 @@ struct PPSetView: View {
                 else { Button(T("Submit", "交卷")) { confirmHandIn = true } }
             }
         }
+        .padSubmit(!review) { handInPP() }
         .confirmationDialog(T("Hand in?", "确定交卷？"), isPresented: $confirmHandIn, titleVisibility: .visible) {
-            Button(T("Submit", "交卷")) {
-                ReviewStore.shared.handIn(sheet, title: T("Past paper · ", "真题 · ") + info.t, route: "ppset:" + info.id)
-                for q in set?.qs ?? [] where q.o == nil {   // fresh attempt: clear old self-marks
-                    ProgressStore.shared.scores["pp:" + q.id] = nil
-                    UserDefaults.standard.removeObject(forKey: "lm.pp:" + q.id)
-                }
-                for q in set?.qs ?? [] where q.ty == "mc" {
-                    if let p = picked[q.id] { ProgressStore.shared.setMark("pp:" + q.id, ["A", "B", "C", "D", "E", "F"][min(p, 5)] == q.a.trimmingCharacters(in: .whitespaces)) }
-                }
-            }
+            Button(T("Submit", "交卷")) { handInPP() }
             Button(T("Cancel", "取消"), role: .cancel) {}
         } message: { Text(T("Then answers open so you can mark each question ✓ or ✗. Your scratch sheet stays until you tap Done.", "交卷后可以看答案，逐题标 ✓ / ✗。草稿纸会保留到你按「完成」。")) }
         .confirmationDialog(T("Settle score?", "结算？"), isPresented: $confirmDone, titleVisibility: .visible) {
@@ -325,6 +319,16 @@ struct PPSetView: View {
         .onChange(of: picked) { _, _ in ppPersist() }
     }
     private struct PPSnap: Codable { var index: Int; var picked: [String: Int] }
+    private func handInPP() {
+                ReviewStore.shared.handIn(sheet, title: T("Past paper · ", "真题 · ") + info.t, route: "ppset:" + info.id)
+                for q in set?.qs ?? [] where q.o == nil {   // fresh attempt: clear old self-marks
+                    ProgressStore.shared.scores["pp:" + q.id] = nil
+                    UserDefaults.standard.removeObject(forKey: "lm.pp:" + q.id)
+                }
+                for q in set?.qs ?? [] where q.ty == "mc" {
+                    if let p = picked[q.id] { ProgressStore.shared.setMark("pp:" + q.id, ["A", "B", "C", "D", "E", "F"][min(p, 5)] == q.a.trimmingCharacters(in: .whitespaces)) }
+                }
+    }
     private func ppPersist() {
         ResumeStore.shared.save("pp:" + info.id, PPSnap(index: index, picked: picked))
         ResumeStore.shared.update("pp:" + info.id, answered: picked.count, status: review ? 1 : 0)

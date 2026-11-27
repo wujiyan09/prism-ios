@@ -257,11 +257,21 @@ struct MathQuizRunner: View {
         }
     }
     private var split: Bool { splitOn && !isZh }
+    /// zh / chem / math, from the chapter (labels used to say 数学测验 for every subject).
+    private var quizSubject: String {
+        switch spec {
+        case .set(let id):
+            if let cid = MathMC.allInfo.first(where: { $0.1.id == id.components(separatedBy: "|")[0] })?.0, let c = MathLibrary.shared.chapter(cid) { return c.subjectID }
+            return id.hasPrefix("Z-") ? "zh" : "math"
+        case .custom(let chs, _, _):
+            return chs.first.flatMap { MathLibrary.shared.chapter($0)?.subjectID } ?? "math"
+        }
+    }
 
     private var title: String {
         switch spec {
         case .set(let id):
-            guard let (cid, s) = MathMC.allInfo.first(where: { $0.1.id == id }), let c = MathLibrary.shared.chapter(cid) else { return "" }
+            guard let (cid, s) = MathMC.allInfo.first(where: { $0.1.id == id.components(separatedBy: "|")[0] }), let c = MathLibrary.shared.chapter(cid) else { return "" }
             return (c.isZh ? c.t : "Ch\(c.n)") + " · " + (s.l == "Challenge" ? T("Challenge", "挑战") : s.l)
         case .custom: return T("Custom quiz", "自选测验")
         }
@@ -319,7 +329,8 @@ struct MathQuizRunner: View {
             ResumedBanner(restart: { picked = [:]; index = 0; build(); persist() }, shown: $resumed)
         }
         .workingSession("quiz-\(spec)")
-        .noteRecent(.mathQuiz(spec), title, isZh ? T("Chinese quiz", "中文测验") : T("Maths quiz", "数学测验"))
+        .noteRecent(.mathQuiz(spec), title, MathLibrary.title(quizSubject, T) + T(" quiz", "测验"))
+        .padSubmit(!items.isEmpty && index < items.count) { index = items.count }
     }
 
     private var dsContext: DSContext? {
@@ -456,7 +467,8 @@ struct MathQuizRunner: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            prog.saveRun(RunRecord(t: started, title: title, got: got, tot: items.count))
+            prog.saveRun(RunRecord(t: started, title: title, got: got, tot: items.count,
+                                   qs: items.enumerated().map { i, it in RunQ(l: "\(i + 1). " + String(it.v.st.prefix(60)), ok: picked[it.id].map { $0 == it.v.a }, key: MathMC.key(it.q)) }))
             ScratchStore.shared.clear()
             if case .set(let id) = spec, let set = MathMC.shared.set(id), set.kind != "pastpaper", set.kind != "award", !set.ch.hasPrefix("c-") {
                 // One bit per portal question, in the portal's order (any variant).
