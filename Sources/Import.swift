@@ -583,6 +583,7 @@ struct ImportPaperView: View {
         PDFKitView(doc: d, onPage: { if !isMS { page = $0 } }, ink: isMS ? msInk : ink,
                    inkKey: "imp:" + id + (isMS ? "-ms" : ""), inkTitle: (p?.name ?? "") + (isMS ? " · 评分标准" : ""), ctl: isMS ? msCtl : vctl)
             .id((isMS ? "ms" : "p") + (swap ? "1" : "0"))
+            .ignoresSafeArea(edges: .bottom)
             .overlay(alignment: .topTrailing) { ViewHUD(ctl: isMS ? msCtl : vctl) }
             .deepSeek(pageContext(d, isMS: isMS))
     }

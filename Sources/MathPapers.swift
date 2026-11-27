@@ -162,6 +162,7 @@ struct PPSchoolPaper: View {
                 if let d = (showMS && review) ? ms : paper ?? ms {
                     PDFKitView(doc: d, onPage: { page = $0 }, ink: ink, inkKey: "pp:" + info.id + (d === ms ? "-ms" : ""),
                                inkTitle: title + (d === ms ? " · 评分标准" : ""), ctl: vctl).id(showMS)
+                        .ignoresSafeArea(edges: .bottom)
                         .overlay(alignment: .topTrailing) { ViewHUD(ctl: vctl) }
                 } else {
                     DownloadOverlay()

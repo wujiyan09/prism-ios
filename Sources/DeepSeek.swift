@@ -1168,9 +1168,17 @@ struct DSInput: UIViewRepresentable {
     @Binding var text: String
     @Binding var focused: Bool
     var submit: () -> Void
-    static var holding = false
+    /// "DeepSeek input keeps focus" — only true while that text view is really on screen
+    /// (a stuck flag used to block every canvas from taking the pen).
+    static var holding: Bool {
+        get { _holding && (live?.window != nil) }
+        set { _holding = newValue }
+    }
+    private static var _holding = false
+    static weak var live: UITextView?
     func makeUIView(context: Context) -> UITextView {
         let v = UITextView()
+        DSInput.live = v
         v.font = .preferredFont(forTextStyle: .body); v.backgroundColor = .clear
         v.isScrollEnabled = false; v.textContainerInset = UIEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
         v.returnKeyType = .send; v.delegate = context.coordinator
