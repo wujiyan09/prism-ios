@@ -1013,8 +1013,8 @@ struct DSMarkdown: View {
         let money = "\u{E000}"
         var t = s.replacingOccurrences(of: "\\$", with: money)
         // \[ \] and \( \) delimiters → $$ / $ (only when they're delimiters, not \left[ / \big( etc.).
-        t = t.replacingOccurrences(of: #"(?<![A-Za-z])\\\[([\s\S]*?)\\\]"#, with: "\n$$$$$1$$$$\n", options: .regularExpression)
-        t = t.replacingOccurrences(of: #"(?<![A-Za-z])\\\(([\s\S]*?)\\\)"#, with: "$$$1$$", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"(?<![A-Za-z])\\\[([\s\S]*?)\\\]"#, with: "\n\\$\\$$1\\$\\$\n", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"(?<![A-Za-z])\\\(([\s\S]*?)\\\)"#, with: "\\$$1\\$", options: .regularExpression)
         // Markdown emphasis wrapped around maths (**$x$ 是…**) would leave stray ** once maths is split out: drop it.
         t = t.replacingOccurrences(of: #"\*\*([^*\n]*\$[^*\n]*)\*\*"#, with: "$1", options: .regularExpression)
         t = t.replacingOccurrences(of: "(?m)^#{1,6}\\s*(.+)$", with: "**$1**", options: .regularExpression)
