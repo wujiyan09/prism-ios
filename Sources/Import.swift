@@ -965,7 +965,7 @@ struct ImportQuestionView: View {
                         Text("第 \(q.n) 题").font(.subheadline.bold()).foregroundStyle(.secondary)
                         if let m = q.marks { Text("\(m) 分").font(.caption).foregroundStyle(.secondary) }
                         Spacer()
-                        Button { showPage = true } label: { Label("原页 \(q.page + 1)", systemImage: "doc.text.magnifyingglass") }.font(.caption).buttonStyle(.bordered)
+                        Button { showPage = true } label: { Label("原页 \(q.page + 1)", systemImage: "doc.text.magnifyingglass") }.font(.caption).glassButton()
                     }
                     MathText(text: q.text, size: 18)
                     if let d = doc, let im = ImpPDF.pageImage(d, q.page), let fig = ImpPDF.crop(im, q.box) {
@@ -1091,8 +1091,8 @@ struct ImportEditSheet: View {
                         TextField("答案", text: Binding(get: { q.answer ?? "" }, set: { v in edit(q.id) { $0.answer = v.isEmpty ? nil : v } })).frame(maxWidth: 140)
                         TextField("分数", value: Binding(get: { q.marks }, set: { v in edit(q.id) { $0.marks = v } }), format: .number).frame(maxWidth: 70).keyboardType(.numberPad)
                         Spacer()
-                        if i < qs.count - 1 { Button("与下一题合并") { merge(i) }.buttonStyle(.bordered) }
-                        Button("拆分") { split(i) }.buttonStyle(.bordered)
+                        if i < qs.count - 1 { Button("与下一题合并") { merge(i) }.glassButton() }
+                        Button("拆分") { split(i) }.glassButton()
                     }
                     .font(.caption)
                 }
@@ -1176,7 +1176,7 @@ struct ImportInkMarkSheet: View {
                                 Text("第 \(i + 1) 页")
                                 Spacer()
                                 if grading == i { ProgressView() }
-                                else { Button(results[i] == nil ? "DeepSeek 批改" : "重新批改") { grade(i) }.buttonStyle(.bordered).disabled(grading != nil) }
+                                else { Button(results[i] == nil ? "DeepSeek 批改" : "重新批改") { grade(i) }.glassButton().disabled(grading != nil) }
                             }
                             if let r = results[i] {
                                 Text("\(r.score)/\(r.max) · " + r.summary).font(.callout)

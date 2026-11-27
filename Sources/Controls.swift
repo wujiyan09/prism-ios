@@ -38,7 +38,7 @@ struct PageCluster<Extra: View>: View {
         if #available(iOS 26.0, *) {
             GlassEffectContainer { row.glassEffect(.regular.interactive(), in: .capsule) }
         } else {
-            row.background(.regularMaterial, in: Capsule())
+            row.glassBackground(Capsule())
         }
     }
 }
@@ -192,7 +192,7 @@ extension View {
         if #available(iOS 26.0, *) {
             if prominent { self.buttonStyle(.glassProminent) } else { self.buttonStyle(.glass) }
         } else {
-            if prominent { self.buttonStyle(.borderedProminent) } else { self.buttonStyle(.bordered) }
+            if prominent { self.glassButton(prominent: true) } else { self.glassButton() }
         }
     }
     /// Groups neighbouring glass buttons so they blend (e.g. ✓ / ✗).

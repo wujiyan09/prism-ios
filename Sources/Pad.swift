@@ -746,7 +746,7 @@ struct PadView: View {
     @ViewBuilder private func glass<C: View>(@ViewBuilder _ c: () -> C) -> some View {
         let v = c().padding(.horizontal, 12).frame(minHeight: 44)
         if #available(iOS 26.0, *) { v.glassEffect(.regular.interactive(), in: .capsule) }
-        else { v.background(.regularMaterial, in: Capsule()) }
+        else { v.glassBackground(Capsule()) }
     }
 }
 

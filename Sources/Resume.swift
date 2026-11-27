@@ -103,7 +103,7 @@ struct ResumedBanner: View {
             }
             .buttonStyle(.borderless)
             .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(.regularMaterial, in: Capsule())
+            .glassBackground(Capsule())
             .padding(.horizontal, 16).padding(.top, 6)
             .transition(.move(edge: .top).combined(with: .opacity))
             .task { try? await Task.sleep(for: .seconds(8)); withAnimation { shown = false } }
