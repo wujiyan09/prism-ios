@@ -196,6 +196,14 @@ enum InkGeometry {
         let k = sqrt(abs(t.a * t.d - t.b * t.c))
         var r = [CGFloat](repeating: 0, count: pts.count)
         for i in pts.indices { r[i] = max(0.25, size(s, pts, i, scale: k) / 2) }
+        if s.kind == .marker {
+            // Highlighter: one continuous stroked outline (no joins/gaps, one even transparency).
+            let line = CGMutablePath()
+            line.move(to: pts[0])
+            if pts.count == 1 { line.addLine(to: CGPoint(x: pts[0].x + 0.1, y: pts[0].y)) } else { line.addLines(between: pts) }
+            let w = max(0.5, r.reduce(0, +) / CGFloat(r.count) * 2)
+            return line.copy(strokingWithWidth: w, lineCap: .square, lineJoin: .round, miterLimit: 1)
+        }
         let caps = s.kind != .marker
         if pts.count == 1 || caps {
             for i in pts.indices where caps || i == 0 { circle(path, pts[i], r[i]) }
@@ -302,10 +310,11 @@ final class InkPresets {
     var presets: [InkPreset] { didSet { save() } }
     var eraserWidth: Double { didSet { UserDefaults.standard.set(eraserWidth, forKey: "ink.eraserWidth") } }
     private init() {
-        if let d = UserDefaults.standard.data(forKey: "ink.presets"), let p = try? JSONDecoder().decode([InkPreset].self, from: d), !p.isEmpty { presets = p }
+        if let d = UserDefaults.standard.data(forKey: "ink.presets"), let p = try? JSONDecoder().decode([InkPreset].self, from: d),
+           !p.filter({ $0.kind != .pencil }).isEmpty { presets = p.filter { $0.kind != .pencil } }   // pencil removed (Sam, 2026-11-27)
         else {
             presets = [InkPreset(kind: .pen, color: .black, width: 2.5), InkPreset(kind: .pen, color: .systemBlue, width: 2.5),
-                       InkPreset(kind: .pen, color: .systemRed, width: 2.5), InkPreset(kind: .pencil, color: .darkGray, width: 2.5),
+                       InkPreset(kind: .pen, color: .systemRed, width: 2.5),
                        InkPreset(kind: .marker, color: .systemYellow, width: 16), InkPreset(kind: .monoline, color: .black, width: 2)]
         }
         eraserWidth = UserDefaults.standard.object(forKey: "ink.eraserWidth") as? Double ?? 16
@@ -352,13 +361,38 @@ final class InkToolPicker: NSObject {
 }
 
 /// One floating palette per window, shown while a canvas with a visible picker is first responder.
+/// Drag it anywhere; it snaps to the nearest top/bottom edge and remembers where it was (x as a fraction of the width).
 enum InkPaletteHost {
     private static var hosts: [ObjectIdentifier: UIHostingController<InkPalette>] = [:]
+    private static var drags: [ObjectIdentifier: PaletteDrag] = [:]
     private static var pending = false
+    /// Squeeze / double-tap: show the palette at this window point once.
+    static var at: CGPoint?
     static func refresh() {
         guard !pending else { return }
         pending = true
         DispatchQueue.main.async { pending = false; update() }
+    }
+    static func showAt(_ p: CGPoint, in w: UIWindow) { at = p; update(); if let h = hosts[ObjectIdentifier(w)] { place(h.view, in: w) } }
+    static func place(_ v: UIView, in w: UIWindow) {
+        let size = v.sizeThatFits(CGSize(width: w.bounds.width - 20, height: 200))
+        v.bounds = CGRect(origin: .zero, size: CGSize(width: min(size.width, w.bounds.width - 20), height: size.height))
+        let sa = w.safeAreaInsets
+        let half = v.bounds.width / 2, hh = v.bounds.height / 2
+        if let p = at {
+            v.center = CGPoint(x: min(w.bounds.width - half - 10, max(half + 10, p.x)), y: min(w.bounds.height - sa.bottom - hh - 10, max(sa.top + hh + 10, p.y - hh - 30)))
+            return
+        }
+        let fx = UserDefaults.standard.object(forKey: "ink.palette.x") as? Double ?? 0.5
+        let bottom = UserDefaults.standard.bool(forKey: "ink.palette.bottom")
+        let x = min(w.bounds.width - half - 10, max(half + 10, CGFloat(fx) * w.bounds.width))
+        v.center = CGPoint(x: x, y: bottom ? w.bounds.height - sa.bottom - hh - 76 : sa.top + hh + 52)
+    }
+    static func snap(_ v: UIView, in w: UIWindow) {
+        at = nil
+        UserDefaults.standard.set(Double(v.center.x / max(1, w.bounds.width)), forKey: "ink.palette.x")
+        UserDefaults.standard.set(v.center.y > w.bounds.height / 2, forKey: "ink.palette.bottom")
+        UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0) { place(v, in: w) }
     }
     private static func update() {
         var shown = Set<ObjectIdentifier>()
@@ -368,25 +402,37 @@ enum InkPaletteHost {
             guard !shown.contains(id) else { continue }
             shown.insert(id)
             let model = InkPalette(picker: p, canvas: c)
-            if let h = hosts[id] {
-                h.rootView = model
-                if h.view.superview !== w { w.addSubview(h.view) }
-                w.bringSubviewToFront(h.view)
-            } else {
-                let h = UIHostingController(rootView: model)
+            let h: UIHostingController<InkPalette>
+            if let x = hosts[id] { h = x; h.rootView = model } else {
+                h = UIHostingController(rootView: model)
                 h.view.backgroundColor = .clear
-                h.sizingOptions = .intrinsicContentSize
-                h.view.translatesAutoresizingMaskIntoConstraints = false
-                w.addSubview(h.view)
-                NSLayoutConstraint.activate([
-                    h.view.centerXAnchor.constraint(equalTo: w.centerXAnchor),
-                    h.view.topAnchor.constraint(equalTo: w.safeAreaLayoutGuide.topAnchor, constant: 52)
-                ])
+                let d = PaletteDrag(window: w)
+                let pan = UIPanGestureRecognizer(target: d, action: #selector(PaletteDrag.pan(_:)))
+                h.view.addGestureRecognizer(pan)
+                drags[id] = d
                 hosts[id] = h
             }
-            if p.overrideUserInterfaceStyle != .unspecified { hosts[id]?.overrideUserInterfaceStyle = p.overrideUserInterfaceStyle }
+            if h.view.superview !== w { w.addSubview(h.view) }
+            w.bringSubviewToFront(h.view)
+            if p.overrideUserInterfaceStyle != .unspecified { h.overrideUserInterfaceStyle = p.overrideUserInterfaceStyle }
+            if !(drags[id]?.dragging ?? false) { place(h.view, in: w) }
         }
-        for (id, h) in hosts where !shown.contains(id) { h.view.removeFromSuperview(); hosts[id] = nil }
+        for (id, h) in hosts where !shown.contains(id) { h.view.removeFromSuperview(); hosts[id] = nil; drags[id] = nil }
+    }
+}
+
+final class PaletteDrag: NSObject {
+    weak var window: UIWindow?
+    var dragging = false
+    private var start: CGPoint = .zero
+    init(window: UIWindow) { self.window = window }
+    @objc func pan(_ g: UIPanGestureRecognizer) {
+        guard let v = g.view, let w = window else { return }
+        switch g.state {
+        case .began: dragging = true; start = v.center
+        case .changed: let t = g.translation(in: w); v.center = CGPoint(x: start.x + t.x, y: start.y + t.y)
+        default: dragging = false; InkPaletteHost.snap(v, in: w)
+        }
     }
 }
 
@@ -399,15 +445,16 @@ struct InkPalette: View {
 
     var body: some View {
         let t = picker.selectedTool
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary).accessibilityHidden(true)
             Button { canvas?.undo() } label: { Image(systemName: "arrow.uturn.backward") }.keyboardShortcut("z", modifiers: .command)
             Button { canvas?.redo() } label: { Image(systemName: "arrow.uturn.forward") }.keyboardShortcut("z", modifiers: [.command, .shift])
-            Divider().frame(height: 24)
+            Divider().frame(height: 32)
             ForEach(presets.presets) { p in
                 Button { picker.select(p) } label: {
                     ZStack {
-                        Circle().fill(Color(p.color)).frame(width: 22, height: 22)
-                        Image(systemName: p.kind.icon).font(.system(size: 10, weight: .bold)).foregroundStyle(.white).shadow(radius: 1)
+                        Circle().fill(Color(p.color)).frame(width: 34, height: 34)
+                        Image(systemName: p.kind.icon).font(.system(size: 15, weight: .bold)).foregroundStyle(.white).shadow(radius: 1)
                     }
                     .padding(3)
                     .overlay(Circle().stroke(t.presetID == p.id ? Color.accentColor : .clear, lineWidth: 2))
@@ -415,19 +462,20 @@ struct InkPalette: View {
                 .contextMenu { Button("编辑笔", systemImage: "slider.horizontal.3") { editing = true } }
                 .accessibilityLabel("\(p.kind.title)")
             }
-            Divider().frame(height: 24)
+            Divider().frame(height: 32)
             tool(.eraser); tool(.pixelEraser); tool(.lasso); tool(.laser)
             Button { editing = true } label: { Image(systemName: "slider.horizontal.3") }
         }
+        .font(.title3)
         .buttonStyle(.borderless)
-        .padding(.horizontal, 12).frame(minHeight: 44)
+        .padding(.horizontal, 16).frame(minHeight: 60)
         .background(.regularMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
         .sheet(isPresented: $editing) { InkPresetEditor(picker: picker) }
     }
     private func tool(_ k: InkKind) -> some View {
         Button { picker.select(kind: k) } label: {
-            Image(systemName: k.icon).frame(width: 28, height: 28)
+            Image(systemName: k.icon).font(.title3).frame(width: 40, height: 40)
                 .background(picker.selectedTool.kind == k ? Color.accentColor.opacity(0.25) : .clear, in: Circle())
         }.accessibilityLabel(k.title)
     }
@@ -446,7 +494,7 @@ struct InkPresetEditor: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Picker("类型", selection: $p.kind) {
-                                    ForEach([InkKind.pen, .pencil, .marker, .monoline], id: \.self) { k in Label(k.title, systemImage: k.icon).tag(k) }
+                                    ForEach([InkKind.pen, .marker, .monoline], id: \.self) { k in Label(k.title, systemImage: k.icon).tag(k) }
                                 }
                                 ColorPicker("", selection: Binding(get: { Color(p.color) }, set: { p.color = UIColor($0) })).labelsHidden()
                             }
@@ -521,7 +569,76 @@ final class InkDrawGesture: UIGestureRecognizer {
     override func reset() { touch = nil }
 }
 
-class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDelegate {
+class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDelegate, UIPencilInteractionDelegate {
+    // MARK: Hover preview (this screen): a dot the size of the stroke at touchdown, grows with height.
+    private let hoverLayer = CAShapeLayer()
+    private var liftedAt: CFTimeInterval = 0
+    private var lastHover: CGPoint?
+    @objc private func hovered(_ g: UIHoverGestureRecognizer) {
+        CATransaction.begin(); CATransaction.setDisableActions(true); defer { CATransaction.commit() }
+        switch g.state {
+        case .began, .changed:
+            let p = g.location(in: inkView)
+            lastHover = g.location(in: self)
+            guard drawingGestureRecognizer.touch == nil, CACurrentMediaTime() - liftedAt > 0.28, tool.kind != .lasso else { hoverLayer.path = nil; return }
+            let z = g.zOffset
+            let eraser = tool.kind == .eraser || tool.kind == .pixelEraser
+            let base: CGFloat
+            switch tool.kind {
+            case .pen: base = tool.width * 0.9
+            case .marker: base = tool.width * 0.65
+            default: base = tool.width
+            }
+            let d = max(eraser ? 6 : 2, eraser ? tool.width : base * (1 + 1.5 * z))
+            hoverLayer.path = UIBezierPath(ovalIn: CGRect(x: p.x - d / 2, y: p.y - d / 2, width: d, height: d)).cgPath
+            if eraser {
+                hoverLayer.fillColor = UIColor.white.withAlphaComponent(0.25).cgColor
+                hoverLayer.strokeColor = UIColor.systemGray.cgColor; hoverLayer.lineWidth = 1.5 / max(zoomScale, 0.01)
+            } else {
+                hoverLayer.fillColor = InkGeometry.display(tool.color, dark: dark).withAlphaComponent(tool.kind == .marker ? 0.35 : 0.55).cgColor
+                hoverLayer.strokeColor = UIColor.white.withAlphaComponent(0.8).cgColor; hoverLayer.lineWidth = 1 / max(zoomScale, 0.01)
+            }
+        default: hoverLayer.path = nil
+        }
+    }
+
+    // MARK: Apple Pencil double-tap / squeeze (system preference decides what they do)
+    private var previousTool: InkTool?
+    private func perform(_ a: UIPencilPreferredAction, at p: CGPoint?) {
+        switch a {
+        case .ignore: return
+        case .switchEraser:
+            if tool.kind == .eraser || tool.kind == .pixelEraser { setTool(previousTool ?? .defaultPen) }
+            else { let t = InkToolPicker(); t.select(kind: .eraser); setTool(t.selectedTool) }
+        case .switchPrevious: if let pt = previousTool { setTool(pt) }
+        case .showColorPalette: showPaletteAt(p)
+        default:
+            if #available(iOS 17.5, *), a == .runSystemShortcut { return }
+            showPaletteAt(p)
+        }
+    }
+    private func setTool(_ t: InkTool) {
+        if let p = InkToolPicker.all.allObjects.first(where: { $0.visibleFor.contains(self) }) { p.selectedTool = t } else { tool = t }
+    }
+    private func showPaletteAt(_ p: CGPoint?) {
+        guard let w = window else { return }
+        if let pk = InkToolPicker.all.allObjects.first(where: { $0.visibleFor.contains(self) }), !pk.isVisible {
+            pk.setVisible(true, forFirstResponder: self); _ = becomeFirstResponder()
+        }
+        let q = p ?? lastHover ?? CGPoint(x: bounds.midX, y: bounds.midY)
+        InkPaletteHost.showAt(convert(q, to: w), in: w)
+    }
+    func pencilInteractionDidTap(_ i: UIPencilInteraction) { perform(UIPencilInteraction.preferredTapAction, at: nil) }
+    @available(iOS 17.5, *)
+    func pencilInteraction(_ i: UIPencilInteraction, didReceiveTap t: UIPencilInteraction.Tap) {
+        perform(UIPencilInteraction.preferredTapAction, at: t.hoverPose?.location)
+    }
+    @available(iOS 17.5, *)
+    func pencilInteraction(_ i: UIPencilInteraction, didReceiveSqueeze s: UIPencilInteraction.Squeeze) {
+        guard s.phase == .ended else { return }
+        perform(UIPencilInteraction.preferredSqueezeAction, at: s.hoverPose?.location)
+    }
+
     let inkView = UIView()
     private let strokeHost = CALayer()
     private let activeLayer = CAShapeLayer()
@@ -535,7 +652,7 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
 
     let drawingGestureRecognizer = InkDrawGesture()
     var drawingPolicy: InkDrawingPolicy = .default { didSet { updatePolicy() } }
-    var tool: InkTool = .defaultPen { didSet { if tool.kind != .lasso { clearSelection() } } }
+    var tool: InkTool = .defaultPen { didSet { if tool.kind != .lasso { clearSelection() }; if oldValue != tool { previousTool = oldValue } } }
     /// Live hooks for the two-window mirror: the in-progress stroke every frame, and drawing edits mid-gesture.
     var onActive: ((InkStroke?) -> Void)?
     var onLiveDrawing: ((InkDrawing) -> Void)?
@@ -576,6 +693,10 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
         drawingGestureRecognizer.delaysTouchesBegan = false
         addGestureRecognizer(drawingGestureRecognizer)
         addInteraction(menu)
+        let pi = UIPencilInteraction(); pi.delegate = self; addInteraction(pi)
+        addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
+        hoverLayer.zPosition = 50
+        inkView.layer.addSublayer(hoverLayer)
         minimumZoomScale = 1; maximumZoomScale = 1
         updatePolicy()
     }
@@ -721,6 +842,7 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
     private func laserPoints(_ ps: [InkPoint]) -> [InkPoint] { let now = CACurrentMediaTime(); return ps.map { var q = $0; q.time = now; return q } }
 
     func inputBegan(_ t: UITouch, _ e: UIEvent) {
+        CATransaction.begin(); CATransaction.setDisableActions(true); hoverLayer.path = nil; CATransaction.commit()
         raw = samples(t, e)
         downAt = raw.first?.location ?? .zero
         before = drawing
@@ -752,6 +874,7 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
         }
     }
     func inputEnded(_ t: UITouch, _ e: UIEvent, cancelled: Bool) {
+        liftedAt = CACurrentMediaTime()
         defer { raw = []; inkDelegate?.canvasViewDidEndUsingTool?(self) }
         switch tool.kind {
         case .lasso:

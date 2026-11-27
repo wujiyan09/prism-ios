@@ -737,7 +737,6 @@ struct DSHistoryView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                }
                     }
                 }
                 .onDelete { idx in for i in idx { store.chats[chats[i].key] = nil } }
