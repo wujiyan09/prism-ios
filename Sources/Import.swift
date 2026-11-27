@@ -872,7 +872,7 @@ struct RangeShareSheet: View {
     static func subset(_ url: URL, _ pages: [Int]) -> URL {
         guard let src = PDFDocument(url: url), pages.count < src.pageCount || pages != Array(0..<src.pageCount) else { return url }
         let d = PDFDocument()
-        for (k, i) in pages.enumerated() { if let p = src.page(at: i)?.copy() as? PDFPage { d.insert(p, at: k) } }
+        for (k, i) in pages.enumerated() { if let p = src.page(at: i)?.copy() as? PDFKit.PDFPage { d.insert(p, at: k) } }
         let o = url.deletingLastPathComponent().appendingPathComponent(url.deletingPathExtension().lastPathComponent + "（第\(pages.count == 1 ? "\(pages[0] + 1)" : "\(pages.first! + 1)-\(pages.last! + 1)")页）.pdf")
         if let data = d.dataRepresentation() { try? data.write(to: o, options: .atomic); return o }
         return url
