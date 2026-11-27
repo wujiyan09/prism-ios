@@ -1060,7 +1060,7 @@ struct NoteCanvas: UIViewRepresentable {
             super.init()
             NotificationCenter.default.addObserver(forName: .noteInkFlush, object: nil, queue: nil) { [weak self] _ in self?.save() }
             PickerRestore.observe(self) { [weak self] in
-                guard let self, self.parent.enabled, self.parent.tools, let v = self.canvas, v.window != nil, self.lastTouched else { return }
+                guard let self, self.parent.enabled, self.parent.tools, let v = self.canvas, v.window != nil, self.lastTouched, !DSInput.holding else { return }
                 self.picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder()
             }
         }
@@ -1091,7 +1091,7 @@ struct NoteCanvas: UIViewRepresentable {
         }
         func canvasViewDidBeginUsingTool(_ v: PKCanvasView) {
             lastTouched = true
-            if parent.tools { picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder() }
+            if parent.tools && !DSInput.holding { picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder() }
         }
     }
 }

@@ -67,7 +67,8 @@ enum DSClient {
     - 默认用简体中文回答；英文专业名词、课本术语、程序代码保留英文。学生用英文提问就用英文答。
     - 跟课本和 DSE 评分标准的方法走，不要用超纲方法；步骤清楚、简洁，不要客套话。
     - 所有数学内容一律用 LaTeX：行内用 $...$，独立一行用 $$...$$。哪怕只是一个变量、一个数字带单位、一个简单分数或次方都要包在 $ 里，例如写 $x^2+3x-4=0$、$\\frac{1}{2}$、$\\sqrt{3}$、$5\\,\\text{cm}$、$\\theta$；绝不能写成 x^2、sqrt(3)、1/2、√3、x² 这种纯文字或 Unicode 数学。不要用 \\( \\) 或 \\[ \\]。$...$ 里面绝对不要写中文（包括 \\text{中文}）：用字母代表事件或量，例如 $P(A\\mid B)$，再在正文里用中文说明 A、B 是什么。代码用 ``` 代码块。
-    - 学生只要提示时，只给下一步的提示，绝对不要给出答案或完整解法。
+    - 默认直接、清楚地回答：先给答案，再给关键步骤和理由。不要反问、不要只让学生自己想。
+    - 只有当学生明确只要提示（例如按「给我提示（不给答案）」）时，才只给下一步的提示，不给答案或完整解法。
     - 如果没有给你答案或评分标准，不要假装知道官方答案。
     """
 
@@ -565,7 +566,7 @@ struct DeepSeekPanel: View {
     @State private var showSettings = false
     @State private var showHistory = false
     @AppStorage("ds.model") private var modelRaw = DSModel.flash.rawValue
-    @FocusState private var focused: Bool
+    @State private var focused = false
 
     private var model: DSModel { DSModel(rawValue: modelRaw) ?? .flash }
     private var busy: Bool { task != nil || grading }
@@ -752,10 +753,7 @@ struct DeepSeekPanel: View {
             }
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             HStack(alignment: .center, spacing: 6) {
-                TextField("问点什么…", text: $input, axis: .vertical)
-                    .lineLimit(1...5)
-                    .focused($focused)
-                    .onSubmit { send(input, shown: input) }
+                DSInput(text: $input, focused: $focused) { send(input, shown: input) }
                     .padding(.leading, 16).padding(.vertical, 8)
                     .frame(minHeight: 44)
                 let empty = input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || grading
@@ -806,7 +804,7 @@ struct DeepSeekPanel: View {
             s += "\n【本页：\(ctx.title)】\n" + ctx.page + "\n"
             if let r = ctx.revealed { s += "\n【答案 / 解析（学生已看到）】\n" + r + "\n" }
             else if let a = ctx.answer, !a.isEmpty {
-                s += "\n【参考答案 / 评分标准 / 解析（学生还没看到。只用来判断对错和给提示；除非学生明确要求看答案，否则绝不能说出答案、选项字母或完整解法，提示只给下一步）】\n" + a + "\n"
+                s += "\n【参考答案 / 评分标准 / 解析（学生还没看到。正常提问时可以直接用来回答和讲解；只有学生只要提示时才不能说出答案）】\n" + a + "\n"
             }
             imgs += ctx.images
         }
@@ -1140,3 +1138,70 @@ extension View {
 }
 
 final class DSBuffer { var text = ""; var last = Date() }
+
+
+/// DeepSeek input: Return confirms an IME candidate while composing and only sends when nothing is being composed;
+/// stays focused after sending; while it holds focus, the big-screen canvases don't take first responder back.
+struct DSInput: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var focused: Bool
+    var submit: () -> Void
+    static var holding = false
+    func makeUIView(context: Context) -> UITextView {
+        let v = UITextView()
+        v.font = .preferredFont(forTextStyle: .body); v.backgroundColor = .clear
+        v.isScrollEnabled = false; v.textContainerInset = UIEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
+        v.returnKeyType = .send; v.delegate = context.coordinator
+        v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let ph = UILabel(); ph.text = "问点什么…"; ph.textColor = .placeholderText; ph.font = v.font; ph.tag = 77
+        ph.translatesAutoresizingMaskIntoConstraints = false; v.addSubview(ph)
+        NSLayoutConstraint.activate([ph.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 5), ph.topAnchor.constraint(equalTo: v.topAnchor, constant: 4)])
+        context.coordinator.obs = NotificationCenter.default.addObserver(forName: UIWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak v] n in
+            // Back from the pad window: take the keyboard focus again if the field had it.
+            guard let v, DSInput.holding, (n.object as? UIWindow) === v.window, !v.isFirstResponder else { return }
+            v.becomeFirstResponder()
+        }
+        return v
+    }
+    func updateUIView(_ v: UITextView, context: Context) {
+        context.coordinator.parent = self
+        if v.text != text && v.markedTextRange == nil { v.text = text }
+        (v.viewWithTag(77))?.isHidden = !v.text.isEmpty
+        if focused && !v.isFirstResponder && v.window != nil { DispatchQueue.main.async { DSInput.holding = true; v.becomeFirstResponder() } }
+    }
+    func sizeThatFits(_ p: ProposedViewSize, uiView v: UITextView, context: Context) -> CGSize? {
+        let w = p.width ?? 300
+        let h = v.sizeThatFits(CGSize(width: w, height: .greatestFiniteMagnitude)).height
+        let line = (v.font?.lineHeight ?? 20)
+        v.isScrollEnabled = h > line * 5 + 8
+        return CGSize(width: w, height: min(h, line * 5 + 8))
+    }
+    static func dismantleUIView(_ v: UITextView, coordinator c: Coord) {
+        if let o = c.obs { NotificationCenter.default.removeObserver(o) }
+        DSInput.holding = false
+    }
+    func makeCoordinator() -> Coord { Coord(self) }
+    final class Coord: NSObject, UITextViewDelegate {
+        var parent: DSInput; var obs: NSObjectProtocol?
+        init(_ p: DSInput) { parent = p }
+        func textView(_ v: UITextView, shouldChangeTextIn r: NSRange, replacementText t: String) -> Bool {
+            if t == "\n" {
+                if v.markedTextRange != nil { return true }   // IME: Return confirms the candidate
+                parent.submit(); return false                  // focus stays here
+            }
+            return true
+        }
+        func textViewDidChange(_ v: UITextView) {
+            (v.viewWithTag(77))?.isHidden = !v.text.isEmpty
+            if v.markedTextRange == nil { parent.text = v.text }
+            v.invalidateIntrinsicContentSize()
+        }
+        func textViewDidBeginEditing(_ v: UITextView) { DSInput.holding = true; if !parent.focused { parent.focused = true } }
+        func textViewDidEndEditing(_ v: UITextView) {
+            // Pad window became key: keep holding so we come back; otherwise the user moved on.
+            let toPad = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.contains { $0 !== v.window && $0.isKeyWindow }
+            if !toPad { DSInput.holding = false; if parent.focused { parent.focused = false } }
+            if v.markedTextRange == nil { parent.text = v.text }
+        }
+    }
+}

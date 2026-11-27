@@ -1034,7 +1034,7 @@ struct CanvasRep: UIViewRepresentable {
         context.coordinator.picker = picker
         context.coordinator.shown = tools
         picker.setVisible(tools, forFirstResponder: v)
-        if tools { DispatchQueue.main.async { v.becomeFirstResponder() } }
+        if tools { DispatchQueue.main.async { if !DSInput.holding { v.becomeFirstResponder() } } }
         context.coordinator.redraw(paper: paper, placed: placed)
         context.coordinator.layoutAdd(v)
         let co = context.coordinator
@@ -1087,7 +1087,7 @@ struct CanvasRep: UIViewRepresentable {
         if let p = context.coordinator.picker, context.coordinator.shown != tools {
             context.coordinator.shown = tools
             p.setVisible(tools, forFirstResponder: v)
-            if tools { v.becomeFirstResponder() } else { v.resignFirstResponder() }
+            if tools { if !DSInput.holding && !v.isFirstResponder { v.becomeFirstResponder() } } else { v.resignFirstResponder() }
         }
         if context.coordinator.redraw(paper: paper, placed: placed) { context.coordinator.save() }
     }
@@ -1171,7 +1171,7 @@ struct CanvasRep: UIViewRepresentable {
             parent = p
             super.init()
             PickerRestore.observe(self) { [weak self] in
-                guard let self, self.shown, let v = self.canvas, v.window != nil else { return }
+                guard let self, self.shown, let v = self.canvas, v.window != nil, !DSInput.holding else { return }
                 self.picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder()
             }
         }

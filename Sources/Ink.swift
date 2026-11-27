@@ -64,6 +64,7 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
         super.init()
         PickerRestore.observe(self) { [weak self] in
             guard let self, self.enabled, let c = self.canvases.values.first(where: { $0.window != nil }) else { return }
+            guard !DSInput.holding else { return }
             self.picker.setVisible(true, forFirstResponder: c); c.becomeFirstResponder()
         }
     }
@@ -110,7 +111,7 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
         c.isUserInteractionEnabled = enabled
         picker.addObserver(c)
         picker.setVisible(enabled, forFirstResponder: c)
-        if enabled { c.becomeFirstResponder() } else { c.resignFirstResponder() }
+        if enabled { if !DSInput.holding { c.becomeFirstResponder() } } else { c.resignFirstResponder() }
     }
 }
 

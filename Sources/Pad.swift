@@ -1161,14 +1161,20 @@ extension View {
 
 /// PKCanvasView without the tap edit menu (全选 / 插入空白); lasso actions stay.
 final class QuietCanvas: PKCanvasView {
-    /// PencilKit's tap menu (全选 / 插入空白): remove its edit-menu interactions wherever PencilKit adds them.
-    private func strip(_ v: UIView) {
-        for i in v.interactions where i is UIEditMenuInteraction { v.removeInteraction(i) }
-        for s in v.subviews { strip(s) }
+    /// PencilKit's tap menu: with the lasso tool it stays (拷贝/删除…); with any other tool it's removed,
+    /// so a stray tap while writing can't pop 全选 / 插入空白.
+    private var parked: [(UIView, UIEditMenuInteraction)] = []
+    private var lassoOn: Bool { tool is PKLassoTool }
+    override var tool: PKTool { didSet { sync() } }
+    override func didMoveToWindow() { super.didMoveToWindow(); sync() }
+    override func didAddSubview(_ v: UIView) { super.didAddSubview(v); if !lassoOn { park(v) } }
+    private func park(_ v: UIView) {
+        for i in v.interactions { if let m = i as? UIEditMenuInteraction { v.removeInteraction(m); parked.append((v, m)) } }
+        for s in v.subviews { park(s) }
     }
-    override func didMoveToWindow() { super.didMoveToWindow(); strip(self) }
-    override func didAddSubview(_ v: UIView) { super.didAddSubview(v); strip(v) }
-    override func addInteraction(_ i: UIInteraction) { if i is UIEditMenuInteraction { return }; super.addInteraction(i) }
+    private func sync() {
+        if lassoOn { for (v, m) in parked { v.addInteraction(m) }; parked = [] } else { park(self) }
+    }
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         let n = NSStringFromSelector(action).lowercased()
         if action == #selector(selectAll(_:)) || n.contains("insertspace") || n.contains("insertspacing") || n.contains("selectall") { return false }
