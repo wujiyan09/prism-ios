@@ -433,17 +433,12 @@ struct NotesLibraryView: View {
             Button("删除", role: .destructive) { confirm.forEach { store.delete($0) }; confirm = []; selection = [] }
         }
         .importPickers(source: $picker, photos: $photoItems) { doc, err in
-            if let doc { pending = PendingDoc(doc: doc) } else if let err { error = err }
+            if let doc {
+                let t = (doc.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                    ?? "笔记 " + Date().formatted(date: .numeric, time: .omitted)
+                let n = store.createFrom(title: t, pdf: doc); store.update(n.id) { $0.folder = folder }; open = n.id
+            } else if let err { error = err }
         }
-        .alert("导入", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
-            TextField("名称", text: $field)
-            Button("取消", role: .cancel) { pending = nil }
-            Button("导入") {
-                if let p = pending { let n = store.createFrom(title: field.isEmpty ? "导入的笔记" : field, pdf: p.doc); store.update(n.id) { $0.folder = folder }; open = n.id }
-                pending = nil
-            }
-        } message: { Text("\(pending?.doc.pageCount ?? 0) 页") }
-        .onChange(of: pending?.id) { _, _ in if pending != nil { field = "笔记 " + Date().formatted(date: .numeric, time: .omitted) } }
         .sheet(isPresented: $showNew) { NavigationStack { NoteNewSheet { id in showNew = false; if let id { store.update(id) { $0.folder = folder }; open = id } } } }
     }
 

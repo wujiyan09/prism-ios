@@ -357,6 +357,10 @@ struct ImportPickers: ViewModifier {
             } else if let im = UIImage(data: data) { ims.append(im) }
         }
         for im in ims { if let p = PDFKit.PDFPage(image: im) { out.insert(p, at: out.pageCount) } }
+        // Original filename (no extension) travels with the document; used as the name, no naming dialog.
+        if let u = urls.first(where: { $0.pathExtension.lowercased() != "prismpaper" }) {
+            var a = out.documentAttributes ?? [:]; a[PDFDocumentAttribute.titleAttribute] = u.deletingPathExtension().lastPathComponent; out.documentAttributes = a
+        }
         done(out.pageCount > 0 ? out : nil, out.pageCount > 0 ? nil : "没有可以导入的 PDF 或图片")
     }
 }
@@ -384,6 +388,7 @@ struct ImportNewSheet: View {
     let close: () -> Void
     @State private var name = "导入的试卷 " + Date().formatted(date: .numeric, time: .omitted)
     @State private var subject = "math"
+    private var fileName: String? { (doc.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String).flatMap { $0.isEmpty ? nil : $0 } }
     @State private var chapters: [String] = []
 
     private var options: [(String, String)] {
@@ -399,7 +404,7 @@ struct ImportNewSheet: View {
     var body: some View {
         Form {
             Section {
-                TextField("名称", text: $name)
+                LabeledContent("名称", value: name)
                 LabeledContent("页数", value: "\(doc.pageCount)")
                 Picker("科目", selection: $subject) {
                     Text("Mathematics").tag("math"); Text("M2").tag("m2"); Text("ICT").tag("ict"); Text("Physics").tag("phy")
@@ -408,6 +413,7 @@ struct ImportNewSheet: View {
                 .onChange(of: subject) { _, _ in chapters = [] }
             }
             .listRowBackground(Color.cardBackground)
+            .onAppear { if let f = fileName { name = f } }
             if !options.isEmpty {
                 Section {
                     ForEach(options, id: \.0) { o in
