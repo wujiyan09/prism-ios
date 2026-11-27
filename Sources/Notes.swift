@@ -833,7 +833,7 @@ struct NoteDocView: View {
                     ForEach(NotePaper.allCases) { s in Button(s.name) { addPage(style: s.rawValue) } }
                 } label: { Label("在后面加一页", systemImage: "plus.rectangle.on.rectangle") }
             } label: { Image(systemName: "plus.circle") }
-            Button { showQuiz = true } label: { Image(systemName: "sparkles.rectangle.stack") }.accessibilityLabel("根据此 PDF 出题")
+            Button { InkSafety.flushAll(); showQuiz = true } label: { Image(systemName: "sparkles.rectangle.stack") }.accessibilityLabel("根据此 PDF 出题")
             Button { showPages = true } label: { Image(systemName: "square.grid.2x2") }.accessibilityLabel("页面")
             Menu {
                 Button { field = doc?.title ?? ""; rename = true } label: { Label("重命名", systemImage: "pencil") }
@@ -1031,6 +1031,7 @@ struct NoteCanvas: UIViewRepresentable {
         return find(w)
     }
     func updateUIView(_ v: PKCanvasView, context: Context) {
+        if context.coordinator.parent.key != key { context.coordinator.save(); context.coordinator.loadedWidth = 0 }
         context.coordinator.parent = self
         v.isUserInteractionEnabled = enabled
         if v.bounds.width > 10 && context.coordinator.loadedWidth != v.bounds.width { context.coordinator.load() }
@@ -1058,7 +1059,7 @@ struct NoteCanvas: UIViewRepresentable {
         init(_ p: NoteCanvas) {
             parent = p
             super.init()
-            NotificationCenter.default.addObserver(forName: .noteInkFlush, object: nil, queue: nil) { [weak self] _ in self?.save() }
+            NotificationCenter.default.addObserver(forName: .noteInkFlush, object: nil, queue: .main) { [weak self] _ in self?.save() }
             PickerRestore.observe(self) { [weak self] in
                 guard let self, self.parent.enabled, self.parent.tools, let v = self.canvas, v.window != nil, self.lastTouched, !DSInput.holding else { return }
                 self.picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder()
@@ -1069,20 +1070,28 @@ struct NoteCanvas: UIViewRepresentable {
 
         func load() {
             guard let v = canvas, v.bounds.width > 10 else { return }
+            if edited { save() }   // never reload over strokes still waiting on the debounce
             loading = true
             loadedWidth = v.bounds.width
             let k = v.bounds.width / NoteRender.logicalWidth
             v.drawing = (PDFInk.load(parent.key, 0) ?? PKDrawing()).transformed(using: CGAffineTransform(scaleX: k, y: k))
+            savedKey = parent.key
             loading = false
         }
         func save() {
-            guard let v = canvas, loadedWidth > 10 else { return }
+            pending?.cancel(); pending = nil
+            // Only canvases the user actually changed since loading: an untouched or not-yet-loaded canvas never writes.
+            guard let v = canvas, loadedWidth > 10, edited, savedKey == parent.key else { return }
+            edited = false
             let k = NoteRender.logicalWidth / loadedWidth
-            PDFInk.save(parent.key, 0, v.drawing.transformed(using: CGAffineTransform(scaleX: k, y: k)), title: parent.title, width: NoteRender.logicalWidth)
-            if v.drawing.strokes.isEmpty { try? FileManager.default.removeItem(at: PDFInk.dir(parent.key).appendingPathComponent("0.w")) }
+            PDFInk.save(parent.key, 0, v.drawing.transformed(using: CGAffineTransform(scaleX: k, y: k)), title: parent.title, width: NoteRender.logicalWidth, erased: true)
         }
+        var edited = false
+        /// Key the canvas content belongs to (a reused canvas must not save page A's ink as page B).
+        var savedKey = ""
         func canvasViewDrawingDidChange(_ v: PKCanvasView) {
             guard !loading else { return }
+            edited = true
             link?.changed(v.drawing)
             pending?.cancel()
             let w = DispatchWorkItem { [weak self] in self?.save() }
@@ -1170,7 +1179,7 @@ enum NoteExport {
         return ImpExport.out.appendingPathComponent(n + suffix + "." + ext)
     }
     private static func render(_ id: String, overlay: Bool, to u: URL) -> URL? {
-        NotificationCenter.default.post(name: .noteInkFlush, object: nil)   // save ink still waiting on the debounce
+        InkSafety.flushAll()   // save ink still waiting on the debounce
         guard let d = NoteStore.shared.docs[id] else { return nil }
         let r = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842))
         do {
@@ -1265,3 +1274,11 @@ struct NotesStorageSection: View {
 }
 
 extension Notification.Name { static let noteInkFlush = Notification.Name("noteInkFlush") }
+
+/// Writes every pending ink save now (app going to background, before heavy work).
+enum InkSafety {
+    static func flushAll() {
+        let post = { NotificationCenter.default.post(name: .noteInkFlush, object: nil) }
+        if Thread.isMainThread { post() } else { DispatchQueue.main.sync(execute: post) }
+    }
+}

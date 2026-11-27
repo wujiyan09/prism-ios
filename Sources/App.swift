@@ -30,6 +30,7 @@ struct ICTApp: App {
                     NavigationStack { OpenInSheet(item: it) }
                 }
                 .onChange(of: phase) { _, p in
+                    if p != .active { InkSafety.flushAll() }   // write pending ink before the app can be killed
                     if p == .active { Reminders.shared.reschedule(); Task { await PortalSubmit.shared.flush() } }
                     if p != .inactive { Task { await SyncManager.shared.sync() } }
                     if p == .background { DriveBackup.shared.autoBackup() }

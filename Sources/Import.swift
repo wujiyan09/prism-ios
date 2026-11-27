@@ -704,7 +704,7 @@ struct ImportPaperView: View {
                     Button { withAnimation { splitOn.toggle() } } label: { Image(systemName: splitOn ? "rectangle.split.2x1.fill" : "rectangle.split.2x1") }
                 }
                 Menu {
-                    Button { showQuiz = true } label: { Label("根据此 PDF 出题", systemImage: "sparkles.rectangle.stack") }.disabled(doc == nil)
+                    Button { InkSafety.flushAll(); showQuiz = true } label: { Label("根据此 PDF 出题", systemImage: "sparkles.rectangle.stack") }.disabled(doc == nil)
                     if p.mode == "cards" {
                         Button { showEdit = true } label: { Label("编辑 / 合并 / 拆分题目", systemImage: "pencil") }.disabled(p.qs.isEmpty)
                         if !remainingPages.isEmpty && !p.qs.isEmpty { Button { confirmParse = true } label: { Label("解析剩下的页", systemImage: "sparkles") } }

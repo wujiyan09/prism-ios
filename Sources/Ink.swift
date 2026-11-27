@@ -21,14 +21,49 @@ enum PDFInk {
     static func width(_ key: String, _ page: Int) -> CGFloat? {
         (try? String(contentsOf: dir(key).appendingPathComponent("\(page).w"), encoding: .utf8)).flatMap { Double($0) }.map { CGFloat($0) }
     }
-    static func save(_ key: String, _ page: Int, _ d: PKDrawing, title: String, width: CGFloat = 0) {
+    /// Saves one page's ink. Data-safety rules (after a whole note's ink vanished):
+    /// - an empty drawing never replaces a non-empty file unless `erased` (the user really erased everything on this canvas);
+    /// - even then the old file is kept as `<page>.drawing.bak1`, not deleted;
+    /// - before overwriting, the previous version is rotated into .bak1…bak3 (at most once every 5 minutes);
+    /// - a save that would drop most of the strokes at once is refused unless `erased`.
+    static func save(_ key: String, _ page: Int, _ d: PKDrawing, title: String, width: CGFloat = 0, erased: Bool = false) {
         let dd = dir(key)
         let f = dd.appendingPathComponent("\(page).drawing")
-        if d.strokes.isEmpty { try? FileManager.default.removeItem(at: f); return }
-        try? FileManager.default.createDirectory(at: dd, withIntermediateDirectories: true)
+        let fm = FileManager.default
+        let old = fm.fileExists(atPath: f.path) ? (try? Data(contentsOf: f)).flatMap { try? PKDrawing(data: $0) } : nil
+        let oldCount = old?.strokes.count ?? 0
+        if d.strokes.isEmpty {
+            guard oldCount > 0 else { return }
+            guard erased else { NSLog("PDFInk: refused to save empty drawing over \(oldCount) strokes (\(key) p\(page))"); return }
+            backup(f, force: true)
+            try? fm.removeItem(at: f); return
+        }
+        if !erased, oldCount >= 10, d.strokes.count * 4 < oldCount {
+            NSLog("PDFInk: refused save dropping \(oldCount) -> \(d.strokes.count) strokes (\(key) p\(page))"); return
+        }
+        try? fm.createDirectory(at: dd, withIntermediateDirectories: true)
+        if oldCount > 0 { backup(f, force: d.strokes.count < oldCount) }
         try? d.dataRepresentation().write(to: f, options: .atomic)
         try? Data(title.utf8).write(to: dd.appendingPathComponent("title.txt"))
         if width > 0 { try? Data("\(Double(width))".utf8).write(to: dd.appendingPathComponent("\(page).w")) }
+    }
+    /// Rolling local copies of an ink file: .bak1 (newest) … .bak3.
+    static func backup(_ f: URL, force: Bool) {
+        let fm = FileManager.default
+        func b(_ n: Int) -> URL { f.deletingLastPathComponent().appendingPathComponent(f.lastPathComponent + ".bak\(n)") }
+        if !force, let m = (try? b(1).resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate, Date().timeIntervalSince(m) < 300 { return }
+        try? fm.removeItem(at: b(3))
+        try? fm.moveItem(at: b(2), to: b(3))
+        try? fm.moveItem(at: b(1), to: b(2))
+        try? fm.copyItem(at: f, to: b(1))
+    }
+    /// Newest backup of a page with strokes (for recovery).
+    static func latestBackup(_ key: String, _ page: Int) -> PKDrawing? {
+        for n in 1...3 {
+            let u = dir(key).appendingPathComponent("\(page).drawing.bak\(n)")
+            if let d = (try? Data(contentsOf: u)).flatMap({ try? PKDrawing(data: $0) }), !d.strokes.isEmpty { return d }
+        }
+        return nil
     }
     struct Entry: Identifiable { let id: String; let title: String; let size: Int; let date: Date; let pages: Int }
     static func papers() -> [Entry] {
@@ -105,7 +140,7 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
         links[c.tag]?.tearDown(); links[c.tag] = nil
     }
 
-    func canvasViewDrawingDidChange(_ c: PKCanvasView) { links[c.tag]?.changed(c.drawing); PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width) }
+    func canvasViewDrawingDidChange(_ c: PKCanvasView) { links[c.tag]?.changed(c.drawing); PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width, erased: true) }
 
     private func apply(_ c: PKCanvasView) {
         c.isUserInteractionEnabled = enabled

@@ -200,6 +200,7 @@ final class DriveBackup: NSObject, ASWebAuthenticationPresentationContextProvidi
         for case let u as URL in e {
             let rel = String(u.standardizedFileURL.path.dropFirst(base.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             if let top = rel.split(separator: "/").first, skip.contains(String(top)) { if (try? u.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile != true { e.skipDescendants() }; continue }
+            if u.lastPathComponent.contains(".bak") { continue }
             if (try? u.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true { out[rel] = u }
         }
         return out
@@ -248,7 +249,8 @@ final class DriveBackup: NSObject, ASWebAuthenticationPresentationContextProvidi
             }
             // Deleted locally: delete the copy too.
             let present = Set(files.map(\.0))
-            for (path, e) in man where !present.contains(path) {
+            // Handwriting copies are never deleted from Drive (a lost local file must stay recoverable).
+            for (path, e) in man where !present.contains(path) && !path.hasPrefix("pdf-ink/") {
                 _ = try? await call("https://www.googleapis.com/drive/v3/files/\(e.id)", method: "DELETE")
                 man[path] = nil
             }

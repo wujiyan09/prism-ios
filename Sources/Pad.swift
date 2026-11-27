@@ -697,7 +697,7 @@ enum PadSources {
             return PadPage(channel: "note:" + key, size: CGSize(width: NoteRender.logicalWidth, height: NoteRender.logicalWidth * CGFloat(p.aspect)),
                            background: { NoteRender.background(id, p, width: 1400) },
                            load: { PDFInk.load(key, 0) ?? PKDrawing() },
-                           save: { d in PDFInk.save(key, 0, d, title: doc.title, width: NoteRender.logicalWidth) })
+                           save: { d in PDFInk.save(key, 0, d, title: doc.title, width: NoteRender.logicalWidth, erased: true) })
         }
         return PadSource(owner: "note-" + id, title: doc.title, continuous: false, pages: pages)
     }
@@ -716,7 +716,7 @@ enum PadSources {
                                  },
                                  save: { d in
                                      let w = PDFInk.width(key, i) ?? size.width
-                                     PDFInk.save(key, i, d.transformed(using: CGAffineTransform(scaleX: w / size.width, y: w / size.width)), title: title, width: w)
+                                     PDFInk.save(key, i, d.transformed(using: CGAffineTransform(scaleX: w / size.width, y: w / size.width)), title: title, width: w, erased: true)
                                  }))
         }
         return PadSource(owner: "pdf:" + key, title: title, continuous: false, pages: pages)
@@ -1087,6 +1087,7 @@ struct PadCanvas: UIViewRepresentable {
         init(_ p: PadCanvas) {
             parent = p
             super.init()
+            NotificationCenter.default.addObserver(forName: .noteInkFlush, object: nil, queue: .main) { [weak self] _ in self?.flush() }
             toolObs = NotificationCenter.default.addObserver(forName: .padToggleTools, object: nil, queue: .main) { [weak self] _ in
                 guard let self, let v = self.canvas, v.window != nil else { return }
                 let show = !(self.picker.isVisible && v.isFirstResponder)
@@ -1165,6 +1166,7 @@ struct PadCanvas: UIViewRepresentable {
         }
         func canvasViewDrawingDidChange(_ v: PKCanvasView) {
             guard !applying else { return }
+            edited = true
         if let st = v.drawing.strokes.last, let t = v.tool as? PKInkingTool { InkCalib.learn(st, width: t.width) }
             PadHub.shared.publish(parent.page.channel, v.drawing, from: self)
             committed = PadHub.shared.strokeSeq
@@ -1174,9 +1176,11 @@ struct PadCanvas: UIViewRepresentable {
             pending = w
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: w)
         }
+        var edited = false
         func flush() {
             pending?.cancel(); pending = nil
-            guard let v = canvas else { return }
+            guard let v = canvas, edited else { return }   // never write a canvas the user didn't change
+            edited = false
             parent.page.save(v.drawing)
         }
     }
@@ -1619,6 +1623,7 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
         canvas.addGestureRecognizer(pen)
         canvas.drawingGestureRecognizer.addTarget(self, action: #selector(drawing(_:)))
         canvas.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
+        NotificationCenter.default.addObserver(forName: .noteInkFlush, object: nil, queue: .main) { [weak self] _ in self?.flush() }
     }
 
     func sharpen(_ s: CGFloat) {
