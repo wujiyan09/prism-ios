@@ -557,6 +557,7 @@ struct NoteDocView: View {
     @State private var editing: NoteItem?
     @State private var showPages = false
     @State private var showQuiz = false
+    @State private var mainUser = Date.distantPast
     @State private var newPaper: String?
     @AppStorage("notes.dsScope") private var scope = "all"
     @State private var ctx: DSContext?
@@ -580,7 +581,22 @@ struct NoteDocView: View {
                     GeometryReader { geo in
                         let base = min(1000, max(200, geo.size.width - 32))
                         ZoomScroll(size: CGSize(width: base + 32, height: contentHeight(doc, base)), zoom: $zoom, jump: $jump,
-                                   onScroll: { y in pageAt(doc, base, y) }, locked: vctl.locked) {
+                                   onScroll: { y in pageAt(doc, base, y) }, locked: vctl.locked, onUser: { top, z in
+                                       // Big screen moved by the user: the pad follows (and stale pad positions are ignored for a moment).
+                                       mainUser = Date()
+                                       guard PadHub.shared.padOpen else { return }
+                                       let f = base / NoteRender.logicalWidth
+                                       var t = Self.pad
+                                       for p in doc.pages {
+                                           let h = blockH(p, base)
+                                           if top < t + h + Self.gap {
+                                               let r = CGRect(x: 0, y: max(0, top - t) / f, width: geo.size.width / z / f, height: geo.size.height / z / f)
+                                               NotificationCenter.default.post(name: .mainViewport, object: "note:" + NoteStore.inkKey(id, p.id), userInfo: ["r": r])
+                                               return
+                                           }
+                                           t += h + Self.gap
+                                       }
+                                   }) {
                             pagesStack(doc, base)
                         }
                         .overlay(alignment: .topTrailing) { ViewHUD(ctl: vctl) }
@@ -599,7 +615,7 @@ struct NoteDocView: View {
                         .onChange(of: showPages) { _, v in if !v, let c = current { jump = offset(doc, base, c) } }
                         .onReceive(NotificationCenter.default.publisher(for: .padViewport)) { n in
                             // 手写板 scrolled/zoomed: show the same part of the same page.
-                            guard PadHub.shared.mainFollows, let ch = n.object as? String, let r = n.userInfo?["r"] as? CGRect, r.width > 1,
+                            guard Date().timeIntervalSince(mainUser) > 0.6, PadHub.shared.mainFollows, let ch = n.object as? String, let r = n.userInfo?["r"] as? CGRect, r.width > 1,
                                   let pi = doc.pages.firstIndex(where: { "note:" + NoteStore.inkKey(id, $0.id) == ch }) else { return }
                             let f = base / NoteRender.logicalWidth
                             if PadHub.syncZoom && !vctl.locked {

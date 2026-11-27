@@ -91,7 +91,10 @@ final class PadHub {
         var poly: [CGPoint] = []
         /// Pencil azimuth (radians, view space) and altitude (0 = flat … π/2 = upright) per point; empty = unknown.
         var az: [CGFloat] = []
-        var alt: [CGFloat] = [] }
+        var alt: [CGFloat] = []
+        /// Touch timestamps per point (seconds); ink = the pad's current PencilKit ink (real-stroke preview).
+        var ts: [TimeInterval] = []
+        var ink: PKInk? = nil }
     static func describe(_ t: PKTool) -> (Kind, UIColor, CGFloat) {
         if let i = t as? PKInkingTool {
             switch i.inkType {
@@ -165,7 +168,7 @@ final class LivePreview {
     func show(_ l: PadHub.Live?, k: CGFloat, in host: CALayer, dark: Bool = false) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        guard let l, l.points.count > 0, l.kind != .eraser, l.kind != .lassoDrag else { layer.path = nil; buckets.forEach { $0.path = nil }; return }
+        guard let l, l.points.count > 0, l.kind != .eraser, l.kind != .lassoDrag, l.ink == nil else { layer.path = nil; buckets.forEach { $0.path = nil }; return }
         if layer.superlayer !== host { host.addSublayer(layer) }
         let pts = l.points.map { CGPoint(x: $0.x * k, y: $0.y * k) }
         var colour = l.color
@@ -275,6 +278,36 @@ final class LivePreview {
     }
 }
 
+/// Shows another window's in-progress stroke as a real PKStroke on this canvas (PencilKit renders it).
+final class LiveInk {
+    private var base: PKDrawing?
+    /// The real stroke arrived (drawing replaced): drop the preview state.
+    func committed() { base = nil }
+    func apply(_ l: PadHub.Live?, k s: CGFloat, to c: PKCanvasView, applying: (Bool) -> Void) {
+        guard let l, let ink = l.ink, !l.points.isEmpty else {
+            if let b = base { base = nil; applying(true); c.drawing = b; applying(false) }
+            return
+        }
+        if base == nil { base = c.drawing }
+        guard let b = base else { return }
+        let n = l.points.count
+        let t0 = l.ts.first ?? 0
+        var pts: [PKStrokePoint] = []
+        pts.reserveCapacity(n)
+        for i in 0..<n {
+            let f = l.forces.count == n ? max(0.05, l.forces[i]) : 1
+            let az = l.az.count == n ? l.az[i] : 0
+            let al = l.alt.count == n ? l.alt[i] : .pi / 2
+            let w = PadLink.pointWidth(ink.inkType, l.width, force: f, altitude: al) * s
+            pts.append(PKStrokePoint(location: CGPoint(x: l.points[i].x * s, y: l.points[i].y * s),
+                                     timeOffset: l.ts.count == n ? l.ts[i] - t0 : TimeInterval(i) / 240,
+                                     size: CGSize(width: w, height: w), opacity: 1, force: f * 4.17, azimuth: az, altitude: al))
+        }
+        let stroke = PKStroke(ink: ink, path: PKStrokePath(controlPoints: pts, creationDate: Date()))
+        applying(true); c.drawing = PKDrawing(strokes: b.strokes + [stroke]); applying(false)
+    }
+}
+
 /// Pad side: remembers the last lasso outline so a pen-down inside it is reported as a drag of the selection.
 final class LassoTrack {
     private(set) var poly: [CGPoint] = []
@@ -338,6 +371,8 @@ final class PenTap: UIGestureRecognizer, UIGestureRecognizerDelegate {
     private(set) var az: [CGFloat] = []
     private(set) var alt: [CGFloat] = []
     private var azs: [CGFloat] = [], alts: [CGFloat] = []
+    private(set) var ts: [TimeInterval] = []
+    private var tss: [TimeInterval] = []
     private var fs: [CGFloat] = []
     var onEnd: (() -> Void)?
     var onBegin: (() -> Void)?
@@ -351,7 +386,7 @@ final class PenTap: UIGestureRecognizer, UIGestureRecognizerDelegate {
     }
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
     override func touchesBegan(_ t: Set<UITouch>, with e: UIEvent) {
-        pts = []; fs = []; azs = []; alts = []; onBegin?(); add(t, e)
+        pts = []; fs = []; azs = []; alts = []; tss = []; onBegin?(); add(t, e)
     }
     override func touchesMoved(_ t: Set<UITouch>, with e: UIEvent) { add(t, e) }
     override func touchesEnded(_ t: Set<UITouch>, with e: UIEvent) { add(t, e); finish() }
@@ -359,11 +394,11 @@ final class PenTap: UIGestureRecognizer, UIGestureRecognizerDelegate {
     private func add(_ t: Set<UITouch>, _ e: UIEvent) {
         guard let v = view, let touch = t.first else { return }
         func f(_ t: UITouch) -> CGFloat { t.maximumPossibleForce > 0 ? t.force / t.maximumPossibleForce : 0.5 }
-        for c in e.coalescedTouches(for: touch) ?? [touch] { pts.append(c.location(in: v)); fs.append(f(c)); azs.append(c.azimuthAngle(in: v)); alts.append(c.altitudeAngle) }
+        for c in e.coalescedTouches(for: touch) ?? [touch] { pts.append(c.location(in: v)); fs.append(f(c)); azs.append(c.azimuthAngle(in: v)); alts.append(c.altitudeAngle); tss.append(c.timestamp) }
         var show = pts, sf = fs
-        var a = azs, b = alts
-        for p in e.predictedTouches(for: touch) ?? [] { show.append(p.location(in: v)); sf.append(f(p)); a.append(p.azimuthAngle(in: v)); b.append(p.altitudeAngle) }
-        az = a; alt = b
+        var a = azs, b = alts, tt = tss
+        for p in e.predictedTouches(for: touch) ?? [] { show.append(p.location(in: v)); sf.append(f(p)); a.append(p.azimuthAngle(in: v)); b.append(p.altitudeAngle); tt.append(p.timestamp) }
+        az = a; alt = b; ts = tt
         onPoints?(show, sf)
     }
     private func finish() { pts = []; onEnd?(); state = .failed }
@@ -391,6 +426,10 @@ final class PadLink {
     var applying = false
     private let eraseTap = NSObject()
     private let lassoTap = NSObject()
+    private let inkTap = NSObject()
+    /// Drawing before the in-progress stroke (real-stroke preview).
+    private let liveInk = LiveInk()
+    private var mainPen: PenTap?
     private var drag: (PKDrawing, Set<Int>)?
     var host: () -> CALayer? = { nil }
     /// Main-canvas units per logical unit.
@@ -407,6 +446,7 @@ final class PadLink {
         guard !on else { return }; on = true
         PadHub.shared.listen(channel, self) { [weak self] d in
             guard let self, let c = self.canvas else { return }
+            self.liveInk.committed()
             let s = self.k()
             self.applying = true; c.drawing = s == 1 ? d : d.transformed(using: CGAffineTransform(scaleX: s, y: s)); self.applying = false
         }
@@ -452,11 +492,49 @@ final class PadLink {
             for i in sel { var st = out[i]; st.transform = st.transform.concatenating(t); out[i] = st }
             self.applying = true; c.drawing = PKDrawing(strokes: out); self.applying = false
         }
+        // Real in-progress stroke from the pad (PencilKit renders it, so it matches the iPad).
+        PadHub.shared.listenLive(channel, inkTap) { [weak self] l in
+            guard let self, let c = self.canvas else { return }
+            self.liveInk.apply(l, k: self.k(), to: c) { self.applying = $0 }
+        }
+        // Main → pad: stream strokes written on the big-screen window too.
+        if mainPen == nil, let c = canvas {
+            let pen = PenTap(target: nil, action: nil)
+            pen.onPoints = { [weak self, weak pen, weak c] pts, fs in
+                guard let self, let c, let pen, c.drawingGestureRecognizer.isEnabled, let ink = c.tool as? PKInkingTool else { return }
+                let s = max(self.k(), 0.0001) * max(c.zoomScale, 0.0001)
+                PadHub.shared.live("m:" + self.channel, .init(points: pts.map { CGPoint(x: $0.x / s, y: $0.y / s) }, color: ink.color, width: ink.width / max(self.k(), 0.0001),
+                                                              forces: fs, kind: .pen, az: pen.az, alt: pen.alt, ts: pen.ts, ink: PKInk(ink.inkType, color: ink.color)))
+            }
+            pen.onEnd = { [weak self] in
+                guard let ch = self.map({ "m:" + $0.channel }) else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { PadHub.shared.live(ch, nil) }
+            }
+            pen.onCancel = { [weak self] in if let ch = self.map({ "m:" + $0.channel }) { PadHub.shared.live(ch, nil) } }
+            c.addGestureRecognizer(pen)
+            mainPen = pen
+        }
+        mainPen?.isEnabled = true
         PadHub.shared.listenPos(channel, self) { [weak self] y, w in self?.onScroll?(y, w) }
+    }
+    /// Point size PencilKit would use for this ink at this pressure / tilt (tool width = nominal width).
+    static func pointWidth(_ t: PKInk.InkType, _ width: CGFloat, force f: CGFloat, altitude al: CGFloat) -> CGFloat {
+        let tilt = max(0, 1 - al / (.pi / 2))
+        switch t {
+        case .pen: return width * (0.5 + 0.75 * min(1, f))
+        case .pencil: return width * (1 + 2.5 * tilt)
+        case .marker: return width
+        default:
+            let r = t.rawValue.lowercased()
+            if r.contains("monoline") { return width }
+            if r.contains("fountain") { return width * (0.4 + 0.9 * min(1, f)) }
+            if r.contains("crayon") { return width * (1 + 1.5 * tilt) }
+            return width * (0.5 + 0.75 * min(1, f))
+        }
     }
     func tearDown() {
         guard on else { return }; on = false
-        PadHub.shared.stop(self); PadHub.shared.stopPos(self); PadHub.shared.stopLive(eraseTap); PadHub.shared.stopLive(lassoTap); drag = nil; live.detach()
+        PadHub.shared.stop(self); PadHub.shared.stopPos(self); PadHub.shared.stopLive(eraseTap); PadHub.shared.stopLive(lassoTap); PadHub.shared.stopLive(inkTap); liveInk.committed(); mainPen?.isEnabled = false; drag = nil; live.detach()
     }
     /// Main canvas changed (finger/pencil on the main window): mirror to the pad.
     func changed(_ d: PKDrawing) {
@@ -715,7 +793,11 @@ struct PadCanvas: UIViewRepresentable {
         c.canvas = v
         v.delegate = c
         c.picker.addObserver(v)
-        PadHub.shared.listen(page.channel, c) { [weak c] d in c?.remote(d) }
+        PadHub.shared.listen(page.channel, c) { [weak c] d in c?.liveInk.committed(); c?.remote(d) }
+        PadHub.shared.listenLive("m:" + page.channel, c) { [weak c, weak v] l in
+            guard let c, let v else { return }
+            c.liveInk.apply(l, k: 1, to: v) { c.setApplying($0) }
+        }
         let pen = PenTap(target: nil, action: nil)
         pen.onBegin = { [weak c] in
             PadHub.shared.strokeSeq += 1
@@ -732,7 +814,7 @@ struct PadCanvas: UIViewRepresentable {
             let lp = pts.map { CGPoint(x: $0.x / z, y: $0.y / z) }
             c.lastPts = lp
             let kind = c.lasso.kind(k0, lp)
-            PadHub.shared.live(c.parent.page.channel, .init(points: lp, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? c.lasso.poly : [], az: pen?.az ?? [], alt: pen?.alt ?? []))
+            PadHub.shared.live(c.parent.page.channel, .init(points: lp, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? c.lasso.poly : [], az: pen?.az ?? [], alt: pen?.alt ?? [], ts: pen?.ts ?? [], ink: (c.picker.selectedTool as? PKInkingTool).map { PKInk($0.inkType, color: $0.color) }))
         }
         // Fallback that always works: follow PencilKit's own drawing recogniser (if the pen watcher gets no touches).
         v.drawingGestureRecognizer.addTarget(c, action: #selector(Coord.drawing(_:)))
@@ -775,13 +857,15 @@ struct PadCanvas: UIViewRepresentable {
             c.following = true
             defer { c.following = false }
             let maxY = max(0, v.contentSize.height - v.bounds.height)
-            v.setContentOffset(CGPoint(x: v.contentOffset.x, y: min(maxY, max(0, y * v.zoomScale))), animated: true)
+            PadHub.shared.padApplied = Date()
+            v.setContentOffset(CGPoint(x: v.contentOffset.x, y: min(maxY, max(0, y * v.zoomScale))), animated: false)
         }
     }
 
     static func dismantleUIView(_ v: PKCanvasView, coordinator c: Coord) {
         c.flush()
         PadHub.shared.stop(c)
+        PadHub.shared.stopLive(c)
         c.picker.setVisible(false, forFirstResponder: v)
         c.picker.removeObserver(v)
     }
@@ -855,6 +939,8 @@ struct PadCanvas: UIViewRepresentable {
             }
         }
         var following = false
+        let liveInk = LiveInk()
+        func setApplying(_ a: Bool) { applying = a }
         let lasso = LassoTrack()
         var lastPts: [CGPoint] = []
         var committed = -1
@@ -900,6 +986,8 @@ struct PadCanvas: UIViewRepresentable {
         }
         func scrollViewDidScroll(_ v: UIScrollView) {
             guard v.zoomScale > 0, !following else { return }
+            // Only the user's own scrolling/zooming is sent: programmatic follows never echo back.
+            guard v.isTracking || v.isDragging || v.isDecelerating || v.isZooming else { return }
             if !parent.continuous {
                 guard Date().timeIntervalSince(PadHub.shared.padApplied) > 0.35 else { return }
                 let z = v.zoomScale
@@ -1118,7 +1206,8 @@ struct PadPagedCanvas: UIViewRepresentable {
             guard let sv = scroll, tops.indices.contains(i) else { return }
             let maxY = max(0, sv.contentSize.height - sv.bounds.height)
             following = true
-            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: min(maxY, max(0, (tops[i] - Coord.gap / 2) * sv.zoomScale))), animated: animated)
+            PadHub.shared.padApplied = Date()
+            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: min(maxY, max(0, (tops[i] - Coord.gap / 2) * sv.zoomScale))), animated: false)
             following = false
         }
         func page(atY y: CGFloat) -> Int {
@@ -1138,12 +1227,13 @@ struct PadPagedCanvas: UIViewRepresentable {
             let top = max(0, s.contentOffset.y) / z
             let mid = (s.contentOffset.y + s.bounds.height / 2) / z
             let pi = page(atY: mid)
-            if s.isTracking || s.isDragging || s.isDecelerating || s.isZooming { userScrolled = Date() }
-            if pi != shownIndex, Date().timeIntervalSince(userScrolled) < 0.6 {
+            let user = s.isTracking || s.isDragging || s.isDecelerating || s.isZooming
+            if user { userScrolled = Date() }
+            if pi != shownIndex, user {
                 shownIndex = pi
                 DispatchQueue.main.async { self.parent.onPage(pi) }
             }
-            guard Date().timeIntervalSince(PadHub.shared.padApplied) > 0.35, PadHub.shared.mainFollows else { return }
+            guard user, PadHub.shared.mainFollows else { return }
             // Visible rect in the units of the page at the top of the view.
             let ti = page(atY: top + 1)
             guard wires.indices.contains(ti) else { return }
@@ -1155,7 +1245,7 @@ struct PadPagedCanvas: UIViewRepresentable {
         /// Main window scrolled/zoomed a page: show the same rect.
         func mainMoved(_ ch: String, _ r: CGRect) {
             guard let sv = scroll, let i = wires.firstIndex(where: { $0.page.channel == ch }), r.width > 1 else { return }
-            guard Date().timeIntervalSince(userScrolled) > 0.6 else { return }
+            guard Date().timeIntervalSince(userScrolled) > 0.6, !(sv.isTracking || sv.isDragging || sv.isDecelerating) else { return }
             PadHub.shared.padApplied = Date()
             following = true; defer { following = false }
             let f = scales[i]
@@ -1185,6 +1275,7 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
     private var penFed = false
     private var dpts: [CGPoint] = []
     private let lasso = LassoTrack()
+    private let liveInk = LiveInk()
     private var lastPts: [CGPoint] = []
     private weak var picker: PKToolPicker?
     private var figObs: NSObjectProtocol?
@@ -1223,7 +1314,12 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
         picker.addObserver(canvas)
         PadHub.shared.listen(page.channel, self) { [weak self] d in
             guard let self else { return }
+            self.liveInk.committed()
             self.applying = true; self.canvas.drawing = d; self.applying = false
+        }
+        PadHub.shared.listenLive("m:" + page.channel, self) { [weak self] l in
+            guard let self else { return }
+            self.liveInk.apply(l, k: 1, to: self.canvas) { self.applying = $0 }
         }
         let pen = PenTap(target: nil, action: nil)
         let ch = page.channel
@@ -1240,7 +1336,7 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
             self.penFed = true
             self.lastPts = pts
             let kind = self.lasso.kind(k0, pts)
-            PadHub.shared.live(ch, .init(points: pts, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? self.lasso.poly : [], az: pen?.az ?? [], alt: pen?.alt ?? []))
+            PadHub.shared.live(ch, .init(points: pts, color: color, width: width, forces: fs, kind: kind, poly: kind == .lassoDrag ? self.lasso.poly : [], az: pen?.az ?? [], alt: pen?.alt ?? [], ts: pen?.ts ?? [], ink: (p.selectedTool as? PKInkingTool).map { PKInk($0.inkType, color: $0.color) }))
         }
         pen.onEnd = { [weak self] in
             guard let self else { return }
@@ -1263,6 +1359,7 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
     func tearDown() {
         flush()
         PadHub.shared.stop(self)
+        PadHub.shared.stopLive(self)
         picker?.removeObserver(canvas)
     }
 

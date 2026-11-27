@@ -116,10 +116,12 @@ struct PDFKitView: UIViewRepresentable {
             updateAdd()
         }
         @objc func padAdd(_ n: Notification) { if !owner.isEmpty, (n.object as? String) == owner { addPage() } }
+        var userMoved = Date.distantPast
         var kvo: NSKeyValueObservation?
         var vpObs: NSObjectProtocol?
         /// Pad moved within a page: show the same rect.
         func padMoved(_ ch: String, _ r: CGRect) {
+            guard Date().timeIntervalSince(userMoved) > 0.6 else { return }   // user is moving the big screen: don't snap it back
             guard PadHub.shared.mainFollows, let v = view, let d = v.document, ch.hasPrefix("pdf:\(inkKey):"),
                   let i = Int(ch.split(separator: ":").last ?? ""), let p = d.page(at: i) else { return }
             PadHub.shared.mainApplied = Date()
@@ -131,8 +133,10 @@ struct PDFKitView: UIViewRepresentable {
         }
         /// Main window scrolled: tell the pad (visible rect of the current page).
         func mainScrolled() {
-            guard PadHub.shared.padOpen, Date().timeIntervalSince(PadHub.shared.mainApplied) > 0.35,
-                  let v = view, let p = v.currentPage, let d = v.document else { return }
+            guard PadHub.shared.padOpen, let v = view, let p = v.currentPage, let d = v.document else { return }
+            // Only the user's own scrolling on the big screen is sent (never the echo of following the pad).
+            guard let sv = PDFKitView.scroller(in: v), sv.isTracking || sv.isDragging || sv.isDecelerating || sv.isZooming else { return }
+            userMoved = Date()
             let b = p.bounds(for: .mediaBox)
             let r = v.convert(v.bounds, to: p)
             let top = CGRect(x: r.minX - b.minX, y: b.maxY - r.maxY, width: r.width, height: r.height)

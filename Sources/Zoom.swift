@@ -9,6 +9,8 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
     @Binding var jump: CGFloat?      // unscaled y to bring to the top
     var onScroll: (CGFloat) -> Void  // unscaled y at the view's centre
     var locked = false
+    /// User scrolled/zoomed (not programmatic): unscaled top y, zoom.
+    var onUser: ((CGFloat, CGFloat) -> Void)? = nil
     @ViewBuilder let content: () -> Content
 
     func makeCoordinator() -> Coord { Coord() }
@@ -74,7 +76,7 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
         var cmd: CmdZoom?
 
         func viewForZooming(in s: UIScrollView) -> UIView? { host?.view }
-        func scrollViewDidZoom(_ s: UIScrollView) { center(s) }
+        func scrollViewDidZoom(_ s: UIScrollView) { center(s); if s.isZooming { parent?.onUser?(max(0, s.contentOffset.y) / s.zoomScale, s.zoomScale) } }
         func scrollViewDidEndZooming(_ s: UIScrollView, with v: UIView?, atScale z: CGFloat) {
             if let p = parent, abs(p.zoom - z) > 0.001 { p.zoom = z }
             sharpen(v, z)
@@ -82,6 +84,7 @@ struct ZoomScroll<Content: View>: UIViewRepresentable {
         func scrollViewDidScroll(_ s: UIScrollView) {
             guard !s.isZooming, s.zoomScale > 0 else { return }
             parent?.onScroll((s.contentOffset.y + s.bounds.height / 2) / s.zoomScale)
+            if s.isTracking || s.isDragging || s.isDecelerating { parent?.onUser?(max(0, s.contentOffset.y) / s.zoomScale, s.zoomScale) }
         }
         func center(_ s: UIScrollView) {
             let ix = max(0, (s.bounds.width - s.contentSize.width) / 2)
