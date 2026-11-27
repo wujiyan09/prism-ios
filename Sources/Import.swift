@@ -351,14 +351,21 @@ struct ImportPickers: ViewModifier {
         // the callback returns); parse the copies in the background.
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("import-" + UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        var local: [URL] = []
-        for u in urls {
-            let ok = u.startAccessingSecurityScopedResource()
-            let dst = tmp.appendingPathComponent(u.lastPathComponent)
-            if (try? FileManager.default.copyItem(at: u, to: dst)) != nil { local.append(dst) }
-            if ok { u.stopAccessingSecurityScopedResource() }
-        }
+        // Access starts here (on the picker's callback); the copy itself runs in the background
+        // (a file still in iCloud is downloaded by the copy, which used to block the UI for seconds).
+        let access = urls.map { $0.startAccessingSecurityScopedResource() }
         DispatchQueue.global(qos: .userInitiated).async {
+            var local: [URL] = []
+            for (u, ok) in zip(urls, access) {
+                let dst = tmp.appendingPathComponent(u.lastPathComponent)
+                var err: NSError?
+                NSFileCoordinator().coordinate(readingItemAt: u, options: .forUploading, error: &err) { src in
+                    if (try? FileManager.default.copyItem(at: src, to: dst)) != nil { local.append(dst) }
+                }
+                if local.last != dst, (try? FileManager.default.copyItem(at: u, to: dst)) != nil { local.append(dst) }
+                if ok { u.stopAccessingSecurityScopedResource() }
+            }
+            // Touch page sizes here so creating the note on the main thread doesn't parse pages.
             var result: (PDFDocument?, String?) = (nil, nil)
             ImportPickers.read(local.isEmpty ? urls : local) { d, e in result = (d, e) }
             // Wait for the picker to finish dismissing, or the next sheet can't be presented (that was the 108 regression).
@@ -372,6 +379,7 @@ struct ImportPickers: ViewModifier {
         // re-building it page by page; saving later is a file copy.
         if urls.count == 1, let u = urls.first, u.pathExtension.lowercased() == "pdf", let d = PDFDocument(url: u), d.pageCount > 0 {
             var a = d.documentAttributes ?? [:]; a[PDFDocumentAttribute.titleAttribute] = u.deletingPathExtension().lastPathComponent; d.documentAttributes = a
+            for i in 0..<d.pageCount { _ = d.page(at: i)?.bounds(for: .mediaBox) }   // parse page sizes here (background), not on main
             done(d, nil); return
         }
         let out = PDFDocument()
@@ -539,7 +547,12 @@ struct ImportPaperView: View {
         .alert("解析出错", isPresented: Binding(get: { parseError != nil }, set: { if !$0 { parseError = nil } })) {} message: { Text(parseError ?? "") }
         .workingSession(sheet, clearOnLeave: false)
         .task {
-            doc = store.doc(id); ms = store.ms(id)
+            // Open off the main thread; the page appears as soon as PDFKit has the document.
+            let s = store, i = id
+            let (d, m) = await Task.detached(priority: .userInitiated) { () -> (PDFDocument?, PDFDocument?) in
+                let d = s.doc(i); _ = d?.pageCount; return (d, s.ms(i))
+            }.value
+            doc = d; ms = m
         }
     }
 

@@ -526,6 +526,7 @@ extension Notification.Name {
     /// Viewport of a paged page, object = channel, userInfo["r"] = visible rect in page units (top-left origin).
     static let padViewport = Notification.Name("padViewport")
     static let toolChanged = Notification.Name("toolChanged")
+    static let padToggleTools = Notification.Name("padToggleTools")
     static let mainViewport = Notification.Name("mainViewport")
 }
 
@@ -842,6 +843,7 @@ struct PadView: View {
                         if !s.continuous { hub.padIndex = s.pages.count }   // jump to the new last page once it exists
                         NotificationCenter.default.post(name: .padAddPage, object: s.owner)
                     } label: { Label("加一页", systemImage: "plus") }
+                    Button { NotificationCenter.default.post(name: .padToggleTools, object: nil) } label: { Label("工具", systemImage: "pencil.tip.crop.circle") }
                 }
             }
             glass {
@@ -1064,7 +1066,17 @@ struct PadCanvas: UIViewRepresentable {
         var committed = -1
         private var applying = false
         private var pending: DispatchWorkItem?
-        init(_ p: PadCanvas) { parent = p }
+        init(_ p: PadCanvas) {
+            parent = p
+            super.init()
+            toolObs = NotificationCenter.default.addObserver(forName: .padToggleTools, object: nil, queue: .main) { [weak self] _ in
+                guard let self, let v = self.canvas, v.window != nil else { return }
+                let show = !(self.picker.isVisible && v.isFirstResponder)
+                self.picker.setVisible(show, forFirstResponder: v)
+                if show { v.becomeFirstResponder() } else { v.resignFirstResponder() }
+            }
+        }
+        var toolObs: NSObjectProtocol?
 
         func fit() {
             guard let v = canvas, v.bounds.width > 10 else { return }
@@ -1363,7 +1375,19 @@ struct PadPagedCanvas: UIViewRepresentable {
         var userScrolled = Date.distantPast
         var vpObs: NSObjectProtocol?
         let picker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); ToolSync.shared.padPickers.append(p); return p }()
-        init(_ p: PadPagedCanvas) { parent = p; shownIndex = p.index }
+        init(_ p: PadPagedCanvas) {
+            parent = p; shownIndex = p.index
+            super.init()
+            toolObs = NotificationCenter.default.addObserver(forName: .padToggleTools, object: nil, queue: .main) { [weak self] _ in
+                guard let self, let sv = self.scroll else { return }
+                let cur = self.wires.first { $0.near && $0.canvas.isFirstResponder }
+                if let cur, self.picker.isVisible { self.picker.setVisible(false, forFirstResponder: cur.canvas); cur.canvas.resignFirstResponder(); return }
+                let mid = self.page(atY: (sv.contentOffset.y + sv.bounds.height / 2) / max(sv.zoomScale, 0.01))
+                guard let w = (self.wires.indices.contains(mid) && self.wires[mid].near) ? self.wires[mid] : self.wires.first(where: { $0.near }) else { return }
+                self.picker.setVisible(true, forFirstResponder: w.canvas); w.canvas.becomeFirstResponder()
+            }
+        }
+        var toolObs: NSObjectProtocol?
 
         func viewForZooming(in s: UIScrollView) -> UIView? { box }
         func fit() {
@@ -1632,6 +1656,7 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
     func canvasViewDrawingDidChange(_ v: PKCanvasView) {
         guard !applying else { return }
         if let st = v.drawing.strokes.last, let t = v.tool as? PKInkingTool { InkCalib.learn(st, width: t.width) }
+        dirty = true
         PadHub.shared.publish(page.channel, v.drawing, from: self)
         committed = PadHub.shared.strokeSeq
         PadHub.shared.live(page.channel, nil)
@@ -1640,9 +1665,11 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
         pending = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: w)
     }
+    private var dirty = false
     func flush() {
         pending?.cancel(); pending = nil
-        guard loaded else { return }   // never save the empty placeholder of a far page
+        guard loaded, dirty else { return }   // only pages actually written on; never the empty placeholder of a far page
+        dirty = false
         page.save(canvas.drawing)
     }
 }
