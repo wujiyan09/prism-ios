@@ -244,9 +244,19 @@ enum NoteRender {
     }
 
     /// Page background only (PDF page or paper), `width` px wide.
+    /// Backgrounds cached per page + width bucket (zoom steps are powers of 2), so zooming back and forth doesn't re-render.
+    private static let bgCache: NSCache<NSString, UIImage> = { let c = NSCache<NSString, UIImage>(); c.totalCostLimit = 300_000_000; return c }()
+    static func cachedBackground(_ id: String, _ p: NotePage, width: CGFloat) -> UIImage {
+        let key = "\(id)|\(p.id)|\(p.src ?? -1)|\(p.style)|\(Int(width))" as NSString
+        if let im = bgCache.object(forKey: key) { return im }
+        let im = background(id, p, width: width)
+        bgCache.setObject(im, forKey: key, cost: Int(im.size.width * im.size.height * im.scale * im.scale * 4))
+        return im
+    }
     static func background(_ id: String, _ p: NotePage, width: CGFloat) -> UIImage {
         let size = CGSize(width: width, height: width * p.aspect)
-        return UIGraphicsImageRenderer(size: size).image { ctx in
+        let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1   // width is already in pixels
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
             let cg = ctx.cgContext
             if let s = p.src, let pg = NoteStore.shared.base(id)?.page(at: s) {
                 UIColor.white.setFill(); cg.fill(CGRect(origin: .zero, size: size))
@@ -720,9 +730,10 @@ struct NoteDocView: View {
         }
     }
     private func pagesStack(_ doc: NoteDoc, _ base: CGFloat) -> some View {
-        VStack(spacing: Self.gap) {
+        let ci = doc.pages.firstIndex { $0.id == current } ?? 0
+        return VStack(spacing: Self.gap) {
             ForEach(Array(doc.pages.enumerated()), id: \.element.id) { i, p in
-                NotePageView(docID: id, page: p, tool: tool, showTools: showTools, selected: $selected, editing: $editing, zoom: zoom)
+                NotePageView(docID: id, page: p, tool: tool, showTools: showTools, selected: $selected, editing: $editing, zoom: abs(i - ci) <= 1 ? zoom : 1)
                     .frame(width: base, height: base * CGFloat(p.aspect))
             }
         }
@@ -863,7 +874,7 @@ struct NotePageView: View {
                     .allowsHitTesting(tool == .pen)
             }
             .onTapGesture { if tool == .select { selected = nil } }
-            .task(id: "\(Int(W))|\(Int(bgWidth(W)))") { if W > 10 { bg = NoteRender.background(docID, page, width: bgWidth(W)) } }
+            .task(id: "\(Int(W))|\(Int(bgWidth(W)))") { if W > 10 { bg = NoteRender.cachedBackground(docID, page, width: bgWidth(W)) } }
         }
         .aspectRatio(CGFloat(1 / page.aspect), contentMode: .fit)
         .clipShape(Rectangle())

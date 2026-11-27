@@ -285,16 +285,25 @@ final class LivePreview {
 
 /// Shows another window's in-progress stroke as a real PKStroke on this canvas (PencilKit renders it).
 final class LiveInk {
-    private var base: PKDrawing?
-    /// The real stroke arrived (drawing replaced): drop the preview state.
-    func committed() { base = nil }
+    /// Small overlay canvas holding only the in-progress stroke, so the real canvas is never reassigned per frame.
+    private var overlay: PKCanvasView?
+    /// The real stroke arrived: clear the overlay.
+    func committed() { overlay?.drawing = PKDrawing(); overlay?.isHidden = true }
     func apply(_ l: PadHub.Live?, k s: CGFloat, to c: PKCanvasView, applying: (Bool) -> Void) {
-        guard let l, let ink = l.ink, !l.points.isEmpty else {
-            if let b = base { base = nil; applying(true); c.drawing = b; applying(false) }
-            return
+        guard let l, let ink = l.ink, !l.points.isEmpty else { committed(); return }
+        let o: PKCanvasView
+        if let x = overlay, x.superview === c.superview { o = x } else {
+            overlay?.removeFromSuperview()
+            o = PKCanvasView(); o.isUserInteractionEnabled = false; o.backgroundColor = .clear; o.isOpaque = false
+            o.drawingPolicy = .pencilOnly; o.showsVerticalScrollIndicator = false; o.showsHorizontalScrollIndicator = false
+            c.superview?.insertSubview(o, aboveSubview: c)
+            overlay = o
         }
-        if base == nil { base = c.drawing }
-        guard let b = base else { return }
+        o.isHidden = false
+        o.frame = c.frame
+        o.minimumZoomScale = c.minimumZoomScale; o.maximumZoomScale = c.maximumZoomScale
+        if o.zoomScale != c.zoomScale { o.zoomScale = c.zoomScale }
+        o.contentSize = c.contentSize; o.contentInset = c.contentInset; o.contentOffset = c.contentOffset
         let n = l.points.count
         let t0 = l.ts.first ?? 0
         var pts: [PKStrokePoint] = []
@@ -308,8 +317,7 @@ final class LiveInk {
                                      timeOffset: l.ts.count == n ? l.ts[i] - t0 : TimeInterval(i) / 240,
                                      size: CGSize(width: w, height: w), opacity: 1, force: f * 4.17, azimuth: az, altitude: al))
         }
-        let stroke = PKStroke(ink: ink, path: PKStrokePath(controlPoints: pts, creationDate: Date()))
-        applying(true); c.drawing = PKDrawing(strokes: b.strokes + [stroke]); applying(false)
+        o.drawing = PKDrawing(strokes: [PKStroke(ink: ink, path: PKStrokePath(controlPoints: pts, creationDate: Date()))])
     }
 }
 
