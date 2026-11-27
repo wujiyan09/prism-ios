@@ -203,6 +203,8 @@ struct RouteView: View {
         case .dailyRun(let d): DailyRunner(date: d)
         case .mathPaper(let id): OfficialRoute(id: id, set: false)
         case .ppSet(let id): OfficialRoute(id: id, set: true)
+        case .awardChapter(let id): AwardChapterView(chapterID: id)
+        case .longSet(let id, let src): ZhLongSetView(chapterID: id, src: src)
         }
     }
 }

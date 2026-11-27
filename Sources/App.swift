@@ -215,6 +215,8 @@ enum Route: Hashable {
     case dailyRun(String)
     case mathPaper(String)
     case ppSet(String)
+    case awardChapter(String)
+    case longSet(String, String?)
 }
 
 enum ToolKind: String, CaseIterable, Hashable, Identifiable {

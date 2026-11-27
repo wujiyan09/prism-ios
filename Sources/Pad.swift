@@ -169,6 +169,8 @@ final class PadHub {
     var padIndex = 0
     /// padIndex was derived from a scroll offset (leader or follower): don't turn it into a separate page jump.
     @ObservationIgnored var indexFromOffset = false
+    @ObservationIgnored var posX: [String: CGFloat] = [:]
+    @ObservationIgnored var scratchX: CGFloat = 0
     @ObservationIgnored private var posListeners: [String: [(id: ObjectIdentifier, f: (CGFloat, CGFloat) -> Void)]] = [:]
     /// Pad's top y in logical units (continuous sources).
     /// Pad is the master: the main window always follows the pad's viewport (top y, visible width; sheet units).
@@ -326,8 +328,12 @@ enum InkCalib {
         return (0.7, 0.1, 1)
     }
     /// Fit from a committed stroke drawn with a tool of this nominal width.
+    private static var seen: [String: Int] = [:]
     static func learn(_ s: PKStroke, width: CGFloat) {
         guard width > 0 else { return }
+        let key = s.ink.inkType.rawValue
+        seen[key, default: 0] += 1
+        guard seen[key]! <= 12 else { return }   // enough samples: no per-stroke work after that
         let ps = Array(s.path)
         guard ps.count >= 6 else { return }
         let xs = ps.map { $0.force }, ys = ps.map { $0.size.width / width }
@@ -349,8 +355,13 @@ enum InkCalib {
 final class LiveInk {
     /// Small overlay canvas holding only the in-progress stroke, so the real canvas is never reassigned per frame.
     private var overlay: PKCanvasView?
-    /// The real stroke arrived: clear the overlay.
-    func committed() { overlay?.drawing = PKDrawing(); overlay?.isHidden = true }
+    private var curT0: Double = -1, doneT0: Double = -2
+    private var frozen: [PKStroke] = []; private var frozenN = 0; private var frozenS: CGFloat = 0
+    /// The real stroke arrived (or pen-up/cancel): clear the overlay; late frames of that stroke are ignored.
+    func committed() {
+        doneT0 = curT0; frozen = []; frozenN = 0
+        overlay?.drawing = PKDrawing(); overlay?.isHidden = true
+    }
     func apply(_ l: PadHub.Live?, k s: CGFloat, to c: PKCanvasView, applying: (Bool) -> Void) {
         guard let l, let ink = l.ink, !l.points.isEmpty else { committed(); return }
         // Overlay lives inside the canvas's own scroll content (works for scratch, notes and PDF page overlays alike):
@@ -372,6 +383,27 @@ final class LiveInk {
         let s = s * zf
         let n = l.points.count
         let t0 = l.ts.first ?? 0
+        if l.ts.first != nil, t0 == doneT0 { o.drawing = PKDrawing(); o.isHidden = true; return }   // stale frame after commit
+        if t0 != curT0 || s != frozenS || n < frozenN { curT0 = t0; frozenS = s; frozen = []; frozenN = 0 }
+        let op = InkCalib.get(ink.inkType.rawValue).op
+        func point(_ i: Int) -> PKStrokePoint {
+            let f = l.forces.count == n ? max(0.05, l.forces[i]) : 1
+            let az = l.az.count == n ? l.az[i] : 0
+            let al = l.alt.count == n ? l.alt[i] : .pi / 2
+            let w = PadLink.pointWidth(ink.inkType, l.width, force: f, altitude: al) * s
+            return PKStrokePoint(location: CGPoint(x: l.points[i].x * s, y: l.points[i].y * s),
+                                 timeOffset: l.ts.count == n ? l.ts[i] - t0 : TimeInterval(i) / 240,
+                                 size: CGSize(width: w, height: w), opacity: op, force: f * 4.17, azimuth: az, altitude: al)
+        }
+        // Long strokes: freeze finished 64-point chunks, rebuild only the tail (overlapping one point) each frame.
+        while n - frozenN > 80 {
+            let a = max(0, frozenN - 1), b = frozenN + 64
+            frozen.append(PKStroke(ink: ink, path: PKStrokePath(controlPoints: (a..<b).map(point), creationDate: Date())))
+            frozenN = b
+        }
+        let tail = PKStroke(ink: ink, path: PKStrokePath(controlPoints: (max(0, frozenN - 1)..<n).map(point), creationDate: Date()))
+        o.drawing = PKDrawing(strokes: frozen + [tail])
+        return
         var pts: [PKStrokePoint] = []
         pts.reserveCapacity(n)
         for i in 0..<n {
@@ -527,6 +559,7 @@ final class PadLink {
             guard let self, let c = self.canvas else { return }
             self.liveInk.committed()
             let s = self.k()
+            if c.drawing.strokes.count == d.strokes.count, c.drawing.bounds == (s == 1 ? d.bounds : d.bounds.applying(CGAffineTransform(scaleX: s, y: s))) { return }   // nothing new
             self.applying = true; c.drawing = s == 1 ? d : d.transformed(using: CGAffineTransform(scaleX: s, y: s)); self.applying = false
         }
         live.attach(channel, k: { [weak self] in self?.k() ?? 1 }, host: { [weak self] in self?.host() })
@@ -920,7 +953,7 @@ struct PadCanvas: UIViewRepresentable {
         if v.bounds.width > 10 && abs(v.bounds.width - c.fittedWidth) > 1 { c.fit() }
         if c.base > 0 {
             v.minimumZoomScale = locked ? v.zoomScale : c.base * 0.5
-            v.maximumZoomScale = locked ? v.zoomScale : c.base * 4
+            v.maximumZoomScale = locked ? v.zoomScale : max(c.base * 4, 8)
         }
         let target = c.base * zoom
         if let w = followW, w > 10, continuous, !locked, PadHub.syncZoom, !v.isZooming, abs(w - c.lastW) > 1, v.bounds.width > 10 {
@@ -930,13 +963,16 @@ struct PadCanvas: UIViewRepresentable {
             c.following = false
             if c.base > 0 { let z = v.zoomScale / c.base; DispatchQueue.main.async { zoom = z } }
         } else if !v.isZooming && abs(v.zoomScale - target) > 0.001 && c.base > 0 { v.setZoomScale(target, animated: true) }
-        if let y = followY, continuous, abs(y - c.lastFollow) > 1 {
-            c.lastFollow = y
+        let fx = PadHub.shared.scratchX
+        if let y = followY, continuous, abs(y - c.lastFollow) > 1 || abs(fx - c.lastFollowX) > 1 {
+            c.lastFollow = y; c.lastFollowX = fx
             c.following = true
             defer { c.following = false }
             let maxY = max(0, v.contentSize.height - v.bounds.height)
             PadHub.shared.padApplied = Date()
-            v.setContentOffset(CGPoint(x: v.contentOffset.x, y: min(maxY, max(0, y * v.zoomScale))), animated: false)
+            let maxX = max(-v.contentInset.left, v.contentSize.width - v.bounds.width + v.contentInset.right)
+            let x = true ? min(maxX, max(-v.contentInset.left, fx * v.zoomScale - v.contentInset.left)) : v.contentOffset.x
+            v.setContentOffset(CGPoint(x: x, y: min(maxY, max(0, y * v.zoomScale))), animated: false)
         }
     }
 
@@ -973,6 +1009,7 @@ struct PadCanvas: UIViewRepresentable {
         var base: CGFloat = 1
         var fittedWidth: CGFloat = 0
         var lastFollow: CGFloat = -1
+        var lastFollowX: CGFloat = -1
         var lastW: CGFloat = -1
         var penFed = false
         var vpObs: NSObjectProtocol?
@@ -1031,7 +1068,7 @@ struct PadCanvas: UIViewRepresentable {
             fittedWidth = v.bounds.width
             base = v.bounds.width / parent.page.size.width
             v.minimumZoomScale = base * 0.5
-            v.maximumZoomScale = base * 4
+            v.maximumZoomScale = max(base * 4, 8)
             v.zoomScale = base * parent.zoom
             layout(v)
         }
@@ -1073,6 +1110,7 @@ struct PadCanvas: UIViewRepresentable {
                     userInfo: ["r": CGRect(x: v.contentOffset.x / z, y: v.contentOffset.y / z, width: v.bounds.width / z, height: v.bounds.height / z)])
                 return
             }
+            PadHub.shared.posX[parent.page.channel] = max(0, v.contentOffset.x + v.contentInset.left) / v.zoomScale
             PadHub.shared.padMoved(parent.page.channel, max(0, v.contentOffset.y) / v.zoomScale, v.bounds.width / v.zoomScale)
         }
         func scrollViewDidEndZooming(_ v: UIScrollView, with view: UIView?, atScale s: CGFloat) {
@@ -1092,7 +1130,7 @@ struct PadCanvas: UIViewRepresentable {
             pending?.cancel()
             let w = DispatchWorkItem { [weak self] in self?.flush() }
             pending = w
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: w)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: w)
         }
         func flush() {
             pending?.cancel(); pending = nil
@@ -1123,6 +1161,14 @@ extension View {
 
 /// PKCanvasView without the tap edit menu (全选 / 插入空白); lasso actions stay.
 final class QuietCanvas: PKCanvasView {
+    /// PencilKit's tap menu (全选 / 插入空白): remove its edit-menu interactions wherever PencilKit adds them.
+    private func strip(_ v: UIView) {
+        for i in v.interactions where i is UIEditMenuInteraction { v.removeInteraction(i) }
+        for s in v.subviews { strip(s) }
+    }
+    override func didMoveToWindow() { super.didMoveToWindow(); strip(self) }
+    override func didAddSubview(_ v: UIView) { super.didAddSubview(v); strip(v) }
+    override func addInteraction(_ i: UIInteraction) { if i is UIEditMenuInteraction { return }; super.addInteraction(i) }
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         let n = NSStringFromSelector(action).lowercased()
         if action == #selector(selectAll(_:)) || n.contains("insertspace") || n.contains("insertspacing") || n.contains("selectall") { return false }
@@ -1241,7 +1287,7 @@ struct PadPagedCanvas: UIViewRepresentable {
         if sv.bounds.width > 10 && abs(sv.bounds.width - c.fitted) > 1 { c.fit() }
         if c.base > 0 {
             sv.minimumZoomScale = locked ? sv.zoomScale : c.base * 0.5
-            sv.maximumZoomScale = locked ? sv.zoomScale : c.base * 4
+            sv.maximumZoomScale = locked ? sv.zoomScale : max(c.base * 4, 8)
             let target = c.base * zoom
             if !sv.isZooming && !c.following && abs(sv.zoomScale - target) > 0.001 { sv.setZoomScale(target, animated: true) }
         }
@@ -1281,7 +1327,7 @@ struct PadPagedCanvas: UIViewRepresentable {
             fitted = sv.bounds.width
             base = sv.bounds.width / L
             sv.minimumZoomScale = base * 0.5
-            sv.maximumZoomScale = base * 4
+            sv.maximumZoomScale = max(base * 4, 8)
             following = true
             sv.zoomScale = base * parent.zoom
             following = false
@@ -1509,7 +1555,7 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
         pending?.cancel()
         let w = DispatchWorkItem { [weak self] in self?.flush() }
         pending = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: w)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: w)
     }
     func flush() {
         pending?.cancel(); pending = nil

@@ -984,7 +984,7 @@ struct CanvasRep: UIViewRepresentable {
         v.alwaysBounceVertical = true
         if #available(iOS 26.0, *) { v.topEdgeEffect.style = .hard }
         v.minimumZoomScale = 0.5
-        v.maximumZoomScale = 4
+        v.maximumZoomScale = 8   // wide external screens need more than 4× to show the same region as the pad at max
         v.bouncesZoom = true
         var h: CGFloat = CanvasRep.pageH
         if let d = ScratchStore.shared.load(itemID) {
@@ -1048,7 +1048,10 @@ struct CanvasRep: UIViewRepresentable {
                 if abs(z - v.zoomScale) > 0.002 { v.zoomScale = z }
             }
             let maxY = max(0, v.contentSize.height - v.bounds.height)
-            v.setContentOffset(CGPoint(x: v.contentOffset.x, y: min(maxY, max(0, y * v.zoomScale))), animated: false)
+            let px = PadHub.shared.posX["scratch:" + itemID] ?? 0
+            let maxX = max(-v.contentInset.left, v.contentSize.width - v.bounds.width + v.contentInset.right)
+            let x = min(maxX, max(-v.contentInset.left, px * v.zoomScale - v.contentInset.left))
+            v.setContentOffset(CGPoint(x: x, y: min(maxY, max(0, y * v.zoomScale))), animated: false)
             co?.padDriven = false
         }
         co.link = link
@@ -1069,7 +1072,7 @@ struct CanvasRep: UIViewRepresentable {
             ctl.applyLock = { [weak v] on in
                 guard let v else { return }
                 v.minimumZoomScale = on ? v.zoomScale : 0.5
-                v.maximumZoomScale = on ? v.zoomScale : 4
+                v.maximumZoomScale = on ? v.zoomScale : 8
             }
             ctl.bind(key: "scratch:" + itemID)
             ctl.report(page: 0, of: Int((h / CanvasRep.pageH).rounded()))
@@ -1124,7 +1127,10 @@ struct CanvasRep: UIViewRepresentable {
             guard sv.isTracking || sv.isDragging || sv.isDecelerating || sv.isZooming else { return }
             let y = max(0, sv.contentOffset.y) / sv.zoomScale
             let w = sv.bounds.width / sv.zoomScale
-            if abs(PadHub.shared.scratchY - y) > 2 { PadHub.shared.scratchY = y }
+            let x = max(0, sv.contentOffset.x + sv.contentInset.left) / sv.zoomScale
+            let xMoved = abs(PadHub.shared.scratchX - x) > 2
+            PadHub.shared.scratchX = x
+            if abs(PadHub.shared.scratchY - y) > 2 || xMoved { PadHub.shared.scratchY = y }
             if abs(PadHub.shared.scratchW - w) > 2 { PadHub.shared.scratchW = w }
         }
 

@@ -482,7 +482,7 @@ struct AwardSchemeSection: View {
         if !cs.isEmpty {
             Section {
                 ForEach(cs) { c in
-                    NavigationLink { AwardChapterView(chapterID: c.id) } label: {
+                    NavigationLink(value: Route.awardChapter(c.id)) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(c.label)
                             let qs = c.sets.filter { $0.kind == "award" }.flatMap(\.qids).map { MathMC.key($0) }
@@ -536,7 +536,7 @@ struct AwardChapterView: View {
             }
             if hasLong {
                 Section("长题") {
-                    NavigationLink { ZhLongSetView(chapterID: chapterID, src: "award") } label: { Label("长题 · Award Scheme", systemImage: "text.alignleft") }
+                    NavigationLink(value: Route.longSet(chapterID, "award")) { Label("长题 · Award Scheme", systemImage: "text.alignleft") }
                 }
                 .listRowBackground(Color.cardBackground)
             }

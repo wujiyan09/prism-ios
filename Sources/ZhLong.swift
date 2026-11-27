@@ -271,10 +271,10 @@ struct ChemLongRows: View {
     var body: some View {
         Group {
             if srcs.isEmpty {
-                NavigationLink { ZhLongSetView(chapterID: chapterID) } label: { Label("长题（结构 / 论述）", systemImage: "text.alignleft") }
+                NavigationLink(value: Route.longSet(chapterID, nil)) { Label("长题（结构 / 论述）", systemImage: "text.alignleft") }
             }
             ForEach(srcs, id: \.self) { k in
-                NavigationLink { ZhLongSetView(chapterID: chapterID, src: k) } label: { Label("长题 · " + ChemKind.name(k), systemImage: "text.alignleft") }
+                NavigationLink(value: Route.longSet(chapterID, k)) { Label("长题 · " + ChemKind.name(k), systemImage: "text.alignleft") }
             }
         }
         // Recompute after the chapter download finishes (first open used to show only one mixed row).
