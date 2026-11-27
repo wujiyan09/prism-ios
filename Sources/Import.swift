@@ -347,10 +347,22 @@ struct ImportPickers: ViewModifier {
         // Feedback right away; reading/merging the PDF happens off the main thread.
         busy = true
         let done = self.done
+        // Copy the picked files now, while the picker's security-scoped URLs are still valid (they can vanish after
+        // the callback returns); parse the copies in the background.
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("import-" + UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        var local: [URL] = []
+        for u in urls {
+            let ok = u.startAccessingSecurityScopedResource()
+            let dst = tmp.appendingPathComponent(u.lastPathComponent)
+            if (try? FileManager.default.copyItem(at: u, to: dst)) != nil { local.append(dst) }
+            if ok { u.stopAccessingSecurityScopedResource() }
+        }
         DispatchQueue.global(qos: .userInitiated).async {
             var result: (PDFDocument?, String?) = (nil, nil)
-            ImportPickers.read(urls) { d, e in result = (d, e) }
-            DispatchQueue.main.async { busy = false; done(result.0, result.1) }
+            ImportPickers.read(local.isEmpty ? urls : local) { d, e in result = (d, e) }
+            // Wait for the picker to finish dismissing, or the next sheet can't be presented (that was the 108 regression).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { busy = false; done(result.0, result.1) }
         }
     }
 
