@@ -218,7 +218,7 @@ final class LivePreview {
         defer { CATransaction.commit() }
         guard let l, let p = l.points.first else { layer.path = nil; return }
         if layer.superlayer !== host { host.addSublayer(layer) }
-        let r = (l.kind == .eraser || l.kind == .bitmapEraser) ? max(3, l.width * k / 2) : max(2, l.width * k * 0.4)
+        let r = (l.kind == .eraser || l.kind == .bitmapEraser) ? max(3, l.width * k / 2) : max(1.5, l.width * k / 2)
         layer.path = UIBezierPath(ovalIn: CGRect(x: p.x * k - r, y: p.y * k - r, width: r * 2, height: r * 2)).cgPath
         if l.kind == .eraser || l.kind == .bitmapEraser {
             layer.fillColor = UIColor.white.withAlphaComponent(0.25).cgColor
@@ -844,7 +844,7 @@ struct PadCanvas: UIViewRepresentable {
                 let lift = g.zOffset   // 0 (touching) … 1 (max hover height)
                 let eraser = kind == .eraser || kind == .bitmapEraser
                 PadHub.shared.live(ch, .init(points: [CGPoint(x: p.x / z, y: p.y / z)], color: color,
-                                             width: eraser ? w : max(4, w) * 0.8 * (1 + 1.2 * lift), kind: kind))
+                                             width: eraser ? w : w * (1 + 1.5 * lift), kind: kind))
             default:
                 PadHub.shared.live(ch, nil)
             }
@@ -1250,7 +1250,7 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
             let (kind, color, w) = PadHub.describe(p.selectedTool)
             let lift = g.zOffset
             let eraser = kind == .eraser || kind == .bitmapEraser
-            PadHub.shared.live(ch, .init(points: [g.location(in: canvas)], color: color, width: eraser ? w : max(4, w) * 0.8 * (1 + 1.2 * lift), kind: kind))
+            PadHub.shared.live(ch, .init(points: [g.location(in: canvas)], color: color, width: eraser ? w : w * (1 + 1.5 * lift), kind: kind))
         default:
             PadHub.shared.live(ch, nil)
         }
