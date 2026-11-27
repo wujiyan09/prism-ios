@@ -752,7 +752,27 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
     override func didMoveToWindow() { super.didMoveToWindow(); applyScale() }
 
     // MARK: Rendering
+    private var syncGen = 0
     private func sync() {
+        syncGen += 1
+        // A page coming on screen with lots of ink: build the stroke outlines off the main thread (CGPath is
+        // immutable once built), then attach the layers in one go. Keeps page turns from stalling on outline maths.
+        let fresh = drawing.strokes.filter { layers[$0.id] == nil }
+        if fresh.count > 40 {
+            let gen = syncGen, d = drawing
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                var paths: [UUID: CGPath] = [:]
+                for s in fresh { paths[s.id] = InkGeometry.outline(s) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.syncGen == gen else { return }
+                    self.sync(d, pre: paths)
+                }
+            }
+            return
+        }
+        sync(drawing, pre: [:])
+    }
+    private func sync(_ drawing: InkDrawing, pre: [UUID: CGPath]) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         var seen = Set<UUID>()
         for s in drawing.strokes {
@@ -764,7 +784,7 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
             let l = CAShapeLayer()
             l.fillRule = .nonZero
             style(l, s)
-            l.path = InkGeometry.outline(s)
+            l.path = pre[s.id] ?? InkGeometry.outline(s)
             l.contentsScale = renderScale
             strokeHost.addSublayer(l)
             layers[s.id] = (l, s.transform)

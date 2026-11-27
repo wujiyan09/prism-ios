@@ -395,7 +395,18 @@ struct ImportPickers: ViewModifier {
             var result: (PDFDocument?, String?) = (nil, nil)
             ImportPickers.read(local.isEmpty ? urls : local) { d, e in result = (d, e) }
             // Wait for the picker to finish dismissing, or the next sheet can't be presented (that was the 108 regression).
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { busy = false; done(result.0, result.1) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                busy = false
+                // Hand the UI a document created on the main thread (from the copied file: lazy, cheap); a
+                // PDFDocument built on a background queue must not be used by PDFKit views on main.
+                var d = result.0
+                if let u = d?.documentURL, let fresh = PDFDocument(url: u) {
+                    fresh.documentAttributes = d?.documentAttributes; d = fresh
+                } else if let old = d, let data = old.dataRepresentation(), let fresh = PDFDocument(data: data) {
+                    fresh.documentAttributes = old.documentAttributes; d = fresh
+                }
+                done(d, result.1)
+            }
         }
     }
 
@@ -422,6 +433,13 @@ struct ImportPickers: ViewModifier {
             } else if let im = UIImage(data: data) { ims.append(im) }
         }
         for im in ims { if let p = PDFKit.PDFPage(image: im) { out.insert(p, at: out.pageCount) } }
+        // Pages borrowed from source documents that are about to be released: flatten into one self-contained doc now.
+        if let data = out.dataRepresentation(), let solid = PDFDocument(data: data) {
+            for u in urls where u.pathExtension.lowercased() != "prismpaper" {
+                var a = solid.documentAttributes ?? [:]; a[PDFDocumentAttribute.titleAttribute] = u.deletingPathExtension().lastPathComponent; solid.documentAttributes = a; break
+            }
+            done(solid.pageCount > 0 ? solid : nil, solid.pageCount > 0 ? nil : "没有可以导入的 PDF 或图片"); return
+        }
         // Original filename (no extension) travels with the document; used as the name, no naming dialog.
         if let u = urls.first(where: { $0.pathExtension.lowercased() != "prismpaper" }) {
             var a = out.documentAttributes ?? [:]; a[PDFDocumentAttribute.titleAttribute] = u.deletingPathExtension().lastPathComponent; out.documentAttributes = a
@@ -576,11 +594,10 @@ struct ImportPaperView: View {
         .noteRecent(.imported(id), p?.name ?? "导入的试卷", "导入")
         .task {
             // Open off the main thread; the page appears as soon as PDFKit has the document.
-            let s = store, i = id
-            let (d, m) = await Task.detached(priority: .userInitiated) { () -> (PDFDocument?, PDFDocument?) in
-                let d = s.doc(i); _ = d?.pageCount; return (d, s.ms(i))
-            }.value
-            doc = d; ms = m
+            // Created on main: PDFDocument(url:) is lazy (pages parse on demand) and PDFKit objects must stay on the
+            // thread that uses them (a background-created document crashed the first open after an import).
+            await Task.yield()
+            doc = store.doc(id); ms = store.ms(id)
         }
     }
 
