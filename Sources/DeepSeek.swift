@@ -467,7 +467,7 @@ struct DeepSeekEntry: ViewModifier {
                 if showPinned {
                     // Floating Liquid Glass panel, inset from the edges like the iOS 26 sidebar.
                     // Stable identity: the panel follows the page by swapping its context, never by being rebuilt.
-                    DSLazyPanel(make: make, live: make(), embedded: true, close: { withAnimation(.smooth(duration: 0.35)) { dock.visible = false } },
+                    DSLazyPanel(make: make, embedded: true, close: { withAnimation(.smooth(duration: 0.35)) { dock.visible = false } },
                                 togglePin: { withAnimation(.smooth(duration: 0.35)) { dock.pinned = false; open = true } })
                         .frame(width: liveWidth ?? dock.width)
                         .frame(maxHeight: .infinity)
@@ -492,7 +492,7 @@ struct DeepSeekEntry: ViewModifier {
                 }
             }
             .sheet(isPresented: $open) {
-                DSLazyPanel(make: make, live: make(), embedded: false, close: { open = false },
+                DSLazyPanel(make: make, embedded: false, close: { open = false },
                             togglePin: Self.pinEnabled && hsc == .regular ? {
                                 open = false
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -525,14 +525,20 @@ struct DSLazyPanel: View {
             }
         }
         .task {
+            // Let the panel appear first; the context (page text, scratch snapshot…) is built after the first frame,
+            // never inside a parent's body on every render.
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            var found = false
             for _ in 0..<40 {
-                if let c = make(), !c.page.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !c.images.isEmpty { ctx = c; return }
+                if let c = make(), !c.page.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !c.images.isEmpty { ctx = c; found = true; break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
-            if let c = make() { ctx = c } else { gaveUp = true }
-        }
-        .onChange(of: live?.key) { _, _ in
-            if let c = live, !c.page.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(live?.images.isEmpty ?? true) { ctx = c; gaveUp = false }
+            if !found { if let c = make() { ctx = c } else { gaveUp = true } }
+            // Follow question changes at 1 Hz (cheap key compare) instead of rebuilding on every render.
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if let c = make(), c.key != ctx?.key, !c.page.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !c.images.isEmpty { ctx = c; gaveUp = false }
+            }
         }
     }
 }
