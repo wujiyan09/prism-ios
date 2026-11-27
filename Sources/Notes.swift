@@ -562,7 +562,9 @@ struct NoteDocView: View {
     @State private var editing: NoteItem?
     @State private var showPages = false
     @State private var showQuiz = false
-    @State private var mainUser = Date.distantPast
+    /// Last user scroll on this window. A plain reference (not @State) so scrolling doesn't re-render the whole note every frame.
+    private final class Stamp { var t = Date.distantPast }
+    @State private var mainUser = Stamp()
     @State private var newPaper: String?
     @AppStorage("notes.dsScope") private var scope = "all"
     @State private var ctx: DSContext?
@@ -588,7 +590,7 @@ struct NoteDocView: View {
                         ZoomScroll(size: CGSize(width: base + 32, height: contentHeight(doc, base)), zoom: $zoom, jump: $jump,
                                    onScroll: { y in pageAt(doc, base, y) }, locked: vctl.locked, onUser: { top, z in
                                        // Big screen moved by the user: the pad follows (and stale pad positions are ignored for a moment).
-                                       mainUser = Date()
+                                       mainUser.t = Date()
                                        guard PadHub.shared.padOpen else { return }
                                        let f = base / NoteRender.logicalWidth
                                        var t = Self.pad
@@ -620,7 +622,7 @@ struct NoteDocView: View {
                         .onChange(of: showPages) { _, v in if !v, let c = current { jump = offset(doc, base, c) } }
                         .onReceive(NotificationCenter.default.publisher(for: .padViewport)) { n in
                             // 手写板 scrolled/zoomed: show the same part of the same page.
-                            guard Date().timeIntervalSince(mainUser) > 0.6, PadHub.shared.mainFollows, let ch = n.object as? String, let r = n.userInfo?["r"] as? CGRect, r.width > 1,
+                            guard Date().timeIntervalSince(mainUser.t) > 0.6, PadHub.shared.mainFollows, let ch = n.object as? String, let r = n.userInfo?["r"] as? CGRect, r.width > 1,
                                   let pi = doc.pages.firstIndex(where: { "note:" + NoteStore.inkKey(id, $0.id) == ch }) else { return }
                             let f = base / NoteRender.logicalWidth
                             if PadHub.syncZoom && !vctl.locked {
@@ -629,7 +631,8 @@ struct NoteDocView: View {
                             }
                             var top = Self.pad
                             for q in doc.pages.prefix(pi) { top += blockH(q, base) + Self.gap }
-                            jump = top + r.minY * f
+                            let nj = top + r.minY * f
+                            if abs(nj - (jump ?? -1000)) > 0.5 { jump = nj }
                             if current != doc.pages[pi].id { current = doc.pages[pi].id }
                         }
                         .onReceive(NotificationCenter.default.publisher(for: .padPage)) { n in
