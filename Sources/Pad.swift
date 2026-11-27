@@ -121,7 +121,17 @@ final class PadHub {
         return (.other, .systemGray, 6)
     }
     @ObservationIgnored private var liveListeners: [String: [(id: ObjectIdentifier, f: (Live?) -> Void)]] = [:]
-    func live(_ ch: String, _ l: Live?) { for x in liveListeners[ch] ?? [] { x.f(l) } }
+    @ObservationIgnored private var hoverAt: [String: CFTimeInterval] = [:]
+    func live(_ ch: String, _ l: Live?) {
+        guard let ls = liveListeners[ch], !ls.isEmpty else { return }   // nobody showing it: no work
+        if l != nil, ch.hasPrefix("hover:") {
+            // Hover dot: ~30 Hz is plenty.
+            let now = CACurrentMediaTime()
+            if now - (hoverAt[ch] ?? 0) < 1.0 / 30 { return }
+            hoverAt[ch] = now
+        }
+        for x in ls { x.f(l) }
+    }
     func listenLive(_ ch: String, _ o: AnyObject, _ f: @escaping (Live?) -> Void) {
         let me = ObjectIdentifier(o)
         var ls = (liveListeners[ch] ?? []).filter { $0.id != me }
@@ -284,6 +294,41 @@ final class LivePreview {
 }
 
 /// Shows another window's in-progress stroke as a real PKStroke on this canvas (PencilKit renders it).
+/// Learns how PencilKit sizes points for each ink from real committed strokes.
+enum InkCalib {
+    private static var mem: [String: (a: CGFloat, b: CGFloat, op: CGFloat)] = {
+        var out: [String: (CGFloat, CGFloat, CGFloat)] = [:]
+        for (k, v) in (UserDefaults.standard.dictionary(forKey: "ink.calib") as? [String: [Double]]) ?? [:] where v.count == 3 { out[k] = (v[0], v[1], v[2]) }
+        return out
+    }()
+    static func get(_ k: String) -> (a: CGFloat, b: CGFloat, op: CGFloat) {
+        if let c = mem[k] { return c }
+        // Defaults before the first stroke: monoline/marker/pencil constant, pressure inks lightly pressure-sensitive.
+        let r = k.lowercased()
+        if r.contains("monoline") || r.contains("marker") || r.contains("pencil") { return (1, 0, 1) }
+        return (0.7, 0.1, 1)
+    }
+    /// Fit from a committed stroke drawn with a tool of this nominal width.
+    static func learn(_ s: PKStroke, width: CGFloat) {
+        guard width > 0 else { return }
+        let ps = Array(s.path)
+        guard ps.count >= 6 else { return }
+        let xs = ps.map { $0.force }, ys = ps.map { $0.size.width / width }
+        let n = CGFloat(ps.count), mx = xs.reduce(0, +) / n, my = ys.reduce(0, +) / n
+        let vx = xs.reduce(0) { $0 + ($1 - mx) * ($1 - mx) }
+        let b = vx > 0.01 ? zip(xs, ys).reduce(0) { $0 + ($1.0 - mx) * ($1.1 - my) } / vx : 0
+        let a = my - b * mx
+        let op = ps.map(\.opacity).reduce(0, +) / n
+        let k = s.ink.inkType.rawValue
+        let old = mem[k]
+        let new = old.map { (($0.a + a) / 2, ($0.b + b) / 2, ($0.op + op) / 2) } ?? (a, b, op)
+        mem[k] = (new.0, new.1, new.2)
+        var d: [String: [Double]] = [:]
+        for (kk, v) in mem { d[kk] = [Double(v.a), Double(v.b), Double(v.op)] }
+        UserDefaults.standard.set(d, forKey: "ink.calib")
+    }
+}
+
 final class LiveInk {
     /// Small overlay canvas holding only the in-progress stroke, so the real canvas is never reassigned per frame.
     private var overlay: PKCanvasView?
@@ -319,7 +364,7 @@ final class LiveInk {
             let w = PadLink.pointWidth(ink.inkType, l.width, force: f, altitude: al) * s
             pts.append(PKStrokePoint(location: CGPoint(x: l.points[i].x * s, y: l.points[i].y * s),
                                      timeOffset: l.ts.count == n ? l.ts[i] - t0 : TimeInterval(i) / 240,
-                                     size: CGSize(width: w, height: w), opacity: 1, force: f * 4.17, azimuth: az, altitude: al))
+                                     size: CGSize(width: w, height: w), opacity: InkCalib.get(ink.inkType.rawValue).op, force: f * 4.17, azimuth: az, altitude: al))
         }
         o.drawing = PKDrawing(strokes: [PKStroke(ink: ink, path: PKStrokePath(controlPoints: pts, creationDate: Date()))])
     }
@@ -535,19 +580,11 @@ final class PadLink {
         PadHub.shared.listenPos(channel, self) { [weak self] y, w in self?.onScroll?(y, w) }
     }
     /// Point size PencilKit would use for this ink at this pressure / tilt (tool width = nominal width).
+    /// Point size for the live stroke. Calibrated per ink from the pad's own committed strokes
+    /// (size/width ≈ a + b·force, PencilKit force units), so the preview matches what PencilKit actually draws.
     static func pointWidth(_ t: PKInk.InkType, _ width: CGFloat, force f: CGFloat, altitude al: CGFloat) -> CGFloat {
-        let tilt = max(0, 1 - al / (.pi / 2))
-        switch t {
-        case .pen: return width * (0.5 + 0.75 * min(1, f))
-        case .pencil: return width * (1 + 2.5 * tilt)
-        case .marker: return width
-        default:
-            let r = t.rawValue.lowercased()
-            if r.contains("monoline") { return width }
-            if r.contains("fountain") { return width * (0.4 + 0.9 * min(1, f)) }
-            if r.contains("crayon") { return width * (1 + 1.5 * tilt) }
-            return width * (0.5 + 0.75 * min(1, f))
-        }
+        let c = InkCalib.get(t.rawValue)
+        return max(width * 0.25, width * (c.a + c.b * f * 4.17))
     }
     func tearDown() {
         guard on else { return }; on = false
@@ -914,7 +951,7 @@ struct PadCanvas: UIViewRepresentable {
                 under.addSubview(iv); return iv
             }
         }
-        let picker: PKToolPicker = { let p = PKToolPicker(); ToolSync.shared.register(p); return p }()
+        let picker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
         var base: CGFloat = 1
         var fittedWidth: CGFloat = 0
         var lastFollow: CGFloat = -1
@@ -1030,6 +1067,7 @@ struct PadCanvas: UIViewRepresentable {
         }
         func canvasViewDrawingDidChange(_ v: PKCanvasView) {
             guard !applying else { return }
+        if let st = v.drawing.strokes.last, let t = v.tool as? PKInkingTool { InkCalib.learn(st, width: t.width) }
             PadHub.shared.publish(parent.page.channel, v.drawing, from: self)
             committed = PadHub.shared.strokeSeq
             PadHub.shared.live(parent.page.channel, nil)
@@ -1077,12 +1115,29 @@ final class QuietCanvas: PKCanvasView {
 /// Keeps the pad's and the main window's tool pickers on the same tool (type, colour, width, eraser).
 final class ToolSync: NSObject, PKToolPickerObserver {
     static let shared = ToolSync()
+    /// Every tool picker in the app: no crayon, fountain pen, watercolor or reed (Sam, 2026-11-27).
+    static func makePicker() -> PKToolPicker {
+        if #available(iOS 18.0, *) {
+            var items: [PKToolPickerItem] = [PKToolPickerInkingItem(type: .pen), PKToolPickerInkingItem(type: .pencil),
+                                             PKToolPickerInkingItem(type: .marker), PKToolPickerInkingItem(type: .monoline),
+                                             PKToolPickerEraserItem(type: .vector), PKToolPickerLassoItem(), PKToolPickerRulerItem()]
+            let p = PKToolPicker(toolItems: items)
+            return p
+        }
+        return PKToolPicker()
+    }
+    static func allowed(_ t: PKTool) -> Bool {
+        guard let i = t as? PKInkingTool else { return true }
+        let r = i.inkType.rawValue.lowercased()
+        return !(r.contains("crayon") || r.contains("fountain") || r.contains("watercolor") || r.contains("reed"))
+    }
     private var pickers: [PKToolPicker] = []
     private var busy = false
     func register(_ p: PKToolPicker) {
         guard !pickers.contains(where: { $0 === p }) else { return }
         pickers.append(p); p.addObserver(self)
         if let other = pickers.first(where: { $0 !== p }) { busy = true; p.selectedTool = other.selectedTool; busy = false }
+        if !ToolSync.allowed(p.selectedTool) { p.selectedTool = PKInkingTool(.pen, color: .black, width: 2) }
     }
     func unregister(_ p: PKToolPicker) { p.removeObserver(self); pickers.removeAll { $0 === p } }
     func toolPickerSelectedToolDidChange(_ src: PKToolPicker) {
@@ -1199,7 +1254,7 @@ struct PadPagedCanvas: UIViewRepresentable {
         var following = false
         var userScrolled = Date.distantPast
         var vpObs: NSObjectProtocol?
-        let picker: PKToolPicker = { let p = PKToolPicker(); ToolSync.shared.register(p); return p }()
+        let picker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
         init(_ p: PadPagedCanvas) { parent = p; shownIndex = p.index }
 
         func viewForZooming(in s: UIScrollView) -> UIView? { box }
@@ -1427,6 +1482,7 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
 
     func canvasViewDrawingDidChange(_ v: PKCanvasView) {
         guard !applying else { return }
+        if let st = v.drawing.strokes.last, let t = v.tool as? PKInkingTool { InkCalib.learn(st, width: t.width) }
         PadHub.shared.publish(page.channel, v.drawing, from: self)
         committed = PadHub.shared.strokeSeq
         PadHub.shared.live(page.channel, nil)

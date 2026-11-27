@@ -1098,7 +1098,7 @@ struct CanvasRep: UIViewRepresentable {
         v.resignFirstResponder()
     }
 
-    static let sharedPicker: PKToolPicker = { let p = PKToolPicker(); ToolSync.shared.register(p); return p }()
+    static let sharedPicker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
 
     final class Coord: NSObject, PKCanvasViewDelegate, PKToolPickerObserver, UIContextMenuInteractionDelegate {
         var shown = true
@@ -1120,6 +1120,8 @@ struct CanvasRep: UIViewRepresentable {
                 ctl.report(page: min(Int(height / CanvasRep.pageH) - 1, max(0, Int(y / CanvasRep.pageH))), of: Int((height / CanvasRep.pageH).rounded()))
             }
             guard !padDriven, let link, link.isOn, PadHub.shared.mainFollows, sv.zoomScale > 0 else { return }
+            // Only the user's own scrolling is sent (following the pad never echoes back → no snap-back).
+            guard sv.isTracking || sv.isDragging || sv.isDecelerating || sv.isZooming else { return }
             let y = max(0, sv.contentOffset.y) / sv.zoomScale
             let w = sv.bounds.width / sv.zoomScale
             if abs(PadHub.shared.scratchY - y) > 2 { PadHub.shared.scratchY = y }
