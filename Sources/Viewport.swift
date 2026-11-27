@@ -77,7 +77,7 @@ struct ViewHUD: View {
         let row = HStack(spacing: 2) {
             if showPages && ctl.count > 1 {
                 Button { jump = true } label: {
-                    Text("\(ctl.page + 1) / \(ctl.count)").font(.subheadline.monospacedDigit()).padding(.horizontal, 6)
+                    Text("\(ctl.page + 1) / \(ctl.count)").font(.subheadline.monospacedDigit()).lineLimit(1).fixedSize(horizontal: true, vertical: false).padding(.horizontal, 6)
                 }
                 .popover(isPresented: $jump) { PageJump(ctl: ctl, done: { jump = false }) }
                 .accessibilityLabel("第 \(ctl.page + 1) 页，共 \(ctl.count) 页，跳页")
@@ -113,9 +113,11 @@ struct PageJump: View {
     var body: some View {
         VStack(spacing: 12) {
             HStack {
-                TextField("页码", text: $field).keyboardType(.numberPad).textFieldStyle(.roundedBorder).frame(width: 80)
+                TextField("页码", text: $field).keyboardType(.numberPad).textFieldStyle(.roundedBorder).frame(width: 56)
                     .onSubmit(go)
-                Stepper("第 \(n) / \(ctl.count) 页", value: $n, in: 1...max(1, ctl.count))
+                Stepper(value: $n, in: 1...max(1, ctl.count)) {
+                    Text("第 \(n) / \(ctl.count) 页").font(.body.monospacedDigit()).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                }
                     .onChange(of: n) { _, v in field = "\(v)" }
                 Button("前往", action: go).buttonStyle(.borderedProminent)
             }
