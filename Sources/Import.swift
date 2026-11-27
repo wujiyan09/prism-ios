@@ -312,9 +312,15 @@ struct ImportPickers: ViewModifier {
     @Binding var source: ImportSource?
     @Binding var photos: [PhotosPickerItem]
     let done: (PDFDocument?, String?) -> Void
+    @State private var busy = false
 
     func body(content: Content) -> some View {
         content
+            .overlay {
+                if busy {
+                    ProgressView("正在导入…").padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)).transition(.opacity)
+                }
+            }
             .onChange(of: source) { _, s in
                 guard s == .files else { return }
                 source = nil
@@ -338,7 +344,14 @@ struct ImportPickers: ViewModifier {
     }
 
     private func handle(_ urls: [URL]) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { ImportPickers.read(urls, done) }
+        // Feedback right away; reading/merging the PDF happens off the main thread.
+        busy = true
+        let done = self.done
+        DispatchQueue.global(qos: .userInitiated).async {
+            var result: (PDFDocument?, String?) = (nil, nil)
+            ImportPickers.read(urls) { d, e in result = (d, e) }
+            DispatchQueue.main.async { busy = false; done(result.0, result.1) }
+        }
     }
 
     static func read(_ urls: [URL], _ done: (PDFDocument?, String?) -> Void) {

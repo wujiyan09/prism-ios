@@ -125,9 +125,9 @@ final class PadHub {
     func live(_ ch: String, _ l: Live?) {
         guard let ls = liveListeners[ch], !ls.isEmpty else { return }   // nobody showing it: no work
         if l != nil, ch.hasPrefix("hover:") {
-            // Hover dot: ~30 Hz is plenty.
+            // Hover dot: at most once per display frame (≥ 90 Hz).
             let now = CACurrentMediaTime()
-            if now - (hoverAt[ch] ?? 0) < 1.0 / 30 { return }
+            if now - (hoverAt[ch] ?? 0) < 1.0 / Double(max(90, UIScreen.main.maximumFramesPerSecond)) * 0.9 { return }
             hoverAt[ch] = now
         }
         for x in ls { x.f(l) }
