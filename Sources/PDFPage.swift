@@ -143,8 +143,11 @@ struct PDFKitView: UIViewRepresentable {
                 let dy = pt.y
                 let dx = pt.x
                 let maxY = max(-sv.adjustedContentInset.top, sv.contentSize.height - sv.bounds.height + sv.adjustedContentInset.bottom)
-                let maxX = max(0, sv.contentSize.width - sv.bounds.width)
-                let o = CGPoint(x: min(maxX, max(0, sv.contentOffset.x + dx)), y: min(maxY, max(-sv.adjustedContentInset.top, sv.contentOffset.y + dy)))
+                // PDFKit keeps the page centred with content insets, so the x range includes them (clamping at 0 lost x).
+                if v.autoScales { v.autoScales = false }   // autoScales re-fits and recentres after we move: x snapped back
+                let minX = -sv.adjustedContentInset.left
+                let maxX = max(minX, sv.contentSize.width - sv.bounds.width + sv.adjustedContentInset.right)
+                let o = CGPoint(x: min(maxX, max(minX, sv.contentOffset.x + dx)), y: min(maxY, max(-sv.adjustedContentInset.top, sv.contentOffset.y + dy)))
                 if abs(o.y - sv.contentOffset.y) > 0.5 || abs(o.x - sv.contentOffset.x) > 0.5 { sv.contentOffset = o }
             } else {
                 v.go(to: CGRect(x: b.minX + r.minX, y: b.maxY - r.minY - 1, width: 1, height: 1), on: p)

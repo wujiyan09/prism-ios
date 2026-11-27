@@ -1320,6 +1320,7 @@ struct PadPagedCanvas: UIViewRepresentable {
         DispatchQueue.main.async {
             c.fit()
             c.show(index, animated: false)
+            c.updateNear(sv)
             if let first = c.wires.first?.canvas {
                 c.picker.setVisible(true, forFirstResponder: first)
                 first.becomeFirstResponder()
@@ -1409,7 +1410,16 @@ struct PadPagedCanvas: UIViewRepresentable {
             sharpen()
             if base > 0 { let r = z / base; DispatchQueue.main.async { self.parent.zoom = r } }
         }
-        func scrollViewDidScroll(_ s: UIScrollView) { report(s) }
+        func scrollViewDidScroll(_ s: UIScrollView) { report(s); updateNear(s) }
+        private var nearRange = -1 ..< -1
+        func updateNear(_ s: UIScrollView) {
+            guard s.zoomScale > 0, !tops.isEmpty else { return }
+            let a = page(atY: max(0, s.contentOffset.y) / s.zoomScale), b = page(atY: (s.contentOffset.y + s.bounds.height) / s.zoomScale)
+            let r = max(0, a - 1) ..< min(wires.count, b + 2)
+            guard r != nearRange else { return }
+            nearRange = r
+            for (i, w) in wires.enumerated() { w.setNear(r.contains(i)) }
+        }
         private func report(_ s: UIScrollView) {
             guard !following, s.zoomScale > 0 else { return }
             let z = s.zoomScale
@@ -1470,12 +1480,21 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
     private var lastPts: [CGPoint] = []
     private weak var picker: PKToolPicker?
     private var figObs: NSObjectProtocol?
+    private let bgView = UIImageView()
+    private var bgShown = false
+    /// Near the screen: render the page image; far away: drop it to free memory.
+    func setNear(_ near: Bool) {
+        guard near != bgShown else { return }
+        bgShown = near
+        bgView.image = near ? page.background() : nil
+    }
 
     init(page: PadPage, picker: PKToolPicker, frame: CGRect, scale f: CGFloat, index: Int) {
         self.page = page; self.scale = f; self.index = index; self.picker = picker
         view = UIView(frame: frame)
         view.backgroundColor = .white
         view.layer.shadowColor = UIColor.black.cgColor; view.layer.shadowOpacity = 0.12; view.layer.shadowRadius = 4; view.layer.shadowOffset = CGSize(width: 0, height: 2)
+        view.layer.shadowPath = UIBezierPath(rect: CGRect(origin: .zero, size: frame.size)).cgPath   // no offscreen shadow pass
         canvas = QuietCanvas(frame: CGRect(origin: .zero, size: page.size)); canvas.isPadCanvas = true
         super.init()
         // Everything inside works in page units; the wrapper scales it to the column width.
@@ -1484,11 +1503,10 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
         inner.layer.position = .zero
         inner.transform = CGAffineTransform(scaleX: f, y: f)
         view.addSubview(inner)
-        if let bg = page.background() {
-            let iv = UIImageView(image: bg); iv.frame = inner.bounds; iv.contentMode = .scaleToFill
-            inner.addSubview(iv)
-            canvas.overrideUserInterfaceStyle = .light
-        }
+        // Page image is rendered lazily, only for pages near the screen (was: every page rendered at 2× on open).
+        bgView.frame = inner.bounds; bgView.contentMode = .scaleToFill
+        inner.addSubview(bgView)
+        canvas.overrideUserInterfaceStyle = .light
         for (img, r) in page.figures() {
             let iv = UIImageView(image: img); iv.frame = r; iv.contentMode = .scaleAspectFit; iv.backgroundColor = .white
             inner.addSubview(iv)

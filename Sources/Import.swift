@@ -77,7 +77,7 @@ final class ImportStore {
     func create(name: String, subject: String, chapters: [String], pdf: PDFDocument) -> ImpPaper {
         let p = ImpPaper(id: UUID().uuidString, name: name, subject: subject, chapters: chapters, created: Date().timeIntervalSince1970)
         try? FileManager.default.createDirectory(at: Self.dir(p.id), withIntermediateDirectories: true)
-        pdf.write(to: Self.paperURL(p.id))
+        PDFFile.save(pdf, to: Self.paperURL(p.id))
         save(p)
         Task { await SyncManager.shared.sync() }
         return p
@@ -368,6 +368,12 @@ struct ImportPickers: ViewModifier {
 
     static func read(_ urls: [URL], _ done: (PDFDocument?, String?) -> Void) {
         var ims: [UIImage] = []
+        // One plain PDF: open it in place (PDFKit parses pages lazily) instead of reading it into memory and
+        // re-building it page by page; saving later is a file copy.
+        if urls.count == 1, let u = urls.first, u.pathExtension.lowercased() == "pdf", let d = PDFDocument(url: u), d.pageCount > 0 {
+            var a = d.documentAttributes ?? [:]; a[PDFDocumentAttribute.titleAttribute] = u.deletingPathExtension().lastPathComponent; d.documentAttributes = a
+            done(d, nil); return
+        }
         let out = PDFDocument()
         for u in urls {
             let ok = u.startAccessingSecurityScopedResource()
@@ -1320,5 +1326,17 @@ enum FilePick {
             let d = Del(done); del = d; p.delegate = d
             top()?.present(p, animated: true)
         }
+    }
+}
+
+
+enum PDFFile {
+    /// Unchanged document opened from a file: copy the file (fast, no re-encode). Otherwise write it out.
+    static func save(_ pdf: PDFDocument, to dst: URL) {
+        if let src = pdf.documentURL, src.isFileURL, FileManager.default.fileExists(atPath: src.path) {
+            try? FileManager.default.removeItem(at: dst)
+            if (try? FileManager.default.copyItem(at: src, to: dst)) != nil { return }
+        }
+        pdf.write(to: dst)
     }
 }

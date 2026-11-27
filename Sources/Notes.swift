@@ -135,7 +135,7 @@ final class NoteStore {
         let now = Date().timeIntervalSince1970
         var n = NoteDoc(id: UUID().uuidString, title: title, created: now, modified: now, hasBase: true)
         try? FileManager.default.createDirectory(at: Self.dir(n.id), withIntermediateDirectories: true)
-        pdf.write(to: Self.baseURL(n.id))
+        PDFFile.save(pdf, to: Self.baseURL(n.id))
         n.pages = (0..<pdf.pageCount).map { i in
             let b = pdf.page(at: i)?.bounds(for: .mediaBox) ?? CGRect(x: 0, y: 0, width: 595, height: 842)
             return NotePage(src: i, size: [Double(b.width), Double(b.height)])
