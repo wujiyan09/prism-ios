@@ -61,7 +61,12 @@ struct DSPart { var text: String; var images: [UIImage] = [] }
 enum DSClient {
     static let endpoint = URL(string: "https://api.deepseek.com/chat/completions")!
 
-    static let systemPrompt = """
+    /// Editable in 设置 › DeepSeek; empty = default.
+    static var systemPrompt: String {
+        let s = UserDefaults.standard.string(forKey: "ds.systemPrompt") ?? ""
+        return s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? defaultSystemPrompt : s
+    }
+    static let defaultSystemPrompt = """
     你是一位熟悉香港中学文凭试（HKDSE）的私人导师，学生是香港 S5 学生，科目包括 ICT、Mathematics（Core 与 M2）、Physics、Chemistry 和中文。
     规则：
     - 默认用简体中文回答；英文专业名词、课本术语、程序代码保留英文。学生用英文提问就用英文答。
@@ -352,6 +357,7 @@ struct DeepSeekSettingsView: View {
     @State private var testing = false
     @State private var reveal = false
     @State private var confirmClear = false
+    @AppStorage("ds.autoDelete") private var autoDelete = 30
 
     var body: some View {
         Form {
@@ -399,6 +405,17 @@ struct DeepSeekSettingsView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                 Button("删除所有对话记录", role: .destructive) { confirmClear = true }
             } header: { Text("用量") }
+            .listRowBackground(Color.cardBackground)
+            Section {
+                Picker("自动删除对话", selection: $autoDelete) {
+                    Text("7 天").tag(7); Text("30 天").tag(30); Text("90 天").tag(90); Text("永不").tag(0)
+                }
+                .onChange(of: autoDelete) { _, _ in DSStore.shared.prune() }
+            } footer: { Text("按最后一次使用时间计算。") }
+            .listRowBackground(Color.cardBackground)
+            Section {
+                NavigationLink("系统提示词") { DSPromptEditor() }
+            }
             .listRowBackground(Color.cardBackground)
         }
         .appList()
@@ -1235,5 +1252,26 @@ struct DSInput: UIViewRepresentable {
             if !toPad { DSInput.holding = false; if parent.focused { parent.focused = false } }
             if v.markedTextRange == nil { parent.text = v.text }
         }
+    }
+}
+
+
+/// View / edit the system prompt sent with every DeepSeek request; reset returns to the built-in one.
+struct DSPromptEditor: View {
+    @AppStorage("ds.systemPrompt") private var custom = ""
+    @State private var text = ""
+    @State private var confirmReset = false
+    var body: some View {
+        TextEditor(text: $text)
+            .font(.callout.monospaced())
+            .padding(8)
+            .onAppear { text = DSClient.systemPrompt }
+            .onChange(of: text) { _, v in custom = v == DSClient.defaultSystemPrompt ? "" : v }
+            .navigationTitle(custom.isEmpty ? "系统提示词（默认）" : "系统提示词（已修改）")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("恢复默认") { confirmReset = true }.disabled(custom.isEmpty) } }
+            .confirmationDialog("恢复默认系统提示词？", isPresented: $confirmReset, titleVisibility: .visible) {
+                Button("恢复默认", role: .destructive) { custom = ""; text = DSClient.defaultSystemPrompt }
+            }
     }
 }

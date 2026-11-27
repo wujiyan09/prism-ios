@@ -254,7 +254,10 @@ enum ToolKind: String, CaseIterable, Hashable, Identifiable {
 /// Per-window state: current section, navigation paths and the active practice session.
 @Observable
 final class SceneModel {
-    var section: AppSection = .learn
+    /// Relaunch: back to the last section; first launch / unknown → 最近使用.
+    var section: AppSection = AppSection(rawValue: UserDefaults.standard.string(forKey: "last.section") ?? "") ?? .recent {
+        didSet { UserDefaults.standard.set(section.rawValue, forKey: "last.section") }
+    }
     var paths: [AppSection: NavigationPath] = [:]
     var session: Session? {
         didSet {
