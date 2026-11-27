@@ -127,6 +127,11 @@ enum PDFInk {
 
 final class InkProvider: NSObject, PDFPageOverlayViewProvider, InkCanvasDelegate {
     var key = ""
+    /// Notes shown as a PDF: page i's ink lives under its own note key (page 0), pad channel "note:<key>".
+    /// The display PDF's pages are NoteRender.logicalWidth wide, so ink coordinates are the same as before.
+    var noteKeys: [String]? = nil
+    private func store(_ i: Int) -> (String, Int) { if let n = noteKeys, n.indices.contains(i) { return (n[i], 0) }; return (key, i) }
+    private func channel(_ i: Int) -> String { if let n = noteKeys, n.indices.contains(i) { return "note:" + n[i] }; return "pdf:\(key):\(i)" }
     var title = ""
     private var canvases: [Int: InkCanvas] = [:]
     private var links: [Int: PadLink] = [:]
@@ -137,7 +142,8 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, InkCanvasDelegate
     private func flush(_ c: InkCanvas) {
         pending[c.tag]?.cancel(); pending[c.tag] = nil
         guard dirty.remove(c.tag) != nil else { return }
-        PDFInk.saveAsync(key, c.tag, c.drawing, title: title, width: c.bounds.width, erased: true)
+        let (k, p) = store(c.tag)
+        PDFInk.saveAsync(k, p, c.drawing, title: title, width: c.bounds.width, erased: true)
     }
     func flushAll() { canvases.values.forEach(flush) }
     deinit { flushAll(); ToolSync.shared.unregister(picker) }
@@ -173,12 +179,12 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, InkCanvasDelegate
         c.drawingPolicy = .default
         c.isScrollEnabled = false
         c.tag = i
-        if let d = PDFInk.load(key, i) { c.drawing = d }
+        if let d = PDFInk.load(store(i).0, store(i).1) { c.drawing = d }
         c.delegate = self
         canvases[i] = c
         _ = flushObs
         let pw = page.bounds(for: .mediaBox).width
-        let link = PadLink("pdf:\(key):\(i)", canvas: c)
+        let link = PadLink(channel(i), canvas: c)
         link.host = { [weak c] in c?.inkView.layer }
         link.k = { [weak c] in max(1, c?.bounds.width ?? pw) / max(1, pw) }
         links[i] = link

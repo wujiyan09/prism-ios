@@ -97,7 +97,17 @@ struct PDFKitView: UIViewRepresentable {
     var inkKey = ""
     var inkTitle = ""
     var ctl: ViewCtl? = nil
+    /// Set for a note shown through PDFKit: ink keys per page (in page order) and the note id.
+    var noteID: String? = nil
+    var noteKeys: [String]? = nil
     final class Coord: NSObject {
+        var channels: [String]?
+        func channel(_ i: Int) -> String { if let c = channels, c.indices.contains(i) { return "note:" + c[i] }; return "pdf:\(inkKey):\(i)" }
+        func index(_ ch: String) -> Int? {
+            if let c = channels { return c.firstIndex { "note:" + $0 == ch } }
+            guard ch.hasPrefix("pdf:\(inkKey):") else { return nil }
+            return Int(ch.split(separator: ":").last ?? "")
+        }
         var cmd: CmdZoom?
         weak var ctl: ViewCtl?
         @objc func scaled(_ n: Notification) {
@@ -161,8 +171,8 @@ struct PDFKitView: UIViewRepresentable {
         /// Pad moved within a page: show the same rect.
         func padMoved(_ ch: String, _ r: CGRect) {
             guard Date().timeIntervalSince(userMoved) > 0.6 else { return }   // user is moving the big screen: don't snap it back
-            guard PadHub.shared.mainFollows, let v = view, let d = v.document, ch.hasPrefix("pdf:\(inkKey):"),
-                  let i = Int(ch.split(separator: ":").last ?? ""), let p = d.page(at: i) else { return }
+            guard PadHub.shared.mainFollows, let v = view, let d = v.document,
+                  let i = index(ch), let p = d.page(at: i) else { return }
             PadHub.shared.mainApplied = Date()
             let b = p.bounds(for: .mediaBox)
             if PadHub.syncZoom, r.width > 1, v.bounds.width > 1 {
@@ -199,7 +209,7 @@ struct PDFKitView: UIViewRepresentable {
             let b = p.bounds(for: .mediaBox)
             let r = v.convert(v.bounds, to: p)
             let top = CGRect(x: r.minX - b.minX, y: b.maxY - r.maxY, width: r.width, height: r.height)
-            NotificationCenter.default.post(name: .mainViewport, object: "pdf:\(inkKey):\(d.index(for: p))", userInfo: ["r": top])
+            NotificationCenter.default.post(name: .mainViewport, object: channel(d.index(for: p)), userInfo: ["r": top])
         }
         /// Main window follows the pad's page.
         @objc func padPage(_ n: Notification) {
@@ -229,7 +239,28 @@ struct PDFKitView: UIViewRepresentable {
         v.displayMode = .singlePageContinuous
         v.displayDirection = .vertical
         v.backgroundColor = UIColor(Color.appBackground)
-        if let ink {
+        if let ink, let nid = noteID {
+            // Note through PDFKit: no margins / 加一页 (pages are managed by the note), pad source = the note.
+            ink.noteKeys = noteKeys
+            ink.reset(key: inkKey, title: inkTitle)
+            context.coordinator.inkTitle = inkTitle
+            v.pageOverlayViewProvider = ink
+            v.isInMarkupMode = true
+            let co = context.coordinator
+            co.inkKey = inkKey; co.channels = noteKeys; co.owner = "note-" + nid
+            co.vpObs = NotificationCenter.default.addObserver(forName: .padViewport, object: nil, queue: .main) { [weak co] n in
+                if let ch = n.object as? String, let r = n.userInfo?["r"] as? CGRect { co?.padMoved(ch, r) }
+            }
+            DispatchQueue.main.async { [weak v, weak co] in
+                guard let v, let sv = Self.scroller(in: v) else { return }
+                co?.kvo = sv.observe(\.contentOffset, options: [.new]) { _, _ in
+                    let now = CACurrentMediaTime(); guard now - (co?.lastTick ?? 0) > 1.0 / 30 else { return }; co?.lastTick = now
+                    DispatchQueue.main.async { co?.mainScrolled(); co?.rememberPos() }
+                }
+            }
+            NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coord.padPage(_:)), name: .padPage, object: nil)
+            if let s = PadSources.note(nid) { PadHub.shared.activate(s) }
+        } else if let ink {
             PDFExtra.apply(doc, key: inkKey)
             let add = Self.addButton()
             add.isHidden = doc.pageCount > 1
@@ -329,7 +360,15 @@ struct PDFKitView: UIViewRepresentable {
         if !coordinator.owner.isEmpty { PadHub.shared.deactivate(coordinator.owner) }
     }
     func updateUIView(_ v: PDFView, context: Context) {
-        if v.document !== doc { v.document = doc }
+        if v.document !== doc {
+            if let nk = noteKeys, let ink {
+                // Note pages changed (added / moved / deleted): rebuild overlays with the new page → key mapping.
+                ink.flushAll(); ink.noteKeys = nk; ink.reload(); context.coordinator.channels = nk
+            }
+            let at = v.currentPage.flatMap { v.document?.index(for: $0) }
+            v.document = doc
+            if let at, let p = doc.page(at: min(at, doc.pageCount - 1)) { v.go(to: p) }
+        }
     }
 }
 
