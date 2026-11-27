@@ -83,7 +83,7 @@ final class ImportStore {
         return p
     }
     func setMS(_ id: String, _ pdf: PDFDocument) {
-        pdf.write(to: Self.msURL(id))
+        PDFFile.save(pdf, to: Self.msURL(id))   // file clone when it came from a file (was a full re-write on main)
         if var p = papers[id] { p.hasMS = true; p.msParsed = []; save(p) }
     }
     func delete(_ id: String) {
@@ -433,6 +433,12 @@ struct ImportPickers: ViewModifier {
             // Touch page sizes here so creating the note on the main thread doesn't parse pages.
             var result: (PDFDocument?, String?) = (nil, nil)
             ImportPickers.read(local.isEmpty ? urls : local) { d, e in result = (d, e) }
+            // Merged / built documents: write them to a file here, so the main thread opens a file (lazy) and saving
+            // the paper is a file clone, not a full PDF write on main.
+            if let d = result.0, d.documentURL == nil, let data = d.dataRepresentation() {
+                let f = tmp.appendingPathComponent("merged.pdf")
+                if (try? data.write(to: f, options: .atomic)) != nil, let fd = PDFDocument(url: f) { fd.documentAttributes = d.documentAttributes; result.0 = fd }
+            }
             // Wait for the picker to finish dismissing, or the next sheet can't be presented (that was the 108 regression).
             DispatchQueue.main.asyncAfter(deadline: .now() + max(0, 0.6 - Date().timeIntervalSince(t0))) {
                 busy = false

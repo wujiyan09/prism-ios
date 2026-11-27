@@ -604,6 +604,9 @@ struct NoteDocView: View {
     @State private var rename = false
     @State private var field = ""
     @AppStorage("notes.tools") private var showTools = true
+    /// Notes through the shared PDF engine (default). The classic page view stays for editing text boxes/images.
+    @AppStorage("notes.pdfView") private var usePDF = true
+    @State private var classic = false
     /// 笔盘 shown = drawing; hidden = scroll / select.
     private var tool: NoteTool { showTools ? .pen : .select }
 
@@ -612,7 +615,11 @@ struct NoteDocView: View {
 
     var body: some View {
         Group {
-            if let doc {
+            if let doc, usePDF, !classic {
+                NotePDFBody(id: id, drawing: tool == .pen, onPage: { i in
+                    if doc.pages.indices.contains(i), current != doc.pages[i].id { current = doc.pages[i].id }
+                }, ctl: vctl)
+            } else if let doc {
                 VStack(spacing: 0) {
                     GeometryReader { geo in
                         let base = min(1000, max(200, geo.size.width - 32))
@@ -720,7 +727,7 @@ struct NoteDocView: View {
                                      let t = p.items.compactMap { $0.kind == "text" ? $0.text : nil }.joined(separator: "\n")
                                      return (NoteRender.background(id, p, width: 1400), t)
                                  },
-                                 pdf: { ImpPDF.from(images: doc.pages.map { NoteRender.background(id, $0, width: 1400) }) },
+                                 pdf: { (FileManager.default.fileExists(atPath: NoteDisplay.url(doc).path) ? PDFDocument(url: NoteDisplay.url(doc)) : nil) ?? ImpPDF.from(images: doc.pages.map { NoteRender.background(id, $0, width: 1400) }) },
                                  startPage: pageIndex, onDone: { nid in DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { newPaper = nid } })
                 }
             }
@@ -876,6 +883,11 @@ struct NoteDocView: View {
             Button { showPages = true } label: { Image(systemName: "square.grid.2x2") }.accessibilityLabel("页面")
             Menu {
                 Button { field = doc?.title ?? ""; rename = true } label: { Label("重命名", systemImage: "pencil") }
+                if usePDF {
+                    Button { InkSafety.flushAll(); classic.toggle() } label: {
+                        Label(classic ? "完成编辑（回到 PDF 视图）" : "编辑文本框和图片", systemImage: classic ? "checkmark.circle" : "character.textbox")
+                    }
+                }
                 Section("导出") {
                     Button { share = NoteExport.flattened(id).map { ShareItem(url: $0) } } label: { Label("PDF（含手写、图片和文本框）", systemImage: "doc.richtext") }
                     Button { share = NoteExport.original(id).map { ShareItem(url: $0) } } label: { Label("原始 PDF", systemImage: "doc") }
@@ -1337,5 +1349,110 @@ enum InkSafety {
     static func flushAll() {
         let post = { NotificationCenter.default.post(name: .noteInkFlush, object: nil) }
         if Thread.isMainThread { post() } else { DispatchQueue.main.sync(execute: post) }
+    }
+}
+
+
+// MARK: - Notes through PDFKit
+
+/// A note shown as one PDF: every page NoteRender.logicalWidth points wide (so ink coordinates match the stored
+/// ones exactly), with the original PDF page (vector) or the paper style, plus images and text boxes drawn in.
+/// Built off the main thread into Caches, keyed by the page content; the note's own files are never changed.
+enum NoteDisplay {
+    static let q = DispatchQueue(label: "note.display", qos: .userInitiated)
+    static func signature(_ d: NoteDoc) -> String {
+        var h = Hasher()
+        for p in d.pages { h.combine(p) }
+        return "\(d.id)-\(d.pages.count)-\(UInt(bitPattern: h.finalize()))"
+    }
+    static func url(_ d: NoteDoc) -> URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("note-display", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent(signature(d) + ".pdf")
+    }
+    /// Main-thread PDFDocument for the note (built in the background if needed).
+    @MainActor static func document(_ d: NoteDoc) async -> PDFDocument? {
+        let u = url(d)
+        if !FileManager.default.fileExists(atPath: u.path) {
+            // images are loaded on main first (NoteStore isn't thread-safe), drawn off-main
+            var ims: [String: UIImage] = [:]
+            for p in d.pages { for it in p.items where it.kind == "image" { if let f = it.file, let im = NoteStore.shared.image(d.id, f) { ims[f] = im } } }
+            let base = NoteStore.baseURL(d.id), hasBase = d.hasBase
+            let ok: Bool = await withCheckedContinuation { c in
+                q.async {
+                    let src = hasBase ? PDFDocument(url: base) : nil   // own copy: only used on this queue
+                    let W = NoteRender.logicalWidth
+                    let r = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: W, height: W * 1.414))
+                    let data = r.pdfData { ctx in
+                        for p in d.pages {
+                            let rect = CGRect(x: 0, y: 0, width: W, height: W * CGFloat(p.aspect))
+                            ctx.beginPage(withBounds: rect, pageInfo: [:])
+                            let cg = ctx.cgContext
+                            if let s = p.src, let pg = src?.page(at: s) {
+                                UIColor.white.setFill(); cg.fill(rect)
+                                let b = pg.bounds(for: .mediaBox)
+                                let k = W / max(1, b.width)
+                                cg.saveGState(); cg.translateBy(x: 0, y: rect.height); cg.scaleBy(x: k, y: -k)
+                                pg.draw(with: .mediaBox, to: cg); cg.restoreGState()
+                            } else {
+                                NoteRender.drawPaper(p.style, in: rect, cg)
+                            }
+                            for it in p.items {
+                                let f = CGRect(x: it.x * W, y: it.y * W, width: it.w * W, height: it.h * W)
+                                if it.kind == "image", let fl = it.file, let im = ims[fl] { im.draw(in: f) }
+                                else if it.kind == "text", let t = it.text {
+                                    NoteRender.textImage(t, width: W, height: f.height).draw(with: f, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], context: nil)
+                                }
+                            }
+                        }
+                    }
+                    c.resume(returning: (try? data.write(to: u, options: .atomic)) != nil)
+                }
+            }
+            guard ok else { return nil }
+            prune(keep: u)
+        }
+        return PDFDocument(url: u)
+    }
+    /// Old builds of this note are removed (the signature changes on every page edit).
+    static func prune(keep: URL) {
+        let id = keep.lastPathComponent.components(separatedBy: "-").prefix(5).joined(separator: "-")
+        let dir = keep.deletingLastPathComponent()
+        for f in (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] where f != keep && f.lastPathComponent.hasPrefix(id) {
+            try? FileManager.default.removeItem(at: f)
+        }
+    }
+}
+
+/// The note's pages in a PDFView (same engine as imported papers): native scrolling/zoom, ink overlays only for
+/// visible pages. Text boxes and images are drawn into the page; editing them uses the classic view.
+struct NotePDFBody: View {
+    let id: String
+    var drawing = true
+    let onPage: (Int) -> Void
+    let ctl: ViewCtl
+    @State private var store = NoteStore.shared
+    @State private var pdf: PDFDocument?
+    @State private var builtFor = ""
+    @State private var ink = InkProvider()
+    var body: some View {
+        Group {
+            if let pdf, let d = store.docs[id] {
+                PDFKitView(doc: pdf, onPage: onPage, ink: ink, inkKey: "note-" + id, inkTitle: d.title, ctl: ctl,
+                           noteID: id, noteKeys: d.pages.map { NoteStore.inkKey(id, $0.id) })
+                    .ignoresSafeArea(edges: .bottom)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: store.docs[id].map(NoteDisplay.signature) ?? "") {
+            guard let d = store.docs[id] else { return }
+            let sig = NoteDisplay.signature(d)
+            guard sig != builtFor else { return }
+            if let p = await NoteDisplay.document(d) { pdf = p; builtFor = sig }
+        }
+        .onAppear { ink.enabled = drawing }
+        .onChange(of: drawing) { _, v in ink.enabled = v }
+        .onDisappear { ink.flushAll() }
     }
 }
