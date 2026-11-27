@@ -119,6 +119,7 @@ struct PDFKitView: UIViewRepresentable {
         }
         @objc func padAdd(_ n: Notification) { if !owner.isEmpty, (n.object as? String) == owner { addPage() } }
         var userMoved = Date.distantPast
+        var lastTick: CFTimeInterval = 0
         // Reopening shows the same page, spot and zoom as last time.
         var posKey = ""
         private var posSaveAt = Date.distantPast
@@ -227,6 +228,7 @@ struct PDFKitView: UIViewRepresentable {
             ])
             context.coordinator.addButton = add
             ink.reset(key: inkKey, title: inkTitle)
+            let k = inkKey; for i in 0..<doc.pageCount { InkBitmapCache.prewarm({ PDFInk.load(k, i) }) }   // every page's ink ready before it's turned to
             PDFMargins.apply(doc, key: inkKey)
             let mb = UIButton(configuration: .gray())
             mb.configuration?.image = UIImage(systemName: "arrow.left.and.right.square")
@@ -269,7 +271,11 @@ struct PDFKitView: UIViewRepresentable {
             }
             DispatchQueue.main.async { [weak v, weak co] in
                 guard let v, let sv = Self.scroller(in: v) else { return }
-                co?.kvo = sv.observe(\.contentOffset, options: [.new]) { _, _ in DispatchQueue.main.async { co?.mainScrolled(); co?.updateAdd(); co?.rememberPos() } }
+                co?.kvo = sv.observe(\.contentOffset, options: [.new]) { _, _ in
+                    // ≤ 30 sync pushes a second while scrolling (was one per offset change).
+                    let now = CACurrentMediaTime(); guard now - (co?.lastTick ?? 0) > 1.0 / 30 else { return }; co?.lastTick = now
+                    DispatchQueue.main.async { co?.mainScrolled(); co?.updateAdd(); co?.rememberPos() }
+                }
                 co?.updateAdd()
             }
             NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coord.padPage(_:)), name: .padPage, object: nil)

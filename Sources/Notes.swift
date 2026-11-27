@@ -258,10 +258,15 @@ enum NoteRender {
     }
     /// One serial queue for page renders, so PDFKit never draws the same document on two threads at once.
     static let renderQ = DispatchQueue(label: "note.render", qos: .userInitiated)
+    /// Only touched on renderQ.
+    nonisolated(unsafe) private static var qBases: [String: PDFDocument?] = [:]
     static func renderOffMain(_ id: String, _ p: NotePage, width: CGFloat) async -> UIImage {
-        let base = p.src != nil ? NoteStore.shared.base(id) : nil   // opened on main (cached), drawn on the queue
+        // The queue has its OWN PDFDocument per note: PDFKit documents are not thread-safe, and drawing the main
+        // thread's shared copy here while the main window / pad drew it too crashed right after an import.
+        let url = NoteStore.baseURL(id)
         return await withCheckedContinuation { c in
             renderQ.async {
+                let base: PDFDocument? = p.src == nil ? nil : (qBases[id] ?? { let d = PDFDocument(url: url); qBases[id] = d; return d }())
                 let key = "\(id)|\(p.id)|\(p.src ?? -1)|\(p.style)|\(Int(width))" as NSString
                 if let im = bgCache.object(forKey: key) { c.resume(returning: im); return }
                 let im = background(id, p, width: width, base: base)
@@ -671,6 +676,7 @@ struct NoteDocView: View {
         }
         .appScreen()
         .navigationTitle(doc?.title ?? "")
+        .onAppear { for p in doc?.pages ?? [] { let k = NoteStore.inkKey(id, p.id); InkBitmapCache.prewarm({ PDFInk.load(k, 0) }) } }
         .noteRecent(.note(id), doc?.title ?? "笔记", "笔记")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
