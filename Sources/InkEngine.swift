@@ -382,12 +382,18 @@ enum InkPaletteHost {
         set { UserDefaults.standard.set(newValue ?? -1, forKey: "ink.palette.corner"); refresh() }
     }
     static let disc: CGFloat = 56
-    /// Docked to a side edge → vertical palette ("l" / "r"); otherwise horizontal.
+    /// Docked edge: "l" / "r" → vertical bar, "t" / "b" → horizontal bar. The palette never floats freely:
+    /// it is always on an edge (bar) or in a corner (disc).
     static var edge: String? {
-        get { UserDefaults.standard.string(forKey: "ink.palette.edge").flatMap { $0.isEmpty ? nil : $0 } }
+        get {
+            if let e = UserDefaults.standard.string(forKey: "ink.palette.edge"), !e.isEmpty { return e }
+            // Older builds stored a free position: put it on the nearer of top / bottom.
+            let fy = UserDefaults.standard.object(forKey: "ink.palette.y") as? Double ?? 1
+            return fy < 0.5 ? "t" : "b"
+        }
         set { UserDefaults.standard.set(newValue ?? "", forKey: "ink.palette.edge") }
     }
-    static var vertical: Bool { corner == nil && edge != nil }
+    static var vertical: Bool { corner == nil && (edge == "l" || edge == "r") }
     static func place(_ v: UIView, in w: UIWindow) {
         let m: CGFloat = 6
         let sa = w.safeAreaInsets
@@ -397,7 +403,8 @@ enum InkPaletteHost {
             let y = c < 2 ? sa.top + m + disc / 2 : w.bounds.height - m - disc / 2
             v.center = CGPoint(x: x, y: y); return
         }
-        if let e = edge {
+        let e = edge ?? "b"
+        if e == "l" || e == "r" {
             let size = v.sizeThatFits(CGSize(width: 200, height: w.bounds.height - sa.top - 20))
             v.bounds = CGRect(origin: .zero, size: CGSize(width: size.width, height: min(size.height, w.bounds.height - sa.top - 20)))
             let hw = v.bounds.width / 2, hh = v.bounds.height / 2
@@ -409,42 +416,39 @@ enum InkPaletteHost {
         let size = v.sizeThatFits(CGSize(width: w.bounds.width - 20, height: 200))
         v.bounds = CGRect(origin: .zero, size: CGSize(width: min(size.width, w.bounds.width - 20), height: size.height))
         let half = v.bounds.width / 2, hh = v.bounds.height / 2
-        func clamp(_ p: CGPoint) -> CGPoint {
-            // Full range: down to the very bottom edge (the home indicator margin is not a limit).
-            CGPoint(x: min(w.bounds.width - half - m, max(half + m, p.x)), y: min(w.bounds.height - hh - m, max(sa.top + hh + m, p.y)))
-        }
-        if let p = at { v.center = clamp(CGPoint(x: p.x, y: p.y - hh - 30)); return }
         let fx = UserDefaults.standard.object(forKey: "ink.palette.x") as? Double ?? 0.5
-        let fy = UserDefaults.standard.object(forKey: "ink.palette.y") as? Double
-            ?? (UserDefaults.standard.bool(forKey: "ink.palette.bottom") ? 1 : 0)
-        v.center = clamp(CGPoint(x: CGFloat(fx) * w.bounds.width, y: CGFloat(fy) * w.bounds.height))
+        let y = e == "t" ? sa.top + m + hh : w.bounds.height - m - hh
+        v.center = CGPoint(x: min(w.bounds.width - half - m, max(half + m, CGFloat(fx) * w.bounds.width)), y: y)
     }
-    /// Drop: into a corner → collapse to the disc; anywhere else → stays there (full palette).
+    /// Drop anywhere: snaps to the nearest corner (disc) or edge (bar along that edge), and remembers it.
     static func snap(_ v: UIView, in w: UIWindow) {
         at = nil
-        let p = v.center, zone: CGFloat = 110
-        let left = p.x < zone, right = p.x > w.bounds.width - zone, top = p.y < zone + w.safeAreaInsets.top, bottom = p.y > w.bounds.height - zone
-        if (left || right) && (top || bottom) {
-            UserDefaults.standard.set(-1, forKey: "ink.palette.corner")
-            UserDefaults.standard.set((top ? 0 : 2) + (right ? 1 : 0), forKey: "ink.palette.corner")
-        } else if left || right {
-            // Side edge: dock vertically there.
-            UserDefaults.standard.set(-1, forKey: "ink.palette.corner")
-            edge = left ? "l" : "r"
-            UserDefaults.standard.set(Double(p.y / max(1, w.bounds.height)), forKey: "ink.palette.y")
+        let p = v.center, sa = w.safeAreaInsets
+        let W = w.bounds.width, H = w.bounds.height
+        let dl = p.x - sa.left, dr = W - sa.right - p.x, dt = p.y - sa.top, db = H - p.y
+        let zone: CGFloat = 140
+        let nearX = min(dl, dr) < zone, nearY = min(dt, db) < zone
+        if nearX && nearY {
+            UserDefaults.standard.set((dt < db ? 0 : 2) + (dr < dl ? 1 : 0), forKey: "ink.palette.corner")
         } else {
-            edge = nil
             UserDefaults.standard.set(-1, forKey: "ink.palette.corner")
-            UserDefaults.standard.set(Double(p.x / max(1, w.bounds.width)), forKey: "ink.palette.x")
-            UserDefaults.standard.set(Double(p.y / max(1, w.bounds.height)), forKey: "ink.palette.y")
+            let m = min(dl, dr, dt, db)
+            if m == dl || m == dr {
+                edge = m == dl ? "l" : "r"
+                UserDefaults.standard.set(Double(p.y / max(1, H)), forKey: "ink.palette.y")
+            } else {
+                edge = m == dt ? "t" : "b"
+                UserDefaults.standard.set(Double(p.x / max(1, W)), forKey: "ink.palette.x")
+            }
         }
         update()
         UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0) { place(v, in: w) }
     }
+    /// Tap on the disc: expands into a bar along the nearer horizontal edge of its corner.
     static func expand(in w: UIWindow?) {
         guard let c = corner else { return }
-        let fx: Double = c % 2 == 0 ? 0 : 1, fy: Double = c < 2 ? 0 : 1
-        UserDefaults.standard.set(fx, forKey: "ink.palette.x"); UserDefaults.standard.set(fy, forKey: "ink.palette.y"); edge = nil
+        edge = c < 2 ? "t" : "b"
+        UserDefaults.standard.set(c % 2 == 0 ? 0.0 : 1.0, forKey: "ink.palette.x")
         corner = nil
         if let w, let h = hosts[ObjectIdentifier(w)] { update(); UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0) { place(h.view, in: w) } }
     }
@@ -468,12 +472,19 @@ enum InkPaletteHost {
             }
             // In the content layer (root view controller's view): sheets, popovers, alerts and menus cover it.
             let parent: UIView = w.rootViewController?.view ?? w
-            if h.view.superview !== parent { parent.addSubview(h.view) }
+            if h.view.superview !== parent {
+                // Child view controller (not just a subview): SwiftUI popovers/sheets need a presenting controller,
+                // without it the pen's colour/width popover never appeared.
+                if let root = w.rootViewController, h.parent !== root {
+                    h.willMove(toParent: nil); h.removeFromParent()
+                    root.addChild(h); parent.addSubview(h.view); h.didMove(toParent: root)
+                } else { parent.addSubview(h.view) }
+            }
             parent.bringSubviewToFront(h.view)
             if p.overrideUserInterfaceStyle != .unspecified { h.overrideUserInterfaceStyle = p.overrideUserInterfaceStyle }
             if !(drags[id]?.dragging ?? false) { place(h.view, in: w) }
         }
-        for (id, h) in hosts where !shown.contains(id) { h.view.removeFromSuperview(); hosts[id] = nil; drags[id] = nil }
+        for (id, h) in hosts where !shown.contains(id) { h.willMove(toParent: nil); h.view.removeFromSuperview(); h.removeFromParent(); hosts[id] = nil; drags[id] = nil }
     }
 }
 
@@ -488,10 +499,6 @@ final class PaletteDrag: NSObject {
         case .began: dragging = true; start = v.center
         case .changed:
             let t = g.translation(in: w)
-            if InkPaletteHost.corner != nil, hypot(t.x, t.y) > 60 {
-                // Pulled out of the corner: back to the full palette under the finger.
-                UserDefaults.standard.set(-1, forKey: "ink.palette.corner"); InkPaletteHost.refresh()
-            }
             v.center = CGPoint(x: start.x + t.x, y: start.y + t.y)
         default: dragging = false; InkPaletteHost.snap(v, in: w)
         }
@@ -544,7 +551,7 @@ struct InkPalette: View {
                 }
                 .contextMenu { Button("编辑笔", systemImage: "slider.horizontal.3") { editing = true } }
                 .popover(isPresented: Binding(get: { quick == p.id }, set: { if !$0 { quick = nil } }),
-                         arrowEdge: InkPaletteHost.edge == "l" ? .trailing : InkPaletteHost.edge == "r" ? .leading : ((UserDefaults.standard.object(forKey: "ink.palette.y") as? Double ?? 0) > 0.5 ? .bottom : .top)) {
+                         arrowEdge: InkPaletteHost.edge == "l" ? .trailing : InkPaletteHost.edge == "r" ? .leading : InkPaletteHost.edge == "b" ? .bottom : .top) {
                     QuickPen(id: p.id, picker: picker).presentationCompactAdaptation(.popover)
                 }
                 .accessibilityLabel("\(p.kind.title)")
@@ -694,7 +701,7 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
         if squeeze {
             // Squeeze: always our own ring menu at the pen tip (never moves the main palette).
             if a == .ignore { return }
-            showRadial(p); return
+            InkRadial.toggle { showRadial(p) }; return
         }
         switch a {
         case .ignore: return
@@ -1097,6 +1104,7 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
 
     /// Notify + undo after a finished edit.
     private func commit(from b: InkDrawing) {
+        InkCanvas.lastEdited = self
         registerUndo(b)
         inkDelegate?.canvasViewDrawingDidChange?(self)
     }
@@ -1231,6 +1239,9 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
 
     // MARK: Undo
     private let undos = UndoManager()
+    /// The canvas that got the last stroke/edit: the squeeze menu's undo/redo act on it (the squeeze can reach a
+    /// different page's canvas than the one just written on, whose undo stack is empty).
+    static weak var lastEdited: InkCanvas?
     override var undoManager: UndoManager? { undos }
     private func registerUndo(_ old: InkDrawing) {
         undos.registerUndo(withTarget: self) { c in
@@ -1361,7 +1372,15 @@ enum InkBitmapCache {
 // MARK: - Squeeze ring menu (separate from the palette)
 enum InkRadial {
     private static var host: UIView?
+    private static var lastToggle = Date.distantPast
+    static var isShown: Bool { host != nil }
     static func dismiss() { host?.removeFromSuperview(); host = nil }
+    /// Squeeze once opens, squeeze again closes. One squeeze can reach several canvases at once: only the first counts.
+    static func toggle(open: () -> Void) {
+        guard Date().timeIntervalSince(lastToggle) > 0.3 else { return }
+        lastToggle = Date()
+        if isShown { dismiss() } else { open() }
+    }
     static func show(at p: CGPoint, in w: UIWindow, picker: InkToolPicker?, canvas: InkCanvas) {
         dismiss()
         let cover = UIView(frame: w.bounds)
@@ -1369,9 +1388,10 @@ enum InkRadial {
         cover.addGestureRecognizer(UITapGestureRecognizer(target: Tap.shared, action: #selector(Tap.close)))
         let hc = UIHostingController(rootView: InkRadialView(picker: picker, canvas: canvas))
         hc.view.backgroundColor = .clear
-        let r: CGFloat = 150
+        let r = InkRadialView.side / 2
         hc.view.frame = CGRect(x: 0, y: 0, width: r * 2, height: r * 2)
-        hc.view.center = CGPoint(x: min(w.bounds.width - r, max(r, p.x)), y: min(w.bounds.height - r, max(r, p.y)))
+        // Only the upper arc is used, so the centre may sit close to the bottom edge.
+        hc.view.center = CGPoint(x: min(w.bounds.width - r, max(r, p.x)), y: min(w.bounds.height - 40, max(r, p.y)))
         cover.addSubview(hc.view)
         w.addSubview(cover)
         host = cover
@@ -1390,8 +1410,8 @@ struct InkRadialView: View {
         let t = picker?.selectedTool ?? canvas?.tool ?? .defaultPen
         var out = presets.presets.map { p in Item(id: p.id.uuidString, icon: p.kind.icon, color: Color(p.color), on: t.presetID == p.id) { pick { $0.select(p) } } }
         for k in [InkKind.eraser, .lasso, .laser] { out.append(Item(id: k.rawValue, icon: k.icon, color: nil, on: t.kind == k) { pick { $0.select(kind: k) } }) }
-        out.append(Item(id: "undo", icon: "arrow.uturn.backward", color: nil, on: false) { canvas?.undo(); InkRadial.dismiss() })
-        out.append(Item(id: "redo", icon: "arrow.uturn.forward", color: nil, on: false) { canvas?.redo(); InkRadial.dismiss() })
+        out.append(Item(id: "undo", icon: "arrow.uturn.backward", color: nil, on: false) { (InkCanvas.lastEdited ?? canvas)?.undo(); InkRadial.dismiss() })
+        out.append(Item(id: "redo", icon: "arrow.uturn.forward", color: nil, on: false) { (InkCanvas.lastEdited ?? canvas)?.redo(); InkRadial.dismiss() })
         return out
     }
     private func pick(_ f: (InkToolPicker) -> Void) {
@@ -1399,11 +1419,11 @@ struct InkRadialView: View {
         InkRadial.dismiss()
     }
     var body: some View {
-        let its = items, n = max(1, its.count), r: CGFloat = 104
+        let its = items, n = max(1, its.count), r = Self.radius
         ZStack {
-            Circle().fill(.clear).frame(width: 2 * r + 64, height: 2 * r + 64).glassBackground(Circle()).opacity(0.001)
             ForEach(Array(its.enumerated()), id: \.element.id) { i, it in
-                let a = Double(i) / Double(n) * 2 * .pi - .pi / 2
+                // Arc from 8 o'clock, clockwise over 12, to 2 o'clock (150° → 330° in screen angles).
+                let a = (150.0 + 180.0 * Double(i) / Double(max(1, n - 1))) * .pi / 180
                 Button(action: it.act) {
                     ZStack {
                         if let c = it.color { Circle().fill(c).frame(width: 34, height: 34) }
@@ -1418,8 +1438,11 @@ struct InkRadialView: View {
             }
             Circle().fill(Color.accentColor.opacity(0.9)).frame(width: 10, height: 10)
         }
-        .frame(width: 300, height: 300)
+        .frame(width: Self.side, height: Self.side)
     }
+    /// Radius big enough that ~12 buttons fit on a half circle without overlapping.
+    static let radius: CGFloat = 190
+    static let side: CGFloat = 2 * radius + 70
 }
 
 extension View {

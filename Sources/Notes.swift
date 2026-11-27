@@ -609,6 +609,8 @@ struct NoteDocView: View {
     /// Notes through the shared PDF engine (default). The classic page view stays for editing text boxes/images.
     @AppStorage("notes.pdfView") private var usePDF = true
     @State private var classic = false
+    /// The PDF view couldn't be built in time (or failed): this note opens in the classic page view instead.
+    @State private var pdfFailed = false
     /// 笔盘 shown = drawing; hidden = scroll / select.
     private var tool: NoteTool { showTools ? .pen : .select }
 
@@ -617,8 +619,8 @@ struct NoteDocView: View {
 
     var body: some View {
         Group {
-            if let doc, usePDF, !classic {
-                NotePDFBody(id: id, drawing: tool == .pen, onPage: { i in
+            if let doc, usePDF, !classic, !pdfFailed {
+                NotePDFBody(id: id, drawing: tool == .pen, onFail: { pdfFailed = true }, onPage: { i in
                     if doc.pages.indices.contains(i), current != doc.pages[i].id { current = doc.pages[i].id }
                 }, ctl: vctl)
             } else if let doc {
@@ -1361,7 +1363,7 @@ enum InkSafety {
 /// ones exactly), with the original PDF page (vector) or the paper style, plus images and text boxes drawn in.
 /// Built off the main thread into Caches, keyed by the page content; the note's own files are never changed.
 enum NoteDisplay {
-    static let q = DispatchQueue(label: "note.display", qos: .userInitiated)
+    static let q = DispatchQueue(label: "note.display", qos: .userInitiated, attributes: .concurrent)   // one slow note never blocks the others
     static func signature(_ d: NoteDoc) -> String {
         var h = Hasher()
         for p in d.pages { h.combine(p) }
@@ -1431,6 +1433,7 @@ enum NoteDisplay {
 struct NotePDFBody: View {
     let id: String
     var drawing = true
+    var onFail: () -> Void = {}
     let onPage: (Int) -> Void
     let ctl: ViewCtl
     @State private var store = NoteStore.shared
@@ -1452,6 +1455,12 @@ struct NotePDFBody: View {
             let sig = NoteDisplay.signature(d)
             guard sig != builtFor else { return }
             if let p = await NoteDisplay.document(d) { pdf = p; builtFor = sig }
+            else if pdf == nil { onFail() }
+        }
+        .task {
+            // Never sit on the spinner: if the PDF isn't ready in 6 s, open the classic view (same files, nothing changes).
+            try? await Task.sleep(for: .seconds(6))
+            if pdf == nil, !Task.isCancelled { onFail() }
         }
         .onAppear { ink.enabled = drawing }
         .onChange(of: drawing) { _, v in ink.enabled = v }
