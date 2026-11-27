@@ -1,6 +1,6 @@
 import SwiftUI
 import PDFKit
-import PencilKit
+import UIKit
 import PhotosUI
 import VisionKit
 import UniformTypeIdentifiers
@@ -177,6 +177,30 @@ enum ImpParse {
         }
     }
 
+    /// One page of a PDF being converted: is it a question page or an answer / marking-scheme page?
+    static func classify(page: UIImage, text: String, index: Int, count: Int) async throws -> (String, [ImpQ]) {
+        let prompt = """
+        这是一份 PDF 的第 \(index + 1) 页（共 \(count) 页）。先判断这一页是题目页、答案/评分标准页，还是其他（封面、说明、空白）。
+        如果是题目页，把这一页上【原有的】题目逐题拆出来，不要改写、不要出新题。只输出 JSON：
+        {"kind":"questions" 或 "answers" 或 "other","questions":[{"n":"题号，例如 1 或 3(a)","text":"题目全文，数学一律用 $...$ LaTeX，保留换行","options":["A 选项文字","B 选项文字"] 或 [],"marks":分数或 null,"figure":[x,y,w,h] 或 null}]}
+        长题的每个小题 (a)(b)… 各写一项，题号写成 3(a)、3(b)，题干放在第一个小题前面。options 只放选择题选项的文字（不要字母）。figure 是附图在页面图片中的位置，0–1 比例，左上角为原点。
+        一题从上一页延续，n 写 "续" 加题号。答案页或其他页 questions 写 []。JSON 字符串里的反斜杠要写成两个。
+        \(text.isEmpty ? "" : "\n页面文字层（可能不完整，仅供参考）：\n" + String(text.prefix(4000)))
+        """
+        let s = try await DSClient.complete([DSClient.message("user", DSPart(text: prompt, images: [page]), vision: true)], model: .flash, json: true)
+        guard let o = DSJSON.object(s) else { throw DSError.server(200, "第 \(index + 1) 页解析失败") }
+        let kind = o["kind"] as? String ?? "questions"
+        let arr = o["questions"] as? [[String: Any]] ?? []
+        return (kind, arr.map { q in
+            var x = ImpQ(page: index, n: "\(q["n"] ?? "")", text: q["text"] as? String ?? "")
+            x.options = (q["options"] as? [Any] ?? []).map { "\($0)" }
+            x.marks = (q["marks"] as? NSNumber)?.intValue
+            x.box = (q["figure"] as? [Any])?.compactMap { ($0 as? NSNumber)?.doubleValue }
+            if x.box?.count != 4 { x.box = nil }
+            return x
+        })
+    }
+
     static func scheme(page: UIImage, text: String, index: Int, numbers: [String]) async throws -> [(String, String, String)] {
         let prompt = """
         这是这份试卷评分标准（或答案）的第 \(index + 1) 页。试卷题号：\(numbers.joined(separator: "、"))。
@@ -289,6 +313,8 @@ struct ImportLibraryView: View {
             .font(.caption).foregroundStyle(.secondary)
             if p.settled { Text(scoreText(p.score, p.total)).font(.caption.bold()).foregroundStyle(Color.accentColor) }
             else if p.submitted { Text("已交卷，待评分").font(.caption.bold()).foregroundStyle(.orange) }
+            if let w = ImpConvert.shared.progress[p.id] { Label(w, systemImage: "arrow.triangle.2.circlepath").font(.caption).foregroundStyle(.blue) }
+            else if let e = ImpConvert.shared.errors[p.id] { Text(e).font(.caption).foregroundStyle(.red).lineLimit(2) }
         }
     }
 }
@@ -535,6 +561,7 @@ struct ImportPaperView: View {
         .navigationDestination(item: $newPaper) { nid in ImportPaperView(id: nid) }
         .sheet(isPresented: $showMark) { NavigationStack { ImportInkMarkSheet(id: id) } }
         .sheet(item: $share) { s in ActivitySheet(url: s.url) }
+        .padSubmit(p.map { !$0.submitted } ?? false) { update { $0.submitted = true } }
         .confirmationDialog("确定交卷？", isPresented: $confirmSubmit, titleVisibility: .visible) {
             Button("交卷") { update { $0.submitted = true } }
         } message: { Text("交卷后可以上传评分标准，自评或让 DeepSeek 批改。") }
@@ -546,6 +573,7 @@ struct ImportPaperView: View {
         } message: { Text("用 deepseek-flash 逐页看图拆题，已解析的页会缓存，不会重复收费。") }
         .alert("解析出错", isPresented: Binding(get: { parseError != nil }, set: { if !$0 { parseError = nil } })) {} message: { Text(parseError ?? "") }
         .workingSession(sheet, clearOnLeave: false)
+        .noteRecent(.imported(id), p?.name ?? "导入的试卷", "导入")
         .task {
             // Open off the main thread; the page appears as soon as PDFKit has the document.
             let s = store, i = id
@@ -608,7 +636,13 @@ struct ImportPaperView: View {
         if p.qs.isEmpty || parsing != nil {
             VStack(spacing: 16) {
                 Image(systemName: "sparkles.rectangle.stack").font(.system(size: 44)).foregroundStyle(.secondary)
-                if let s = parsing {
+                if let s = ImpConvert.shared.progress[p.id] {
+                    ProgressView(s)
+                    Text("转换在后台进行，已转好的题会陆续出现。").font(.footnote).foregroundStyle(.secondary)
+                } else if let e = ImpConvert.shared.errors[p.id] {
+                    Text(e).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center)
+                    Button("继续转换") { ImpConvert.shared.start(p.id) }.glassButton(prominent: true)
+                } else if let s = parsing {
                     ProgressView(s)
                 } else {
                     Text("AI 答题卡：DeepSeek 逐页看试卷，拆成一题一卡（选择题变成选项，长题可以打字或手写）。").multilineTextAlignment(.center).foregroundStyle(.secondary)
@@ -704,7 +738,7 @@ struct ImportPaperView: View {
                     Button { withAnimation { splitOn.toggle() } } label: { Image(systemName: splitOn ? "rectangle.split.2x1.fill" : "rectangle.split.2x1") }
                 }
                 Menu {
-                    Button { InkSafety.flushAll(); showQuiz = true } label: { Label("根据此 PDF 出题", systemImage: "sparkles.rectangle.stack") }.disabled(doc == nil)
+                    Button { InkSafety.flushAll(); showQuiz = true } label: { Label("把 PDF 题目转成可作答", systemImage: "arrow.triangle.2.circlepath.doc.on.clipboard") }.disabled(doc == nil)
                     if p.mode == "cards" {
                         Button { showEdit = true } label: { Label("编辑 / 合并 / 拆分题目", systemImage: "pencil") }.disabled(p.qs.isEmpty)
                         if !remainingPages.isEmpty && !p.qs.isEmpty { Button { confirmParse = true } label: { Label("解析剩下的页", systemImage: "sparkles") } }

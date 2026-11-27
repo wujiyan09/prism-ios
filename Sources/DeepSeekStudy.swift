@@ -72,6 +72,15 @@ final class DSStore {
     func plan(_ id: UUID) -> DSPlanState { plans[id.uuidString] ?? DSPlanState() }
     func setPlan(_ id: UUID, _ p: DSPlanState) { plans[id.uuidString] = p }
     func clearChats() { chats = [:] }
+    /// Auto-delete (设置 › DeepSeek): chats unused for N days; 0 = never.
+    func prune() {
+        let days = UserDefaults.standard.object(forKey: "ds.autoDelete") as? Int ?? 30
+        guard days > 0 else { return }
+        let cut = Date().timeIntervalSince1970 - Double(days) * 86400
+        let old = chats.filter { $0.value.t < cut }.map(\.key)
+        guard !old.isEmpty else { return }
+        for k in old { chats[k] = nil }
+    }
 
     // Sync
     private static let enc: JSONEncoder = { let e = JSONEncoder(); e.outputFormatting = .sortedKeys; return e }()
@@ -682,6 +691,9 @@ struct DSDiagRow: View {
 struct DSHistoryView: View {
     let scope: String
     @State private var store = DSStore.shared
+    @State private var selecting = false
+    @State private var picked = Set<String>()
+    @State private var confirmDel = false
     var body: some View {
         let grades = store.history(scope, "grade")
         let chats = store.chats.sorted { $0.value.t > $1.value.t }
@@ -702,6 +714,17 @@ struct DSHistoryView: View {
             Section("所有对话") {
                 if chats.isEmpty { Text("还没有对话。").foregroundStyle(.secondary) }
                 ForEach(chats, id: \.key) { k, c in
+                    if selecting {
+                        Button { if picked.contains(k) { picked.remove(k) } else { picked.insert(k) } } label: {
+                            HStack {
+                                Image(systemName: picked.contains(k) ? "checkmark.circle.fill" : "circle").foregroundStyle(picked.contains(k) ? Color.accentColor : .secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(c.title).lineLimit(1)
+                                    Text(Date(timeIntervalSince1970: c.t).formatted(date: .abbreviated, time: .shortened) + " · \(c.msgs.count) 条").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }.foregroundStyle(.primary)
+                    } else {
                     NavigationLink {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 14) { ForEach(c.msgs) { DSBubble(msg: $0) } }.padding()
@@ -714,11 +737,27 @@ struct DSHistoryView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
+                    }
                 }
                 .onDelete { idx in for i in idx { store.chats[chats[i].key] = nil } }
             }
         }
-        .navigationTitle("历史")
+        .navigationTitle(selecting ? "已选 \(picked.count)" : "历史")
+        .onAppear { store.prune() }
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if selecting {
+                    Button(picked.count == chats.count && !chats.isEmpty ? "全不选" : "全选") {
+                        picked = picked.count == chats.count ? [] : Set(chats.map(\.key))
+                    }
+                    Button("删除", role: .destructive) { confirmDel = true }.disabled(picked.isEmpty)
+                }
+                Button(selecting ? "完成" : "选择") { selecting.toggle(); picked = [] }.disabled(chats.isEmpty && !selecting)
+            }
+        }
+        .confirmationDialog("删除 \(picked.count) 个对话？", isPresented: $confirmDel, titleVisibility: .visible) {
+            Button("删除", role: .destructive) { for k in picked { store.chats[k] = nil }; picked = []; selecting = false }
+        }
     }
 }
 

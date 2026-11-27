@@ -1,6 +1,6 @@
 import SwiftUI
 import PDFKit
-import PencilKit
+import UIKit
 import PhotosUI
 import VisionKit
 import UniformTypeIdentifiers
@@ -253,12 +253,36 @@ enum NoteRender {
         bgCache.setObject(im, forKey: key, cost: Int(im.size.width * im.size.height * im.scale * im.scale * 4))
         return im
     }
+    static func cachedOnly(_ id: String, _ p: NotePage, width: CGFloat) -> UIImage? {
+        bgCache.object(forKey: "\(id)|\(p.id)|\(p.src ?? -1)|\(p.style)|\(Int(width))" as NSString)
+    }
+    /// One serial queue for page renders, so PDFKit never draws the same document on two threads at once.
+    static let renderQ = DispatchQueue(label: "note.render", qos: .userInitiated)
+    static func renderOffMain(_ id: String, _ p: NotePage, width: CGFloat) async -> UIImage {
+        let base = p.src != nil ? NoteStore.shared.base(id) : nil   // opened on main (cached), drawn on the queue
+        return await withCheckedContinuation { c in
+            renderQ.async {
+                let key = "\(id)|\(p.id)|\(p.src ?? -1)|\(p.style)|\(Int(width))" as NSString
+                if let im = bgCache.object(forKey: key) { c.resume(returning: im); return }
+                let im = background(id, p, width: width, base: base)
+                bgCache.setObject(im, forKey: key, cost: Int(im.size.width * im.size.height * im.scale * im.scale * 4))
+                if width > 300 {   // keep a small copy for placeholders
+                    let small = UIGraphicsImageRenderer(size: CGSize(width: 300, height: 300 * p.aspect), format: { let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f }()).image { _ in im.draw(in: CGRect(x: 0, y: 0, width: 300, height: 300 * p.aspect)) }
+                    bgCache.setObject(small, forKey: "\(id)|\(p.id)|\(p.src ?? -1)|\(p.style)|300" as NSString, cost: 300 * Int(300 * p.aspect) * 4)
+                }
+                c.resume(returning: im)
+            }
+        }
+    }
     static func background(_ id: String, _ p: NotePage, width: CGFloat) -> UIImage {
+        background(id, p, width: width, base: p.src != nil ? NoteStore.shared.base(id) : nil)
+    }
+    static func background(_ id: String, _ p: NotePage, width: CGFloat, base: PDFDocument?) -> UIImage {
         let size = CGSize(width: width, height: width * p.aspect)
         let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1   // width is already in pixels
         return UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
             let cg = ctx.cgContext
-            if let s = p.src, let pg = NoteStore.shared.base(id)?.page(at: s) {
+            if let s = p.src, let pg = base?.page(at: s) {
                 UIColor.white.setFill(); cg.fill(CGRect(origin: .zero, size: size))
                 let b = pg.bounds(for: .mediaBox)
                 let k = width / max(1, b.width)
@@ -647,6 +671,7 @@ struct NoteDocView: View {
         }
         .appScreen()
         .navigationTitle(doc?.title ?? "")
+        .noteRecent(.note(id), doc?.title ?? "笔记", "笔记")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .deepSeek(ctx)
@@ -735,9 +760,17 @@ struct NoteDocView: View {
     private func pagesStack(_ doc: NoteDoc, _ base: CGFloat) -> some View {
         let ci = doc.pages.firstIndex { $0.id == current } ?? 0
         return VStack(spacing: Self.gap) {
+            // Only pages near the viewport get a live page (background render + PencilKit canvas + items);
+            // the rest are plain paper-coloured placeholders. Opening a 100-page PDF used to build all of them.
+            let r = 1 + Int(ceil(1 / max(0.25, zoom)))
             ForEach(Array(doc.pages.enumerated()), id: \.element.id) { i, p in
-                NotePageView(docID: id, page: p, tool: tool, showTools: showTools, selected: $selected, editing: $editing, zoom: abs(i - ci) <= 1 ? zoom : 1)
-                    .frame(width: base, height: base * CGFloat(p.aspect))
+                if abs(i - ci) <= r {
+                    NotePageView(docID: id, page: p, tool: tool, showTools: showTools, selected: $selected, editing: $editing, zoom: abs(i - ci) <= 1 ? zoom : 1)
+                        .frame(width: base, height: base * CGFloat(p.aspect))
+                } else {
+                    NotePagePlaceholder(docID: id, page: p)
+                        .frame(width: base, height: base * CGFloat(p.aspect))
+                }
             }
         }
         .padding(.horizontal, 16).padding(.vertical, Self.pad)
@@ -833,7 +866,7 @@ struct NoteDocView: View {
                     ForEach(NotePaper.allCases) { s in Button(s.name) { addPage(style: s.rawValue) } }
                 } label: { Label("在后面加一页", systemImage: "plus.rectangle.on.rectangle") }
             } label: { Image(systemName: "plus.circle") }
-            Button { InkSafety.flushAll(); showQuiz = true } label: { Image(systemName: "sparkles.rectangle.stack") }.accessibilityLabel("根据此 PDF 出题")
+            Button { InkSafety.flushAll(); showQuiz = true } label: { Image(systemName: "sparkles.rectangle.stack") }.accessibilityLabel("把 PDF 题目转成可作答")
             Button { showPages = true } label: { Image(systemName: "square.grid.2x2") }.accessibilityLabel("页面")
             Menu {
                 Button { field = doc?.title ?? ""; rename = true } label: { Label("重命名", systemImage: "pencil") }
@@ -877,10 +910,29 @@ struct NotePageView: View {
                     .allowsHitTesting(tool == .pen)
             }
             .onTapGesture { if tool == .select { selected = nil } }
-            .task(id: "\(Int(W))|\(Int(bgWidth(W)))") { if W > 10 { bg = NoteRender.cachedBackground(docID, page, width: bgWidth(W)) } }
+            .task(id: "\(Int(W))|\(Int(bgWidth(W)))") {
+                guard W > 10 else { return }
+                if let c = NoteRender.cachedOnly(docID, page, width: bgWidth(W)) { bg = c; return }
+                if bg == nil { bg = NoteRender.cachedOnly(docID, page, width: 300) }
+                let im = await NoteRender.renderOffMain(docID, page, width: bgWidth(W))
+                if !Task.isCancelled { bg = im }
+            }
         }
         .aspectRatio(CGFloat(1 / page.aspect), contentMode: .fit)
         .clipShape(Rectangle())
+        .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+    }
+}
+
+/// A far page: white paper (and its small thumbnail if one is cached), no canvas, no full render.
+struct NotePagePlaceholder: View {
+    let docID: String
+    let page: NotePage
+    var body: some View {
+        ZStack {
+            Color.white
+            if let t = NoteRender.cachedOnly(docID, page, width: 300) { Image(uiImage: t).resizable() }
+        }
         .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
     }
 }
@@ -1000,7 +1052,7 @@ struct NoteCanvas: UIViewRepresentable {
     let tools: Bool
 
     func makeCoordinator() -> Coord { Coord(self) }
-    func makeUIView(context: Context) -> PKCanvasView {
+    func makeUIView(context: Context) -> InkCanvas {
         let v = QuietCanvas()
         v.backgroundColor = .clear; v.isOpaque = false
         v.overrideUserInterfaceStyle = .light   // white paper: ink colours stay true in dark mode
@@ -1014,7 +1066,7 @@ struct NoteCanvas: UIViewRepresentable {
         context.coordinator.picker = picker
         DispatchQueue.main.async { context.coordinator.load() }
         let link = PadLink("note:" + key, canvas: v)
-        link.host = { [weak v] in v?.layer }
+        link.host = { [weak v] in v?.inkView.layer }
         link.k = { [weak v] in (v?.bounds.width ?? NoteRender.logicalWidth) / NoteRender.logicalWidth }
         context.coordinator.link = link
         // 笔盘 on at open: show it without waiting for a first stroke.
@@ -1027,10 +1079,10 @@ struct NoteCanvas: UIViewRepresentable {
     /// True when some note canvas already owns the 笔盘.
     static var anyActive: Bool {
         guard let w = PadHub.mainWindow else { return false }
-        func find(_ v: UIView) -> Bool { (v is PKCanvasView && v.isFirstResponder) || v.subviews.contains(where: find) }
+        func find(_ v: UIView) -> Bool { (v is InkCanvas && v.isFirstResponder) || v.subviews.contains(where: find) }
         return find(w)
     }
-    func updateUIView(_ v: PKCanvasView, context: Context) {
+    func updateUIView(_ v: InkCanvas, context: Context) {
         if context.coordinator.parent.key != key { context.coordinator.save(); context.coordinator.loadedWidth = 0 }
         context.coordinator.parent = self
         v.isUserInteractionEnabled = enabled
@@ -1041,7 +1093,7 @@ struct NoteCanvas: UIViewRepresentable {
             if !enabled && v.isFirstResponder { v.resignFirstResponder() }
         }
     }
-    static func dismantleUIView(_ v: PKCanvasView, coordinator: Coord) {
+    static func dismantleUIView(_ v: InkCanvas, coordinator: Coord) {
         coordinator.link?.tearDown(); coordinator.link = nil
         coordinator.save()
         coordinator.picker?.removeObserver(v)
@@ -1049,10 +1101,10 @@ struct NoteCanvas: UIViewRepresentable {
         coordinator.picker?.overrideUserInterfaceStyle = .unspecified
     }
 
-    final class Coord: NSObject, PKCanvasViewDelegate {
+    final class Coord: NSObject, InkCanvasDelegate {
         var parent: NoteCanvas
-        weak var canvas: PKCanvasView?
-        var picker: PKToolPicker?
+        weak var canvas: InkCanvas?
+        var picker: InkToolPicker?
         var loadedWidth: CGFloat = 0
         var loading = false
         private var pending: DispatchWorkItem?
@@ -1070,35 +1122,34 @@ struct NoteCanvas: UIViewRepresentable {
 
         func load() {
             guard let v = canvas, v.bounds.width > 10 else { return }
-            if edited { save() }   // never reload over strokes still waiting on the debounce
+            if dirty { save() }   // never reload over strokes still waiting on the debounce
             loading = true
             loadedWidth = v.bounds.width
             let k = v.bounds.width / NoteRender.logicalWidth
-            v.drawing = (PDFInk.load(parent.key, 0) ?? PKDrawing()).transformed(using: CGAffineTransform(scaleX: k, y: k))
+            v.drawing = (PDFInk.load(parent.key, 0) ?? InkDrawing()).transformed(using: CGAffineTransform(scaleX: k, y: k))
             savedKey = parent.key
             loading = false
         }
+        var dirty = false
         func save() {
             pending?.cancel(); pending = nil
-            // Only canvases the user actually changed since loading: an untouched or not-yet-loaded canvas never writes.
-            guard let v = canvas, loadedWidth > 10, edited, savedKey == parent.key else { return }
-            edited = false
+            guard let v = canvas, loadedWidth > 10, dirty, savedKey == parent.key else { return }   // only pages actually written on
+            dirty = false
             let k = NoteRender.logicalWidth / loadedWidth
-            PDFInk.save(parent.key, 0, v.drawing.transformed(using: CGAffineTransform(scaleX: k, y: k)), title: parent.title, width: NoteRender.logicalWidth, erased: true)
+            PDFInk.saveAsync(parent.key, 0, v.drawing.transformed(using: CGAffineTransform(scaleX: k, y: k)), title: parent.title, width: NoteRender.logicalWidth, erased: true)
         }
-        var edited = false
         /// Key the canvas content belongs to (a reused canvas must not save page A's ink as page B).
         var savedKey = ""
-        func canvasViewDrawingDidChange(_ v: PKCanvasView) {
+        func canvasViewDrawingDidChange(_ v: InkCanvas) {
             guard !loading else { return }
-            edited = true
+            dirty = true
             link?.changed(v.drawing)
             pending?.cancel()
             let w = DispatchWorkItem { [weak self] in self?.save() }
             pending = w
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: w)
         }
-        func canvasViewDidBeginUsingTool(_ v: PKCanvasView) {
+        func canvasViewDidBeginUsingTool(_ v: InkCanvas) {
             lastTouched = true
             if parent.tools && !DSInput.holding { picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder() }
         }
@@ -1244,7 +1295,7 @@ enum NoteBundle {
         for (f, x) in b.images { try? x.write(to: NoteStore.imgURL(id, f)) }
         for (pid, x) in b.ink {
             let k = NoteStore.inkKey(id, pid)
-            if let dr = try? PKDrawing(data: x) { PDFInk.save(k, 0, dr, title: b.doc.title, width: NoteRender.logicalWidth) }
+            if let dr = try? InkDrawing(data: x) { PDFInk.save(k, 0, dr, title: b.doc.title, width: NoteRender.logicalWidth) }
         }
         NoteStore.shared.save(b.doc, touch: false)
         Task { await SyncManager.shared.sync() }

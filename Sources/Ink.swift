@@ -1,6 +1,6 @@
 import SwiftUI
 import PDFKit
-import PencilKit
+import UIKit
 
 // MARK: - Persistent PencilKit writing on PDF papers (local only, one drawing file per page)
 
@@ -14,8 +14,9 @@ enum PDFInk {
         String((k.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? k).suffix(150))
     }
     static func dir(_ key: String) -> URL { root.appendingPathComponent(safe(key), isDirectory: true) }
-    static func load(_ key: String, _ page: Int) -> PKDrawing? {
-        (try? Data(contentsOf: dir(key).appendingPathComponent("\(page).drawing"))).flatMap { try? PKDrawing(data: $0) }
+    static func load(_ key: String, _ page: Int) -> InkDrawing? {
+        saveQ.sync {}   // a page written a moment ago may still be on its way to disk
+        return (try? Data(contentsOf: dir(key).appendingPathComponent("\(page).drawing"))).flatMap { try? InkDrawing(data: $0) }
     }
     /// Canvas width the drawing was made at (to flatten onto the page at the right scale).
     static func width(_ key: String, _ page: Int) -> CGFloat? {
@@ -26,11 +27,11 @@ enum PDFInk {
     /// - even then the old file is kept as `<page>.drawing.bak1`, not deleted;
     /// - before overwriting, the previous version is rotated into .bak1…bak3 (at most once every 5 minutes);
     /// - a save that would drop most of the strokes at once is refused unless `erased`.
-    static func save(_ key: String, _ page: Int, _ d: PKDrawing, title: String, width: CGFloat = 0, erased: Bool = false) {
+    static func save(_ key: String, _ page: Int, _ d: InkDrawing, title: String, width: CGFloat = 0, erased: Bool = false) {
         let dd = dir(key)
         let f = dd.appendingPathComponent("\(page).drawing")
         let fm = FileManager.default
-        let old = fm.fileExists(atPath: f.path) ? (try? Data(contentsOf: f)).flatMap { try? PKDrawing(data: $0) } : nil
+        let old = fm.fileExists(atPath: f.path) ? (try? Data(contentsOf: f)).flatMap { try? InkDrawing(data: $0) } : nil
         let oldCount = old?.strokes.count ?? 0
         if d.strokes.isEmpty {
             guard oldCount > 0 else { return }
@@ -43,9 +44,20 @@ enum PDFInk {
         }
         try? fm.createDirectory(at: dd, withIntermediateDirectories: true)
         if oldCount > 0 { backup(f, force: d.strokes.count < oldCount) }
+        // First write over an old PencilKit file: keep the original untouched as <page>.drawing.pk (read-only conversion).
+        let pk = dd.appendingPathComponent("\(page).drawing.pk")
+        if !fm.fileExists(atPath: pk.path), let h = try? FileHandle(forReadingFrom: f) {
+            let first = (try? h.read(upToCount: 1)) ?? Data(); try? h.close()
+            if let c = first.first, c != UInt8(ascii: "{") { try? fm.copyItem(at: f, to: pk) }
+        }
         try? d.dataRepresentation().write(to: f, options: .atomic)
         try? Data(title.utf8).write(to: dd.appendingPathComponent("title.txt"))
         if width > 0 { try? Data("\(Double(width))".utf8).write(to: dd.appendingPathComponent("\(page).w")) }
+    }
+    /// Writes happen here, one at a time, never on the main thread (InkDrawing is a value: safe to encode off-main).
+    static let saveQ = DispatchQueue(label: "pdfink.save", qos: .utility)
+    static func saveAsync(_ key: String, _ page: Int, _ d: InkDrawing, title: String, width: CGFloat = 0, erased: Bool = false) {
+        saveQ.async { save(key, page, d, title: title, width: width, erased: erased) }
     }
     /// Rolling local copies of an ink file: .bak1 (newest) … .bak3.
     static func backup(_ f: URL, force: Bool) {
@@ -58,10 +70,10 @@ enum PDFInk {
         try? fm.copyItem(at: f, to: b(1))
     }
     /// Newest backup of a page with strokes (for recovery).
-    static func latestBackup(_ key: String, _ page: Int) -> PKDrawing? {
+    static func latestBackup(_ key: String, _ page: Int) -> InkDrawing? {
         for n in 1...3 {
             let u = dir(key).appendingPathComponent("\(page).drawing.bak\(n)")
-            if let d = (try? Data(contentsOf: u)).flatMap({ try? PKDrawing(data: $0) }), !d.strokes.isEmpty { return d }
+            if let d = (try? Data(contentsOf: u)).flatMap({ try? InkDrawing(data: $0) }), !d.strokes.isEmpty { return d }
         }
         return nil
     }
@@ -86,13 +98,22 @@ enum PDFInk {
     static func deleteAll() { try? FileManager.default.removeItem(at: root) }
 }
 
-final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDelegate {
+final class InkProvider: NSObject, PDFPageOverlayViewProvider, InkCanvasDelegate {
     var key = ""
     var title = ""
-    private var canvases: [Int: PKCanvasView] = [:]
+    private var canvases: [Int: InkCanvas] = [:]
     private var links: [Int: PadLink] = [:]
-    deinit { ToolSync.shared.unregister(picker) }
-    private let picker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
+    /// Pages written on since their last save; saved debounced, off-main. Untouched pages are never rewritten.
+    private var dirty: Set<Int> = []
+    private var pending: [Int: DispatchWorkItem] = [:]
+    private func flush(_ c: InkCanvas) {
+        pending[c.tag]?.cancel(); pending[c.tag] = nil
+        guard dirty.remove(c.tag) != nil else { return }
+        PDFInk.saveAsync(key, c.tag, c.drawing, title: title, width: c.bounds.width, erased: true)
+    }
+    func flushAll() { canvases.values.forEach(flush) }
+    deinit { flushAll(); ToolSync.shared.unregister(picker) }
+    private let picker: InkToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
     var enabled = false { didSet { canvases.values.forEach(apply) } }
 
     override init() {
@@ -104,8 +125,11 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
         }
     }
 
+    /// Pages changed size (margins): rebuild every overlay.
+    func reload() { canvases = [:]; links.values.forEach { $0.tearDown() }; links = [:] }
+
     func reset(key: String, title: String) {
-        if key != self.key { canvases = [:]; links.values.forEach { $0.tearDown() }; links = [:] }
+        if key != self.key { flushAll(); canvases = [:]; links.values.forEach { $0.tearDown() }; links = [:]; dirty = [] }
         self.key = key; self.title = title
     }
 
@@ -126,7 +150,7 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
         canvases[i] = c
         let pw = page.bounds(for: .mediaBox).width
         let link = PadLink("pdf:\(key):\(i)", canvas: c)
-        link.host = { [weak c] in c?.layer }
+        link.host = { [weak c] in c?.inkView.layer }
         link.k = { [weak c] in max(1, c?.bounds.width ?? pw) / max(1, pw) }
         links[i] = link
         apply(c)
@@ -134,15 +158,22 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
     }
 
     func pdfView(_ pdfView: PDFView, willEndDisplayingOverlayView overlayView: UIView, for page: PDFKit.PDFPage) {
-        guard let c = overlayView as? PKCanvasView else { return }
-        PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width)
+        guard let c = overlayView as? InkCanvas else { return }
+        flush(c)
         canvases[c.tag] = nil
         links[c.tag]?.tearDown(); links[c.tag] = nil
     }
 
-    func canvasViewDrawingDidChange(_ c: PKCanvasView) { links[c.tag]?.changed(c.drawing); PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width, erased: true) }
+    func canvasViewDrawingDidChange(_ c: InkCanvas) {
+        links[c.tag]?.changed(c.drawing)
+        dirty.insert(c.tag)
+        pending[c.tag]?.cancel()
+        let w = DispatchWorkItem { [weak self, weak c] in if let self, let c { self.flush(c) } }
+        pending[c.tag] = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: w)
+    }
 
-    private func apply(_ c: PKCanvasView) {
+    private func apply(_ c: InkCanvas) {
         c.isUserInteractionEnabled = enabled
         picker.addObserver(c)
         picker.setVisible(enabled, forFirstResponder: c)
@@ -198,4 +229,70 @@ enum PickerRestore {
     }
     private static var tokenKey: UInt8 = 0
     final class Token { let t: NSObjectProtocol; init(_ t: NSObjectProtocol) { self.t = t }; deinit { NotificationCenter.default.removeObserver(t) } }
+}
+
+
+// MARK: - Manual left/right margins on PDFs (blank writable paper beside the page). Saved per document.
+
+enum PDFMargins {
+    static let steps: [CGFloat] = [0, 40, 80, 120, 160, 240]
+    private static var originals: [ObjectIdentifier: CGRect] = [:]
+    static func get(_ key: String) -> (l: CGFloat, r: CGFloat) {
+        let a = UserDefaults.standard.array(forKey: "pdf.margins." + key) as? [Double] ?? []
+        return a.count == 2 ? (CGFloat(a[0]), CGFloat(a[1])) : (0, 0)
+    }
+    private static func base(_ p: PDFKit.PDFPage) -> CGRect {
+        let id = ObjectIdentifier(p)
+        if let r = originals[id] { return r }
+        let r = p.bounds(for: .mediaBox); originals[id] = r; return r
+    }
+    /// Widen every page's boxes by the saved margins (the PDF file itself is untouched).
+    static func apply(_ doc: PDFDocument, key: String) {
+        let m = get(key)
+        for i in 0..<doc.pageCount {
+            guard let p = doc.page(at: i) else { continue }
+            let b = base(p)
+            let r = CGRect(x: b.minX - m.l, y: b.minY, width: b.width + m.l + m.r, height: b.height)
+            p.setBounds(r, for: .mediaBox); p.setBounds(r, for: .cropBox)
+        }
+    }
+    /// Change margins: existing ink moves with the page so it stays where it was written.
+    static func set(_ key: String, l: CGFloat, r: CGFloat, doc: PDFDocument, title: String) {
+        let old = get(key)
+        let dx = l - old.l
+        UserDefaults.standard.set([Double(l), Double(r)], forKey: "pdf.margins." + key)
+        for i in 0..<doc.pageCount {
+            guard let p = doc.page(at: i) else { continue }
+            let w = base(p).width + l + r
+            if let d = PDFInk.load(key, i) {
+                let ow = PDFInk.width(key, i) ?? (base(p).width + old.l + old.r)
+                let k = ow / max(1, base(p).width + old.l + old.r)   // canvas units per page point
+                PDFInk.save(key, i, d.transformed(using: CGAffineTransform(translationX: dx * k, y: 0)), title: title, width: w * k)
+            }
+        }
+        apply(doc, key: key)
+    }
+}
+
+
+/// One-time full copy of the app's data before the new ink format is first used (Sam's data must survive the upgrade).
+enum DataMigration {
+    static func backupOnce() {
+        let k = "migr.inkv1.backup"
+        guard !UserDefaults.standard.bool(forKey: k) else { return }
+        let fm = FileManager.default
+        let lib = fm.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+        let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"
+        let dest = lib.appendingPathComponent("Prism 升级前备份 " + f.string(from: Date()), isDirectory: true)
+        do {
+            try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+            for d in [fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0], fm.urls(for: .documentDirectory, in: .userDomainMask)[0]] where fm.fileExists(atPath: d.path) {
+                try fm.copyItem(at: d, to: dest.appendingPathComponent(d.lastPathComponent))
+            }
+            if let prefs = UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "") {
+                (prefs as NSDictionary).write(to: dest.appendingPathComponent("settings.plist"), atomically: true)
+            }
+            UserDefaults.standard.set(true, forKey: k)
+        } catch { NSLog("DataMigration backup failed: \(error)") }   // not marked done: retried next launch
+    }
 }

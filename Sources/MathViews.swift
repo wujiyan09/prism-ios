@@ -1,6 +1,6 @@
 import SwiftUI
 import PDFKit
-import PencilKit
+import UIKit
 import Observation
 
 // MARK: - Data (bundled: Resources/math/math.json, vis/*.png, pdf/*.pdf)
@@ -820,19 +820,21 @@ final class ScratchStore {
     func clear(_ key: String? = nil, force: Bool = false) {
         guard let k = key ?? current else { return }
         if !force && (ReviewStore.shared.inReview(k) || kept.contains(k)) { return }
-        try? FileManager.default.removeItem(at: url(k))
+        let u = url(k)
+        PDFInk.saveQ.async { try? FileManager.default.removeItem(at: u) }   // after any pending background save of this sheet
         kept.removeAll { $0 == k }
         if current == k { current = nil }
     }
     func touch(_ id: String) {}
-    func has(_ id: String) -> Bool { FileManager.default.fileExists(atPath: url(id).path) }
+    func has(_ id: String) -> Bool { PDFInk.saveQ.sync {}; return FileManager.default.fileExists(atPath: url(id).path) }
     func load(_ id: String) -> ScratchDraft? {
+        PDFInk.saveQ.sync {}
         guard let d = try? Data(contentsOf: url(id)) else { return nil }
         return try? JSONDecoder().decode(ScratchDraft.self, from: d)
     }
     func save(_ id: String, _ draft: ScratchDraft) {
         if let d = try? JSONEncoder().encode(draft) { try? d.write(to: url(id), options: .atomic) }
-        NotificationCenter.default.post(name: .scratchSaved, object: id)
+        DispatchQueue.main.async { NotificationCenter.default.post(name: .scratchSaved, object: id) }
     }
 }
 extension Notification.Name { static let scratchSaved = Notification.Name("scratchSaved") }
@@ -872,7 +874,7 @@ enum PaperStyle: String, CaseIterable, Identifiable {
 
 /// Lets the pane ask the canvas where the visible area is.
 final class CanvasViewport {
-    weak var canvas: PKCanvasView?
+    weak var canvas: InkCanvas?
     var visibleOrigin: CGPoint {
         guard let c = canvas else { return CGPoint(x: 40, y: 40) }
         let z = max(c.zoomScale, 0.01)
@@ -976,7 +978,7 @@ struct CanvasRep: UIViewRepresentable {
 
     func makeCoordinator() -> Coord { Coord(self) }
 
-    func makeUIView(context: Context) -> PKCanvasView {
+    func makeUIView(context: Context) -> InkCanvas {
         let v = QuietCanvas()
         v.drawingPolicy = .default
         v.backgroundColor = .clear
@@ -988,7 +990,7 @@ struct CanvasRep: UIViewRepresentable {
         v.bouncesZoom = true
         var h: CGFloat = CanvasRep.pageH
         if let d = ScratchStore.shared.load(itemID) {
-            v.drawing = (try? PKDrawing(data: d.drawing)) ?? PKDrawing()
+            v.drawing = (try? InkDrawing(data: d.drawing)) ?? InkDrawing()
             // Old free-height sheets land on as many A4 pages as their ink needs.
             let ink = v.drawing.strokes.isEmpty ? 0 : v.drawing.bounds.maxY + 1
             let figs = d.placed.map { CGFloat($0.y) + CGFloat($0.w) }.max() ?? 0
@@ -1084,7 +1086,7 @@ struct CanvasRep: UIViewRepresentable {
         return v
     }
 
-    func updateUIView(_ v: PKCanvasView, context: Context) {
+    func updateUIView(_ v: InkCanvas, context: Context) {
         context.coordinator.parent = self
         port.canvas = v
         // On an external screen the scratch starts fitted to the screen width (was 1:1 points = same physical size as the iPad).
@@ -1105,7 +1107,8 @@ struct CanvasRep: UIViewRepresentable {
         if context.coordinator.redraw(paper: paper, placed: placed) { context.coordinator.save() }
     }
 
-    static func dismantleUIView(_ v: PKCanvasView, coordinator: Coord) {
+    static func dismantleUIView(_ v: InkCanvas, coordinator: Coord) {
+        if coordinator.saveWork != nil { coordinator.save() }   // a stroke still waiting to be saved
         coordinator.link?.tearDown(); coordinator.link = nil
         PadHub.shared.deactivate("scratch:" + coordinator.parent.itemID)
         coordinator.picker?.setVisible(false, forFirstResponder: v)
@@ -1114,14 +1117,14 @@ struct CanvasRep: UIViewRepresentable {
         v.resignFirstResponder()
     }
 
-    static let sharedPicker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
+    static let sharedPicker: InkToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
 
-    final class Coord: NSObject, PKCanvasViewDelegate, PKToolPickerObserver, UIContextMenuInteractionDelegate {
+    final class Coord: NSObject, InkCanvasDelegate, InkToolPickerObserver, UIContextMenuInteractionDelegate {
         var shown = true
         var parent: CanvasRep
-        weak var canvas: PKCanvasView?
+        weak var canvas: InkCanvas?
         var under: UIView?
-        var picker: PKToolPicker?
+        var picker: InkToolPicker?
         var height: CGFloat = 4000
         var lastKey = ""
         var addButton: UIButton?
@@ -1191,14 +1194,20 @@ struct CanvasRep: UIViewRepresentable {
         }
 
         /// Belt and braces: apply the picked tool directly too.
-        func toolPickerSelectedToolDidChange(_ p: PKToolPicker) { canvas?.tool = p.selectedTool }
+        func toolPickerSelectedToolDidChange(_ p: InkToolPicker) { canvas?.tool = p.selectedTool }
 
-        func canvasViewDrawingDidChange(_ c: PKCanvasView) {
+        func canvasViewDrawingDidChange(_ c: InkCanvas) {
             // Extend the sheet when writing near the bottom.
             if !c.drawing.strokes.isEmpty && c.drawing.bounds.maxY > height - 150 { setHeight(CanvasRep.pages(for: c.drawing.bounds.maxY + 200)) }
             link?.changed(c.drawing)
-            save()
+            // Saving used to run on every stroke on the main thread (whole drawing → Data → JSON → atomic write),
+            // which is what made the pen lag on a full sheet. Now: debounced, encoded and written in the background.
+            saveWork?.cancel()
+            let w = DispatchWorkItem { [weak self] in self?.save() }
+            saveWork = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: w)
         }
+        var saveWork: DispatchWorkItem?
 
         func scrollViewDidZoom(_ sv: UIScrollView) {
             guard let u = under else { return }
@@ -1357,8 +1366,10 @@ struct CanvasRep: UIViewRepresentable {
 
         func save() {
             guard let c = canvas else { return }
+            saveWork?.cancel(); saveWork = nil
             if c.drawing.strokes.isEmpty && parent.placed.isEmpty && !ScratchStore.shared.has(parent.itemID) { return }
-            ScratchStore.shared.save(parent.itemID, ScratchDraft(drawing: c.drawing.dataRepresentation(), placed: parent.placed, height: Double(height)))
+            let d = c.drawing, placed = parent.placed, h = Double(height), id = parent.itemID
+            PDFInk.saveQ.async { ScratchStore.shared.save(id, ScratchDraft(drawing: d.dataRepresentation(), placed: placed, height: h)) }
         }
 
         @discardableResult

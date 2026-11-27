@@ -8,7 +8,7 @@ struct ICTApp: App {
     @State private var exams = ExamStore.shared
     @Environment(\.scenePhase) private var phase
 
-    init() { UserDefaults.standard.register(defaults: ["autoNext": true]) }
+    init() { DataMigration.backupOnce(); UserDefaults.standard.register(defaults: ["autoNext": true]) }
     @AppStorage("appearance") private var appearance = "system"
 
     var body: some Scene {
@@ -218,6 +218,8 @@ enum Route: Hashable {
     case ppSet(String)
     case awardChapter(String)
     case longSet(String, String?)
+    case note(String)
+    case imported(String)
 }
 
 enum ToolKind: String, CaseIterable, Hashable, Identifiable {
@@ -255,7 +257,10 @@ enum ToolKind: String, CaseIterable, Hashable, Identifiable {
 /// Per-window state: current section, navigation paths and the active practice session.
 @Observable
 final class SceneModel {
-    var section: AppSection = .learn
+    /// Relaunch: back to the last section; first launch / unknown → 最近使用.
+    var section: AppSection = AppSection(rawValue: UserDefaults.standard.string(forKey: "last.section") ?? "") ?? .recent {
+        didSet { UserDefaults.standard.set(section.rawValue, forKey: "last.section") }
+    }
     var paths: [AppSection: NavigationPath] = [:]
     var session: Session? {
         didSet {

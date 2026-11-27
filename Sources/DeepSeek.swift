@@ -1,6 +1,6 @@
 import SwiftUI
 import Security
-import PencilKit
+import UIKit
 import Observation
 
 // MARK: - DeepSeek: key (Keychain, this device only), client (OpenAI-format chat/completions, SSE streaming)
@@ -61,7 +61,12 @@ struct DSPart { var text: String; var images: [UIImage] = [] }
 enum DSClient {
     static let endpoint = URL(string: "https://api.deepseek.com/chat/completions")!
 
-    static let systemPrompt = """
+    /// The prompt actually sent: the edited one from 设置 if set, else the built-in default.
+    static var systemPrompt: String {
+        let c = UserDefaults.standard.string(forKey: "ds.systemPrompt") ?? ""
+        return c.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? defaultSystemPrompt : c
+    }
+    static let defaultSystemPrompt = """
     你是一位熟悉香港中学文凭试（HKDSE）的私人导师，学生是香港 S5 学生，科目包括 ICT、Mathematics（Core 与 M2）、Physics、Chemistry 和中文。
     规则：
     - 默认用简体中文回答；英文专业名词、课本术语、程序代码保留英文。学生用英文提问就用英文答。
@@ -321,7 +326,7 @@ struct DSContext {
     }
 
     static func scratchImage(_ id: String?) -> UIImage? {
-        guard let id, let d = ScratchStore.shared.load(id), let dr = try? PKDrawing(data: d.drawing), !dr.strokes.isEmpty else { return nil }
+        guard let id, let d = ScratchStore.shared.load(id), let dr = try? InkDrawing(data: d.drawing), !dr.strokes.isEmpty else { return nil }
         let b = dr.bounds.insetBy(dx: -20, dy: -20)
         let scale = min(2, 2400 / max(b.width, b.height, 1))
         var img: UIImage = UIImage()
@@ -352,6 +357,7 @@ struct DeepSeekSettingsView: View {
     @State private var testing = false
     @State private var reveal = false
     @State private var confirmClear = false
+    @AppStorage("ds.autoDelete") private var autoDelete = 30
 
     var body: some View {
         Form {
@@ -399,6 +405,17 @@ struct DeepSeekSettingsView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                 Button("删除所有对话记录", role: .destructive) { confirmClear = true }
             } header: { Text("用量") }
+            .listRowBackground(Color.cardBackground)
+            Section {
+                Picker("自动删除对话", selection: $autoDelete) {
+                    Text("7 天").tag(7); Text("30 天").tag(30); Text("90 天").tag(90); Text("永不").tag(0)
+                }
+                .onChange(of: autoDelete) { _, _ in DSStore.shared.prune() }
+            } footer: { Text("按最后一次使用时间计算。") }
+            .listRowBackground(Color.cardBackground)
+            Section {
+                NavigationLink("系统提示词") { DSPromptEditor() }
+            }
             .listRowBackground(Color.cardBackground)
         }
         .appList()
@@ -1043,7 +1060,29 @@ struct DSMarkdown: View {
 
     /// Outside $…$: wrap obvious bare TeX (\frac{..}{..}, \sqrt{..}, x^{..}, \alpha …) in $; while streaming,
     /// an unclosed trailing $ is shown as plain text until its closing $ arrives.
+    /// $$…$$ blocks are tokens of their own (they may span lines and never count toward inline $ parity);
+    /// inline $ pairing is then done per line, so one stray $ can't flip everything after it.
     static func wrapBareTeX(_ s: String) -> String {
+        let d = s.components(separatedBy: "$$")
+        var out = ""
+        for (i, seg) in d.enumerated() {
+            let inDisplay = i % 2 == 1
+            if inDisplay {
+                if i == d.count - 1 { out += "$$" + seg }        // unclosed display while streaming: leave as is
+                else { out += "$$" + seg + "$$" }
+                continue
+            }
+            out += seg.components(separatedBy: "\n").map(inlineLine).joined(separator: "\n")
+        }
+        return out
+    }
+    /// One line outside display maths: balance single $ (an unmatched last $ becomes a literal \$), wrap bare TeX.
+    static func inlineLine(_ line: String) -> String {
+        var l = line
+        if l.filter({ $0 == "$" }).count % 2 == 1, let r = l.range(of: "$", options: .backwards) { l.replaceSubrange(r, with: "\u{E000}") }
+        return wrapInline(l)
+    }
+    static func wrapInline(_ s: String) -> String {
         var parts = s.components(separatedBy: "$")
         // Odd number of parts = balanced. Even = one unclosed $: join the tail back as plain text.
         var tail = ""
@@ -1234,6 +1273,29 @@ struct DSInput: UIViewRepresentable {
             let toPad = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.contains { $0 !== v.window && $0.isKeyWindow }
             if !toPad { DSInput.holding = false; if parent.focused { parent.focused = false } }
             if v.markedTextRange == nil { parent.text = v.text }
+        }
+    }
+}
+
+struct DSPromptEditor: View {
+    @AppStorage("ds.systemPrompt") private var custom = ""
+    @State private var text = ""
+    @State private var confirmReset = false
+    var body: some View {
+        Form {
+            Section {
+                TextEditor(text: $text).font(.system(.callout, design: .monospaced)).frame(minHeight: 380)
+            } footer: { Text(custom.isEmpty ? "现在用的是默认提示词。" : "现在用的是你改过的提示词。") }
+            Section {
+                Button("保存") { custom = text == DSClient.defaultSystemPrompt ? "" : text }
+                    .disabled(text == (custom.isEmpty ? DSClient.defaultSystemPrompt : custom))
+                Button("恢复默认", role: .destructive) { confirmReset = true }
+            }
+        }
+        .navigationTitle("DeepSeek 系统提示词")
+        .onAppear { text = custom.isEmpty ? DSClient.defaultSystemPrompt : custom }
+        .confirmationDialog("恢复默认提示词？", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("恢复默认", role: .destructive) { custom = ""; text = DSClient.defaultSystemPrompt }
         }
     }
 }

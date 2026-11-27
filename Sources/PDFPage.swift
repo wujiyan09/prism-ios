@@ -119,6 +119,26 @@ struct PDFKitView: UIViewRepresentable {
         }
         @objc func padAdd(_ n: Notification) { if !owner.isEmpty, (n.object as? String) == owner { addPage() } }
         var userMoved = Date.distantPast
+        // Reopening shows the same page, spot and zoom as last time.
+        var posKey = ""
+        private var posSaveAt = Date.distantPast
+        private var restoring = true
+        func rememberPos() {
+            guard !posKey.isEmpty, !restoring, let v = view, let p = v.currentPage, let d = v.document, v.scaleFactorForSizeToFit > 0 else { return }
+            guard Date().timeIntervalSince(posSaveAt) > 0.3 else { return }
+            posSaveAt = Date()
+            let pt = v.convert(CGPoint(x: v.bounds.minX, y: v.bounds.minY + v.safeAreaInsets.top), to: p)
+            UserDefaults.standard.set([Double(d.index(for: p)), Double(pt.x), Double(pt.y), Double(v.scaleFactor / v.scaleFactorForSizeToFit)], forKey: posKey)
+        }
+        func restorePos() {
+            guard !posKey.isEmpty, let a = UserDefaults.standard.array(forKey: posKey) as? [Double], a.count == 4 else { restoring = false; return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self, let v = self.view, let d = v.document, let p = d.page(at: Int(a[0])) else { self?.restoring = false; return }
+                if a[3] > 0.2, v.scaleFactorForSizeToFit > 0, abs(a[3] - 1) > 0.01 { v.autoScales = false; v.scaleFactor = v.scaleFactorForSizeToFit * CGFloat(a[3]); v.layoutIfNeeded() }
+                v.go(to: PDFDestination(page: p, at: CGPoint(x: a[1], y: a[2])))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.restoring = false }
+            }
+        }
         var kvo: NSKeyValueObservation?
         var vpObs: NSObjectProtocol?
         /// Pad moved within a page: show the same rect.
@@ -207,6 +227,37 @@ struct PDFKitView: UIViewRepresentable {
             ])
             context.coordinator.addButton = add
             ink.reset(key: inkKey, title: inkTitle)
+            PDFMargins.apply(doc, key: inkKey)
+            let mb = UIButton(configuration: .gray())
+            mb.configuration?.image = UIImage(systemName: "arrow.left.and.right.square")
+            mb.configuration?.cornerStyle = .capsule
+            mb.accessibilityLabel = "页边距"
+            mb.showsMenuAsPrimaryAction = true
+            let key = inkKey, title = inkTitle
+            mb.menu = UIMenu(title: "页边距（可书写）", children: [UIDeferredMenuElement.uncached { done in
+                let m = PDFMargins.get(key)
+                func side(_ name: String, _ cur: CGFloat, _ f: @escaping (CGFloat) -> Void) -> UIMenu {
+                    UIMenu(title: name, options: .displayInline, children: PDFMargins.steps.map { s in
+                        UIAction(title: s == 0 ? "\(name) 无" : "\(name) \(Int(s))", state: abs(s - cur) < 0.5 ? .on : .off) { _ in f(s) }
+                    })
+                }
+                let change: (CGFloat, CGFloat) -> Void = { [weak v, weak ink] l, r in
+                    guard let v, let d = v.document else { return }
+                    PDFMargins.set(key, l: l, r: r, doc: d, title: title)
+                    ink?.reload()
+                    let at = v.currentPage.flatMap { d.index(for: $0) } ?? 0
+                    v.document = nil; v.document = d
+                    if let p = d.page(at: at) { v.go(to: p) }
+                    PadHub.shared.activate(PadSources.pdf(d, key: key, title: title), force: true)
+                }
+                done([side("左", m.l) { change($0, PDFMargins.get(key).r) }, side("右", m.r) { change(PDFMargins.get(key).l, $0) }])
+            }])
+            v.addSubview(mb)
+            mb.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                mb.leadingAnchor.constraint(equalTo: v.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+                mb.bottomAnchor.constraint(equalTo: v.safeAreaLayoutGuide.bottomAnchor, constant: -16)
+            ])
             v.pageOverlayViewProvider = ink
             v.isInMarkupMode = true
             let src = PadSources.pdf(doc, key: inkKey, title: inkTitle)
@@ -218,14 +269,16 @@ struct PDFKitView: UIViewRepresentable {
             }
             DispatchQueue.main.async { [weak v, weak co] in
                 guard let v, let sv = Self.scroller(in: v) else { return }
-                co?.kvo = sv.observe(\.contentOffset, options: [.new]) { _, _ in DispatchQueue.main.async { co?.mainScrolled(); co?.updateAdd() } }
+                co?.kvo = sv.observe(\.contentOffset, options: [.new]) { _, _ in DispatchQueue.main.async { co?.mainScrolled(); co?.updateAdd(); co?.rememberPos() } }
                 co?.updateAdd()
             }
             NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coord.padPage(_:)), name: .padPage, object: nil)
             PadHub.shared.activate(src)
         }
         context.coordinator.view = v
+        context.coordinator.posKey = inkKey.isEmpty ? "" : "pos.pdf:" + inkKey
         v.document = doc
+        context.coordinator.restorePos()
         if let ctl {
             let c = context.coordinator
             c.ctl = ctl
@@ -250,6 +303,7 @@ struct PDFKitView: UIViewRepresentable {
         return v
     }
     static func dismantleUIView(_ v: PDFView, coordinator: Coord) {
+        (v.pageOverlayViewProvider as? InkProvider)?.flushAll()   // closing: write only pages that changed, off-main
         if !coordinator.owner.isEmpty { PadHub.shared.deactivate(coordinator.owner) }
     }
     func updateUIView(_ v: PDFView, context: Context) {
