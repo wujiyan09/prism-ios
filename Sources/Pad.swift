@@ -1321,10 +1321,6 @@ struct PadPagedCanvas: UIViewRepresentable {
             c.fit()
             c.show(index, animated: false)
             c.updateNear(sv)
-            if let first = c.wires.first?.canvas {
-                c.picker.setVisible(true, forFirstResponder: first)
-                first.becomeFirstResponder()
-            }
         }
         return sv
     }
@@ -1348,7 +1344,7 @@ struct PadPagedCanvas: UIViewRepresentable {
 
     static func dismantleUIView(_ sv: UIScrollView, coordinator c: Coord) {
         c.wires.forEach { $0.tearDown() }
-        if let first = c.wires.first?.canvas { c.picker.setVisible(false, forFirstResponder: first) }
+        for w in c.wires where w.canvas.isFirstResponder { c.picker.setVisible(false, forFirstResponder: w.canvas) }
         if let o = c.vpObs { NotificationCenter.default.removeObserver(o) }
         ToolSync.shared.unregister(c.picker)
     }
@@ -1419,6 +1415,11 @@ struct PadPagedCanvas: UIViewRepresentable {
             guard r != nearRange else { return }
             nearRange = r
             for (i, w) in wires.enumerated() { w.setNear(r.contains(i)) }
+            // Keep the tool picker alive: some near canvas must be first responder.
+            if !wires.contains(where: { $0.near && $0.canvas.isFirstResponder }) {
+                let mid = min(max(r.lowerBound, page(atY: (s.contentOffset.y + s.bounds.height / 2) / s.zoomScale)), r.upperBound - 1)
+                if wires.indices.contains(mid) { let cv = wires[mid].canvas; picker.setVisible(true, forFirstResponder: cv); cv.becomeFirstResponder() }
+            }
         }
         private func report(_ s: UIScrollView) {
             guard !following, s.zoomScale > 0 else { return }
@@ -1482,11 +1483,29 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
     private var figObs: NSObjectProtocol?
     private let bgView = UIImageView()
     private var bgShown = false
-    /// Near the screen: render the page image; far away: drop it to free memory.
+    private weak var inner: UIView?
+    /// Drawing loaded into the canvas (only for pages near the screen).
+    private(set) var loaded = false
+    var near: Bool { bgShown }
+    /// Near the screen: page image + live PencilKit canvas with its drawing. Far away: saved, emptied and detached,
+    /// so PencilKit only renders the visible pages ±1.
     func setNear(_ near: Bool) {
         guard near != bgShown else { return }
         bgShown = near
-        bgView.image = near ? page.background() : nil
+        if near {
+            bgView.image = page.background()
+            applying = true; canvas.drawing = PadHub.shared.current(page.channel) ?? page.load(); applying = false
+            loaded = true
+            if canvas.superview == nil, let inner { inner.addSubview(canvas) }
+        } else {
+            flush()
+            liveInk.committed()
+            loaded = false
+            if canvas.isFirstResponder { canvas.resignFirstResponder() }
+            canvas.removeFromSuperview()
+            applying = true; canvas.drawing = PKDrawing(); applying = false
+            bgView.image = nil
+        }
     }
 
     init(page: PadPage, picker: PKToolPicker, frame: CGRect, scale f: CGFloat, index: Int) {
@@ -1516,18 +1535,17 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
         canvas.isScrollEnabled = false
         canvas.drawingPolicy = .pencilOnly
         canvas.contentSize = page.size
-        canvas.drawing = PadHub.shared.current(page.channel) ?? page.load()
         canvas.tool = picker.selectedTool
         canvas.delegate = self
-        inner.addSubview(canvas)
+        self.inner = inner   // canvas is added (and its drawing loaded) only when the page comes near the screen
         picker.addObserver(canvas)
         PadHub.shared.listen(page.channel, self) { [weak self] d in
-            guard let self else { return }
+            guard let self, self.loaded else { return }   // far pages reload from the hub when they come back
             self.liveInk.committed()
             self.applying = true; self.canvas.drawing = d; self.applying = false
         }
         PadHub.shared.listenLive("m:" + page.channel, self) { [weak self] l in
-            guard let self else { return }
+            guard let self, self.loaded else { return }
             self.liveInk.apply(l, k: 1, to: self.canvas) { self.applying = $0 }
         }
         let pen = PenTap(target: nil, action: nil)
@@ -1624,6 +1642,7 @@ final class PadPageWire: NSObject, PKCanvasViewDelegate {
     }
     func flush() {
         pending?.cancel(); pending = nil
+        guard loaded else { return }   // never save the empty placeholder of a far page
         page.save(canvas.drawing)
     }
 }
