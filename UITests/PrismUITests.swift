@@ -290,4 +290,18 @@ final class PrismUITests: XCTestCase {
             app.tabBars.buttons[t].tap(); sleep(1); snap("tab-\(t)"); alive("tab \(t)")
         }
     }
+
+    /// Regression (build 155): a new note must open, never sit on a spinner.
+    func test20_NoteOpens() {
+        section("笔记"); sleep(1)
+        let plus = app.navigationBars.buttons["Add"].exists ? app.navigationBars.buttons["Add"] : app.buttons.matching(NSPredicate(format: "label == 'Add' OR identifier == 'plus' OR label == '添加'")).firstMatch
+        if plus.waitForExistence(timeout: 5) { plus.tap() } else { snap("note-no-plus") }
+        sleep(1)
+        _ = tapButton(["新建空白笔记"])
+        sleep(1); snap("note-new-sheet")
+        _ = tapButton(["新建"])
+        sleep(12); snap("note-opened")
+        XCTAssertFalse(app.activityIndicators.firstMatch.exists, "note still loading")
+        alive("note open")
+    }
 }
