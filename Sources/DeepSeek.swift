@@ -1,6 +1,6 @@
 import SwiftUI
 import Security
-import PencilKit
+import UIKit
 import Observation
 
 // MARK: - DeepSeek: key (Keychain, this device only), client (OpenAI-format chat/completions, SSE streaming)
@@ -321,7 +321,7 @@ struct DSContext {
     }
 
     static func scratchImage(_ id: String?) -> UIImage? {
-        guard let id, let d = ScratchStore.shared.load(id), let dr = try? PKDrawing(data: d.drawing), !dr.strokes.isEmpty else { return nil }
+        guard let id, let d = ScratchStore.shared.load(id), let dr = try? InkDrawing(data: d.drawing), !dr.strokes.isEmpty else { return nil }
         let b = dr.bounds.insetBy(dx: -20, dy: -20)
         let scale = min(2, 2400 / max(b.width, b.height, 1))
         var img: UIImage = UIImage()

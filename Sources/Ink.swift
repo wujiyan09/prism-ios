@@ -1,6 +1,6 @@
 import SwiftUI
 import PDFKit
-import PencilKit
+import UIKit
 
 // MARK: - Persistent PencilKit writing on PDF papers (local only, one drawing file per page)
 
@@ -14,14 +14,14 @@ enum PDFInk {
         String((k.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? k).suffix(150))
     }
     static func dir(_ key: String) -> URL { root.appendingPathComponent(safe(key), isDirectory: true) }
-    static func load(_ key: String, _ page: Int) -> PKDrawing? {
-        (try? Data(contentsOf: dir(key).appendingPathComponent("\(page).drawing"))).flatMap { try? PKDrawing(data: $0) }
+    static func load(_ key: String, _ page: Int) -> InkDrawing? {
+        (try? Data(contentsOf: dir(key).appendingPathComponent("\(page).drawing"))).flatMap { try? InkDrawing(data: $0) }
     }
     /// Canvas width the drawing was made at (to flatten onto the page at the right scale).
     static func width(_ key: String, _ page: Int) -> CGFloat? {
         (try? String(contentsOf: dir(key).appendingPathComponent("\(page).w"), encoding: .utf8)).flatMap { Double($0) }.map { CGFloat($0) }
     }
-    static func save(_ key: String, _ page: Int, _ d: PKDrawing, title: String, width: CGFloat = 0) {
+    static func save(_ key: String, _ page: Int, _ d: InkDrawing, title: String, width: CGFloat = 0) {
         let dd = dir(key)
         let f = dd.appendingPathComponent("\(page).drawing")
         if d.strokes.isEmpty { try? FileManager.default.removeItem(at: f); return }
@@ -51,13 +51,13 @@ enum PDFInk {
     static func deleteAll() { try? FileManager.default.removeItem(at: root) }
 }
 
-final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDelegate {
+final class InkProvider: NSObject, PDFPageOverlayViewProvider, InkCanvasDelegate {
     var key = ""
     var title = ""
-    private var canvases: [Int: PKCanvasView] = [:]
+    private var canvases: [Int: InkCanvas] = [:]
     private var links: [Int: PadLink] = [:]
     deinit { ToolSync.shared.unregister(picker) }
-    private let picker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
+    private let picker: InkToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
     var enabled = false { didSet { canvases.values.forEach(apply) } }
 
     override init() {
@@ -91,7 +91,7 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
         canvases[i] = c
         let pw = page.bounds(for: .mediaBox).width
         let link = PadLink("pdf:\(key):\(i)", canvas: c)
-        link.host = { [weak c] in c?.layer }
+        link.host = { [weak c] in c?.inkView.layer }
         link.k = { [weak c] in max(1, c?.bounds.width ?? pw) / max(1, pw) }
         links[i] = link
         apply(c)
@@ -99,15 +99,15 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDeleg
     }
 
     func pdfView(_ pdfView: PDFView, willEndDisplayingOverlayView overlayView: UIView, for page: PDFKit.PDFPage) {
-        guard let c = overlayView as? PKCanvasView else { return }
+        guard let c = overlayView as? InkCanvas else { return }
         PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width)
         canvases[c.tag] = nil
         links[c.tag]?.tearDown(); links[c.tag] = nil
     }
 
-    func canvasViewDrawingDidChange(_ c: PKCanvasView) { links[c.tag]?.changed(c.drawing); PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width) }
+    func canvasViewDrawingDidChange(_ c: InkCanvas) { links[c.tag]?.changed(c.drawing); PDFInk.save(key, c.tag, c.drawing, title: title, width: c.bounds.width) }
 
-    private func apply(_ c: PKCanvasView) {
+    private func apply(_ c: InkCanvas) {
         c.isUserInteractionEnabled = enabled
         picker.addObserver(c)
         picker.setVisible(enabled, forFirstResponder: c)

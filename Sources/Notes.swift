@@ -1,6 +1,6 @@
 import SwiftUI
 import PDFKit
-import PencilKit
+import UIKit
 import PhotosUI
 import VisionKit
 import UniformTypeIdentifiers
@@ -1000,7 +1000,7 @@ struct NoteCanvas: UIViewRepresentable {
     let tools: Bool
 
     func makeCoordinator() -> Coord { Coord(self) }
-    func makeUIView(context: Context) -> PKCanvasView {
+    func makeUIView(context: Context) -> InkCanvas {
         let v = QuietCanvas()
         v.backgroundColor = .clear; v.isOpaque = false
         v.overrideUserInterfaceStyle = .light   // white paper: ink colours stay true in dark mode
@@ -1014,7 +1014,7 @@ struct NoteCanvas: UIViewRepresentable {
         context.coordinator.picker = picker
         DispatchQueue.main.async { context.coordinator.load() }
         let link = PadLink("note:" + key, canvas: v)
-        link.host = { [weak v] in v?.layer }
+        link.host = { [weak v] in v?.inkView.layer }
         link.k = { [weak v] in (v?.bounds.width ?? NoteRender.logicalWidth) / NoteRender.logicalWidth }
         context.coordinator.link = link
         // 笔盘 on at open: show it without waiting for a first stroke.
@@ -1027,10 +1027,10 @@ struct NoteCanvas: UIViewRepresentable {
     /// True when some note canvas already owns the 笔盘.
     static var anyActive: Bool {
         guard let w = PadHub.mainWindow else { return false }
-        func find(_ v: UIView) -> Bool { (v is PKCanvasView && v.isFirstResponder) || v.subviews.contains(where: find) }
+        func find(_ v: UIView) -> Bool { (v is InkCanvas && v.isFirstResponder) || v.subviews.contains(where: find) }
         return find(w)
     }
-    func updateUIView(_ v: PKCanvasView, context: Context) {
+    func updateUIView(_ v: InkCanvas, context: Context) {
         context.coordinator.parent = self
         v.isUserInteractionEnabled = enabled
         if v.bounds.width > 10 && context.coordinator.loadedWidth != v.bounds.width { context.coordinator.load() }
@@ -1040,7 +1040,7 @@ struct NoteCanvas: UIViewRepresentable {
             if !enabled && v.isFirstResponder { v.resignFirstResponder() }
         }
     }
-    static func dismantleUIView(_ v: PKCanvasView, coordinator: Coord) {
+    static func dismantleUIView(_ v: InkCanvas, coordinator: Coord) {
         coordinator.link?.tearDown(); coordinator.link = nil
         coordinator.save()
         coordinator.picker?.removeObserver(v)
@@ -1048,10 +1048,10 @@ struct NoteCanvas: UIViewRepresentable {
         coordinator.picker?.overrideUserInterfaceStyle = .unspecified
     }
 
-    final class Coord: NSObject, PKCanvasViewDelegate {
+    final class Coord: NSObject, InkCanvasDelegate {
         var parent: NoteCanvas
-        weak var canvas: PKCanvasView?
-        var picker: PKToolPicker?
+        weak var canvas: InkCanvas?
+        var picker: InkToolPicker?
         var loadedWidth: CGFloat = 0
         var loading = false
         private var pending: DispatchWorkItem?
@@ -1072,7 +1072,7 @@ struct NoteCanvas: UIViewRepresentable {
             loading = true
             loadedWidth = v.bounds.width
             let k = v.bounds.width / NoteRender.logicalWidth
-            v.drawing = (PDFInk.load(parent.key, 0) ?? PKDrawing()).transformed(using: CGAffineTransform(scaleX: k, y: k))
+            v.drawing = (PDFInk.load(parent.key, 0) ?? InkDrawing()).transformed(using: CGAffineTransform(scaleX: k, y: k))
             loading = false
         }
         func save() {
@@ -1081,7 +1081,7 @@ struct NoteCanvas: UIViewRepresentable {
             PDFInk.save(parent.key, 0, v.drawing.transformed(using: CGAffineTransform(scaleX: k, y: k)), title: parent.title, width: NoteRender.logicalWidth)
             if v.drawing.strokes.isEmpty { try? FileManager.default.removeItem(at: PDFInk.dir(parent.key).appendingPathComponent("0.w")) }
         }
-        func canvasViewDrawingDidChange(_ v: PKCanvasView) {
+        func canvasViewDrawingDidChange(_ v: InkCanvas) {
             guard !loading else { return }
             link?.changed(v.drawing)
             pending?.cancel()
@@ -1089,7 +1089,7 @@ struct NoteCanvas: UIViewRepresentable {
             pending = w
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: w)
         }
-        func canvasViewDidBeginUsingTool(_ v: PKCanvasView) {
+        func canvasViewDidBeginUsingTool(_ v: InkCanvas) {
             lastTouched = true
             if parent.tools && !DSInput.holding { picker?.setVisible(true, forFirstResponder: v); v.becomeFirstResponder() }
         }
@@ -1235,7 +1235,7 @@ enum NoteBundle {
         for (f, x) in b.images { try? x.write(to: NoteStore.imgURL(id, f)) }
         for (pid, x) in b.ink {
             let k = NoteStore.inkKey(id, pid)
-            if let dr = try? PKDrawing(data: x) { PDFInk.save(k, 0, dr, title: b.doc.title, width: NoteRender.logicalWidth) }
+            if let dr = try? InkDrawing(data: x) { PDFInk.save(k, 0, dr, title: b.doc.title, width: NoteRender.logicalWidth) }
         }
         NoteStore.shared.save(b.doc, touch: false)
         Task { await SyncManager.shared.sync() }

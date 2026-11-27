@@ -38,7 +38,7 @@ targets:
         buildPhase: resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.wujiyan09.prism
+        PRODUCT_BUNDLE_IDENTIFIER: com.wujiyan09.prism.ink
         PRODUCT_NAME: ICT
         TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_FILE: Info.plist
