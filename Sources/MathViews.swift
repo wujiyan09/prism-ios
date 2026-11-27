@@ -1043,16 +1043,19 @@ struct CanvasRep: UIViewRepresentable {
         link.onScroll = { [weak v, weak co] y, w in
             guard let v else { return }
             co?.padDriven = true
-            if w > 10, PadHub.syncZoom, !(ctl?.locked ?? false) {
-                let z = min(v.maximumZoomScale, max(v.minimumZoomScale, v.bounds.width / w))
-                if abs(z - v.zoomScale) > 0.002 { v.zoomScale = z }
+            defer { co?.padDriven = false }
+            // The pad's whole visible rect, fitted inside this (differently sized / shaped) view, same centre.
+            let r = PadHub.shared.posRect["scratch:" + itemID] ?? CGRect(x: PadHub.shared.posX["scratch:" + itemID] ?? 0, y: y, width: w, height: w * v.bounds.height / max(1, v.bounds.width))
+            if r.width > 10, r.height > 10, PadHub.syncZoom, !(ctl?.locked ?? false), v.bounds.width > 10 {
+                v.maximumZoomScale = max(v.maximumZoomScale, DisplayInfo.maxZoom)
+                let z = min(v.maximumZoomScale, max(v.minimumZoomScale, min(v.bounds.width / r.width, v.bounds.height / r.height)))
+                if abs(z - v.zoomScale) > 0.002 { v.zoomScale = z; co?.layoutAdd(v) }
             }
+            let z = v.zoomScale
             let maxY = max(0, v.contentSize.height - v.bounds.height)
-            let px = PadHub.shared.posX["scratch:" + itemID] ?? 0
-            let maxX = max(-v.contentInset.left, v.contentSize.width - v.bounds.width + v.contentInset.right)
-            let x = min(maxX, max(-v.contentInset.left, px * v.zoomScale - v.contentInset.left))
-            v.setContentOffset(CGPoint(x: x, y: min(maxY, max(0, y * v.zoomScale))), animated: false)
-            co?.padDriven = false
+            let minX = -v.contentInset.left, maxX = max(minX, v.contentSize.width - v.bounds.width + v.contentInset.right)
+            let x = min(maxX, max(minX, r.midX * z - v.bounds.width / 2))
+            v.setContentOffset(CGPoint(x: x, y: min(maxY, max(0, r.midY * z - v.bounds.height / 2))), animated: false)
         }
         co.link = link
         co.addObs = NotificationCenter.default.addObserver(forName: .padAddPage, object: nil, queue: .main) { [weak co] n in
@@ -1084,6 +1087,16 @@ struct CanvasRep: UIViewRepresentable {
     func updateUIView(_ v: PKCanvasView, context: Context) {
         context.coordinator.parent = self
         port.canvas = v
+        // On an external screen the scratch starts fitted to the screen width (was 1:1 points = same physical size as the iPad).
+        let co = context.coordinator
+        if !co.didFit, DisplayInfo.external != nil, v.window?.screen != UIScreen.main, v.bounds.width > 10 {
+            co.didFit = true
+            DispatchQueue.main.async { [weak v] in
+                guard let v else { return }
+                v.maximumZoomScale = max(v.maximumZoomScale, DisplayInfo.maxZoom)
+                v.zoomScale = min(v.maximumZoomScale, v.bounds.width / CanvasRep.width); co.layoutAdd(v)
+            }
+        }
         if let p = context.coordinator.picker, context.coordinator.shown != tools {
             context.coordinator.shown = tools
             p.setVisible(tools, forFirstResponder: v)
@@ -1135,6 +1148,7 @@ struct CanvasRep: UIViewRepresentable {
         }
 
         /// Content = pages + room for the 加一页 button under the last page.
+        var didFit = false
         func layoutAdd(_ c: UIScrollView) {
             let z = c.zoomScale
             c.contentSize = CGSize(width: CanvasRep.width * z, height: height * z + 90)

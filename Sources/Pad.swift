@@ -170,6 +170,8 @@ final class PadHub {
     /// padIndex was derived from a scroll offset (leader or follower): don't turn it into a separate page jump.
     @ObservationIgnored var indexFromOffset = false
     @ObservationIgnored var posX: [String: CGFloat] = [:]
+    /// Pad's visible rect per channel (drawing units): the big screen fits this whole region into its own view.
+    @ObservationIgnored var posRect: [String: CGRect] = [:]
     @ObservationIgnored var scratchX: CGFloat = 0
     @ObservationIgnored private var posListeners: [String: [(id: ObjectIdentifier, f: (CGFloat, CGFloat) -> Void)]] = [:]
     /// Pad's top y in logical units (continuous sources).
@@ -951,7 +953,7 @@ struct PadCanvas: UIViewRepresentable {
     func updateUIView(_ v: PKCanvasView, context: Context) {
         let c = context.coordinator
         c.parent = self
-        if v.bounds.width > 10 && abs(v.bounds.width - c.fittedWidth) > 1 { c.fit() }
+        if v.bounds.width > 10 && abs(v.bounds.width - c.fittedWidth) > 1 { c.fit(); DispatchQueue.main.async { [weak v] in if let v { c.sendPos(v) } } }
         if c.base > 0 {
             v.minimumZoomScale = locked ? v.zoomScale : c.base * 0.5
             v.maximumZoomScale = locked ? v.zoomScale : max(c.base * 4, 8)
@@ -1111,10 +1113,19 @@ struct PadCanvas: UIViewRepresentable {
                     userInfo: ["r": CGRect(x: v.contentOffset.x / z, y: v.contentOffset.y / z, width: v.bounds.width / z, height: v.bounds.height / z)])
                 return
             }
-            PadHub.shared.posX[parent.page.channel] = max(0, v.contentOffset.x + v.contentInset.left) / v.zoomScale
-            PadHub.shared.padMoved(parent.page.channel, max(0, v.contentOffset.y) / v.zoomScale, v.bounds.width / v.zoomScale)
+            sendPos(v)
+        }
+        /// Tell the big screen exactly what the pad shows (also on open and after any zoom, not only while dragging).
+        func sendPos(_ v: UIScrollView) {
+            guard parent.continuous, v.zoomScale > 0, v.bounds.width > 10, !following else { return }
+            let z = v.zoomScale
+            let ch = parent.page.channel
+            PadHub.shared.posX[ch] = max(0, v.contentOffset.x + v.contentInset.left) / z
+            PadHub.shared.posRect[ch] = CGRect(x: (v.contentOffset.x + v.contentInset.left) / z, y: v.contentOffset.y / z, width: v.bounds.width / z, height: v.bounds.height / z)
+            PadHub.shared.padMoved(ch, max(0, v.contentOffset.y) / z, v.bounds.width / z)
         }
         func scrollViewDidEndZooming(_ v: UIScrollView, with view: UIView?, atScale s: CGFloat) {
+            sendPos(v)
             if base > 0 { let z = s / base; DispatchQueue.main.async { self.parent.zoom = z } }
         }
 
