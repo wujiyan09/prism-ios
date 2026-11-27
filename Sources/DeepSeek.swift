@@ -641,7 +641,7 @@ struct DeepSeekPanel: View {
             Button { showHistory = true } label: { Label("历史", systemImage: "clock") }
             Button { showSettings = true } label: { Label("DeepSeek 设置", systemImage: "gearshape") }
             Divider()
-            Button(role: .destructive) { task?.cancel(); msgs = []; grade = nil; DSStore.shared.chats[chatKey] = nil } label: {
+            Button(role: .destructive) { task?.cancel(); msgs = []; grade = nil; DSStore.shared.chats[chatKey] = nil; UserDefaults.standard.removeObject(forKey: "ds.chap." + DSContext.chatKey(ctx)) } label: {
                 Label("清空这题的对话", systemImage: "trash")
             }
         } label: { Label("选项", systemImage: "ellipsis.circle") }
@@ -799,7 +799,16 @@ struct DeepSeekPanel: View {
     private func contextPart() -> DSPart {
         var s = "科目：\(DSContext.subjectName(ctx.subject))\n"
         var imgs: [UIImage] = []
-        if useChapter, let c = ctx.chapter { s += "\n【本章概要】\n" + c + "\n" }
+        if useChapter, let c = ctx.chapter {
+            // 保留旧对话: the thread keeps the 本章 block from its first turn (one block, never re-added per question).
+            if UserDefaults.standard.bool(forKey: "ds.keepThread") {
+                let k = "ds.chap." + DSContext.chatKey(ctx)
+                let first = UserDefaults.standard.string(forKey: k) ?? { UserDefaults.standard.set(c, forKey: k); return c }()
+                s += "\n【本章概要（本对话开始时）】\n" + first + "\n"
+            } else {
+                s += "\n【本章概要】\n" + c + "\n"
+            }
+        }
         if usePage {
             s += "\n【本页：\(ctx.title)】\n" + ctx.page + "\n"
             if let r = ctx.revealed { s += "\n【答案 / 解析（学生已看到）】\n" + r + "\n" }
@@ -826,6 +835,7 @@ struct DeepSeekPanel: View {
         if usePage { notes.append("本页") }
         if useChapter && ctx.chapter != nil { notes.append("本章") }
         if useScratch && ctx.sheetID != nil { notes.append("草稿纸") }
+        if msgs.isEmpty { UserDefaults.standard.removeObject(forKey: "ds.chap." + DSContext.chatKey(ctx)) }   // new thread: fresh 本章
         let history = msgs
         msgs.append(DSMessage(role: "user", text: shown == text ? t : shown, note: notes.isEmpty ? nil : "附：" + notes.joined(separator: " · ")))
         msgs.append(DSMessage(role: "assistant", text: ""))
