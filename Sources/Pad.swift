@@ -1110,9 +1110,7 @@ final class ToolSync: NSObject, InkToolPickerObserver {
         guard !busy, PadHub.shared.padOpen else { return }
         busy = true; defer { busy = false }
         for p in pickers where p !== src {
-            if #available(iOS 18.0, *), p.toolItems.contains(where: { $0.identifier == src.selectedToolItemIdentifier }) {
-                p.selectedToolItemIdentifier = src.selectedToolItemIdentifier   // same preset slot, not just the same tool
-            } else { p.selectedTool = src.selectedTool }
+            p.selectedTool = src.selectedTool
         }
     }
 }

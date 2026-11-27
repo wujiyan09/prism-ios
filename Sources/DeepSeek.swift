@@ -535,7 +535,7 @@ struct DSLazyPanel: View {
     var body: some View {
         Group {
             if let ctx {
-                DeepSeekPanel(ctx: ctx, embedded: embedded, close: close, togglePin: togglePin)
+                DeepSeekPanel(ctx: ctx, embedded: embedded, close: close, togglePin: togglePin, refresh: make)
             } else if gaveUp {
                 ContentUnavailableView("这一页暂时没有内容可以问", systemImage: "sparkles")
             } else {
@@ -568,6 +568,8 @@ struct DeepSeekPanel: View {
     var embedded = false
     var close: () -> Void
     var togglePin: (() -> Void)? = nil
+    /// Rebuilds the context at send time, so 本页 is always the question on screen now (not the 1 s poll's copy).
+    var refresh: (() -> DSContext?)? = nil
     @State private var msgs: [DSMessage] = []
     @State private var input = ""
     @State private var loadedKey = ""
@@ -813,10 +815,10 @@ struct DeepSeekPanel: View {
     /// 设置 › 换题时: per-question chat (default) or one running chat for the set/subject.
     private var chatKey: String { DSContext.chatKey(ctx) }
 
-    private func contextPart() -> DSPart {
+    private func contextPart(_ ctx: DSContext, chapter: Bool = true, page: Bool = true) -> DSPart {
         var s = "科目：\(DSContext.subjectName(ctx.subject))\n"
         var imgs: [UIImage] = []
-        if useChapter, let c = ctx.chapter {
+        if chapter, useChapter, let c = ctx.chapter {
             // 保留旧对话: the thread keeps the 本章 block from its first turn (one block, never re-added per question).
             if UserDefaults.standard.bool(forKey: "ds.keepThread") {
                 let k = "ds.chap." + DSContext.chatKey(ctx)
@@ -826,7 +828,7 @@ struct DeepSeekPanel: View {
                 s += "\n【本章概要】\n" + c + "\n"
             }
         }
-        if usePage {
+        if page, usePage {
             s += "\n【本页：\(ctx.title)】\n" + ctx.page + "\n"
             if let r = ctx.revealed { s += "\n【答案 / 解析（学生已看到）】\n" + r + "\n" }
             else if let a = ctx.answer, !a.isEmpty {
@@ -834,7 +836,7 @@ struct DeepSeekPanel: View {
             }
             imgs += ctx.images
         }
-        if useScratch, let img = DSContext.scratchImage(ctx.sheetID) {
+        if page, useScratch, let img = DSContext.scratchImage(ctx.sheetID) {
             s += "\n（附图：学生的草稿纸手写过程）\n"
             imgs.append(img)
         }
@@ -856,17 +858,30 @@ struct DeepSeekPanel: View {
         let history = msgs
         msgs.append(DSMessage(role: "user", text: shown == text ? t : shown, note: notes.isEmpty ? nil : "附：" + notes.joined(separator: " · ")))
         msgs.append(DSMessage(role: "assistant", text: ""))
-        let ci = contextPart()
+        // The question on screen right now, built synchronously at send time.
+        let cur: DSContext = {
+            if let c = refresh?(), !c.page.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !c.images.isEmpty { return c }
+            return ctx
+        }()
+        let qKey = "ds.lastQ." + DSContext.chatKey(ctx)
+        let switched = !history.isEmpty && (UserDefaults.standard.string(forKey: qKey) ?? cur.key) != cur.key
+        UserDefaults.standard.set(cur.key, forKey: qKey)
+        let head = contextPart(cur, chapter: true, page: false)
+        let pagePart = contextPart(cur, chapter: false, page: true)
         let m = model
         var payload: [[String: Any]] = [["role": "system", "content": DSClient.systemPrompt]]
-        payload.append(DSClient.message("user", DSPart(text: ci.text, images: ci.images), vision: m.vision))
-        payload.append(["role": "assistant", "content": "好的，我看到了。请问。"])
+        payload.append(DSClient.message("user", DSPart(text: head.text, images: []), vision: m.vision))
+        payload.append(["role": "assistant", "content": "好的。"])
         // History by token budget (~32K tokens; CJK ≈ 1 token/char, other text ≈ 4 chars/token), newest first.
         func toks(_ t: String) -> Int { t.unicodeScalars.reduce(0) { $0 + ($1.value > 0x2E7F ? 4 : 1) } / 4 + 4 }
         var budget = 32_000, kept: [DSMessage] = []
         for h in history.reversed() where !h.text.isEmpty { let c = toks(h.text); if c > budget { break }; budget -= c; kept.append(h) }
         for h in kept.reversed() { payload.append(["role": h.role, "content": h.text]) }
-        payload.append(["role": "user", "content": t])
+        // Current 本页 goes AFTER the history, right before the question, so the old question can't dominate.
+        var lead = ""
+        if switched { lead = "学生现在切换到新题：\(cur.title)（\(cur.key)）。以下问题都关于这题，忽略前面的题目，除非学生提到。\n" }
+        let pageText = (usePage || useScratch) ? pagePart.text.components(separatedBy: "\n").dropFirst().joined(separator: "\n") : ""
+        payload.append(DSClient.message("user", DSPart(text: lead + pageText + "\n【学生的问题】\n" + t, images: pagePart.images), vision: m.vision))
         task = Task {
             // Tokens are buffered and flushed ~10×/s so the list isn't re-laid out per token.
             let b = DSBuffer()
