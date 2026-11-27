@@ -12,7 +12,8 @@ struct RootView: View {
         Group {
             if !lib.loaded || lib.needsDownload {
                 DownloadView()
-            } else if hsc == .compact {
+            } else if hsc == .compact && UIDevice.current.userInterfaceIdiom != .pad {
+                // iPad keeps one layout at every window size (Stage Manager / Split View): switching layouts rebuilt the navigation and closed the open document.
                 tabs(T)
             } else {
                 split(T)
