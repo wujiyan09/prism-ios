@@ -67,6 +67,13 @@ jobs:
             --title "Prism build $N" \
             --notes "Built from wujiyan09/prism-ios@${GITHUB_SHA::7}"
 
+      - name: Upload IPA (branch builds)
+        if: github.ref != 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Prism-${{ steps.pkg.outputs.n }}
+          path: build/Prism-build-${{ steps.pkg.outputs.n }}.ipa
+
       - name: Remove build output
         if: always()
         run: rm -rf build Sources/Secrets.swift
