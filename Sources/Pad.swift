@@ -122,6 +122,7 @@ final class PadHub {
     }
     @ObservationIgnored private var liveListeners: [String: [(id: ObjectIdentifier, f: (Live?) -> Void)]] = [:]
     @ObservationIgnored private var hoverAt: [String: CFTimeInterval] = [:]
+    @ObservationIgnored private var inkAt: [String: CFTimeInterval] = [:]
     /// Refresh rate of the window that shows the mirror: the external display's scene if there is one, else this device.
     static var receiverFPS: Int {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
@@ -130,7 +131,10 @@ final class PadHub {
     }
     func live(_ ch: String, _ l: Live?) {
         guard let ls = liveListeners[ch], !ls.isEmpty else { return }   // nobody showing it: no work
+        if l != nil, !ch.hasPrefix("hover:"), !ch.hasPrefix("m:") { inkAt["hover:" + ch] = CACurrentMediaTime() }
         if l != nil, ch.hasPrefix("hover:") {
+            // Pen just lifted: hold the hover dot back ~280 ms so it doesn't flicker between strokes.
+            if CACurrentMediaTime() - (inkAt[ch] ?? 0) < 0.28 { return }
             // Hover dot: at most once per display frame of the screen showing it.
             let now = CACurrentMediaTime()
             if now - (hoverAt[ch] ?? 0) < 0.9 / Double(PadHub.receiverFPS) { return }
@@ -287,6 +291,11 @@ final class LivePreview {
         defer { CATransaction.commit() }
         guard let l, let p = l.points.first else { layer.path = nil; return }
         if layer.superlayer !== host { host.addSublayer(layer) }
+        if layer.path == nil {
+            // Appearing (e.g. after pen-up): fade in instead of popping.
+            let a = CABasicAnimation(keyPath: "opacity"); a.fromValue = 0; a.toValue = 1; a.duration = 0.15
+            layer.add(a, forKey: "fadeIn")
+        }
         let r = (l.kind == .eraser || l.kind == .bitmapEraser) ? max(3, l.width * k / 2) : max(1.5, l.width * k / 2)
         layer.path = UIBezierPath(ovalIn: CGRect(x: p.x * k - r, y: p.y * k - r, width: r * 2, height: r * 2)).cgPath
         if l.kind == .eraser || l.kind == .bitmapEraser {

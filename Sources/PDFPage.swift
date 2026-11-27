@@ -130,7 +130,11 @@ struct PDFKitView: UIViewRepresentable {
             let b = p.bounds(for: .mediaBox)
             if PadHub.syncZoom, r.width > 1, v.bounds.width > 1 {
                 let z = min(v.maxScaleFactor, max(v.minScaleFactor, v.bounds.width / r.width))
-                if abs(z - v.scaleFactor) / max(z, 0.01) > 0.01 { v.scaleFactor = z }   // only on a real change: each set relayouts PDFView
+                if abs(z - v.scaleFactor) / max(z, 0.01) > 0.01 {
+                    v.autoScales = false          // otherwise PDFKit re-fits and recentres, undoing x
+                    v.scaleFactor = z              // only on a real change: each set relayouts PDFView
+                    v.layoutIfNeeded()             // convert below must see the new scale
+                }
             }
             // Move the scroll view directly (cheap) instead of go(to:), which relayouts every frame and stuttered.
             if let sv = PDFKitView.scroller(in: v) {
