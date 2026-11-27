@@ -325,7 +325,7 @@ enum NoteRender {
     }
 
     static func annotated(_ p: NotePage, _ id: String) -> Bool {
-        !p.items.isEmpty || PDFInk.load(NoteStore.inkKey(id, p.id), 0) != nil
+        !p.items.isEmpty || PDFInk.exists(NoteStore.inkKey(id, p.id), 0)
     }
 
     static func pageText(_ id: String, _ p: NotePage) -> String {

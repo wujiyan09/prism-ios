@@ -88,10 +88,10 @@ final class MathContent {
     /// On launch: refresh the index and the small chapter list; refresh downloaded groups that changed.
     @MainActor
     /// Content update check: at most once every 3 hours (not on every window appear / return to the app).
-    private var lastSync = Date.distantPast
+    nonisolated(unsafe) private static var lastSync = Date.distantPast
     func sync() async {
-        if hasMeta, Date().timeIntervalSince(lastSync) < 3 * 3600 { return }
-        lastSync = Date()
+        if hasMeta, Date().timeIntervalSince(Self.lastSync) < 3 * 3600 { return }
+        Self.lastSync = Date()
         if state == .checking { return }
         if case .downloading = state { return }
         state = .checking

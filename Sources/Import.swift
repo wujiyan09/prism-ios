@@ -643,7 +643,7 @@ struct ImportPaperView: View {
     }
 
     private func flattened(_ i: Int) -> UIImage? {
-        guard let d = doc, PDFInk.load("imp:" + id, i) != nil else { return nil }
+        guard let d = doc, PDFInk.exists("imp:" + id, i) else { return nil }
         return ImpExport.flatPage(d, i, key: "imp:" + id)
     }
 
@@ -1270,7 +1270,7 @@ enum ImpExport {
             }
             if let s = DSContext.scratchImage("imp-" + id) { newPage(); text("草稿纸（手写作答）", .boldSystemFont(ofSize: 14)); image(s, maxH: page.height - 2 * m - 30) }
             if let d = doc {
-                for i in 0..<d.pageCount where PDFInk.load("imp:" + id, i) != nil {
+                for i in 0..<d.pageCount where PDFInk.exists("imp:" + id, i) {
                     if let im = flatPage(d, i, key: "imp:" + id, width: 1100) { newPage(); text("试卷第 \(i + 1) 页（手写）", .boldSystemFont(ofSize: 14)); image(im, maxH: page.height - 2 * m - 30) }
                 }
             }

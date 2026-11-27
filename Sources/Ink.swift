@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 import PDFKit
 import UIKit
@@ -14,9 +15,26 @@ enum PDFInk {
         String((k.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? k).suffix(150))
     }
     static func dir(_ key: String) -> URL { root.appendingPathComponent(safe(key), isDirectory: true) }
+    /// Decoded drawings in memory (filled by background preload and by every save), so turning to a page never
+    /// waits for disk, JSON / PencilKit decoding, or a save in progress on the main thread.
+    final class Box { let d: InkDrawing?; init(_ d: InkDrawing?) { self.d = d } }
+    static let mem: NSCache<NSString, Box> = { let c = NSCache<NSString, Box>(); c.countLimit = 600; return c }()
+    static let log = OSLog(subsystem: "com.wujiyan09.prism", category: .pointsOfInterest)
     static func load(_ key: String, _ page: Int) -> InkDrawing? {
-        saveQ.sync {}   // a page written a moment ago may still be on its way to disk
-        return (try? Data(contentsOf: dir(key).appendingPathComponent("\(page).drawing"))).flatMap { try? InkDrawing(data: $0) }
+        let f = dir(key).appendingPathComponent("\(page).drawing")
+        if let b = mem.object(forKey: f.path as NSString) { return b.d }
+        let sid = OSSignpostID(log: log)
+        os_signpost(.begin, log: log, name: "ink.load", signpostID: sid, "%{public}s p%d main=%d", key, page, Thread.isMainThread ? 1 : 0)
+        let d = (try? Data(contentsOf: f)).flatMap { try? InkDrawing(data: $0) }
+        os_signpost(.end, log: log, name: "ink.load", signpostID: sid, "%d strokes", d?.strokes.count ?? 0)
+        mem.setObject(Box(d), forKey: f.path as NSString)
+        return d
+    }
+    /// Cheap "has ink" check (no decoding).
+    static func exists(_ key: String, _ page: Int) -> Bool {
+        let f = dir(key).appendingPathComponent("\(page).drawing")
+        if let b = mem.object(forKey: f.path as NSString) { return !(b.d?.strokes.isEmpty ?? true) }
+        return FileManager.default.fileExists(atPath: f.path)
     }
     /// Canvas width the drawing was made at (to flatten onto the page at the right scale).
     static func width(_ key: String, _ page: Int) -> CGFloat? {
@@ -37,7 +55,7 @@ enum PDFInk {
             guard oldCount > 0 else { return }
             guard erased else { NSLog("PDFInk: refused to save empty drawing over \(oldCount) strokes (\(key) p\(page))"); return }
             backup(f, force: true)
-            try? fm.removeItem(at: f); return
+            try? fm.removeItem(at: f); mem.setObject(Box(nil), forKey: f.path as NSString); return
         }
         if !erased, oldCount >= 10, d.strokes.count * 4 < oldCount {
             NSLog("PDFInk: refused save dropping \(oldCount) -> \(d.strokes.count) strokes (\(key) p\(page))"); return
@@ -51,13 +69,21 @@ enum PDFInk {
             if let c = first.first, c != UInt8(ascii: "{") { try? fm.copyItem(at: f, to: pk) }
         }
         try? d.dataRepresentation().write(to: f, options: .atomic)
+        mem.setObject(Box(d), forKey: f.path as NSString)
         try? Data(title.utf8).write(to: dd.appendingPathComponent("title.txt"))
         if width > 0 { try? Data("\(Double(width))".utf8).write(to: dd.appendingPathComponent("\(page).w")) }
     }
     /// Writes happen here, one at a time, never on the main thread (InkDrawing is a value: safe to encode off-main).
     static let saveQ = DispatchQueue(label: "pdfink.save", qos: .utility)
     static func saveAsync(_ key: String, _ page: Int, _ d: InkDrawing, title: String, width: CGFloat = 0, erased: Bool = false) {
-        saveQ.async { save(key, page, d, title: title, width: width, erased: erased) }
+        // The latest drawing is what a reload must see, even before the write lands (no waiting on saveQ).
+        if !d.strokes.isEmpty || erased { mem.setObject(Box(d.strokes.isEmpty ? nil : d), forKey: dir(key).appendingPathComponent("\(page).drawing").path as NSString) }
+        saveQ.async {
+            let sid = OSSignpostID(log: log)
+            os_signpost(.begin, log: log, name: "ink.save", signpostID: sid, "%{public}s p%d", key, page)
+            save(key, page, d, title: title, width: width, erased: erased)
+            os_signpost(.end, log: log, name: "ink.save", signpostID: sid)
+        }
     }
     /// Rolling local copies of an ink file: .bak1 (newest) … .bak3.
     static func backup(_ f: URL, force: Bool) {
