@@ -228,6 +228,7 @@ struct PDFKitView: UIViewRepresentable {
             ])
             context.coordinator.addButton = add
             ink.reset(key: inkKey, title: inkTitle)
+            let k = inkKey; for i in 0..<doc.pageCount { InkBitmapCache.prewarm({ PDFInk.load(k, i) }) }   // every page's ink ready before it's turned to
             PDFMargins.apply(doc, key: inkKey)
             let mb = UIButton(configuration: .gray())
             mb.configuration?.image = UIImage(systemName: "arrow.left.and.right.square")

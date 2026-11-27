@@ -676,6 +676,7 @@ struct NoteDocView: View {
         }
         .appScreen()
         .navigationTitle(doc?.title ?? "")
+        .onAppear { for p in doc?.pages ?? [] { let k = NoteStore.inkKey(id, p.id); InkBitmapCache.prewarm({ PDFInk.load(k, 0) }) } }
         .noteRecent(.note(id), doc?.title ?? "笔记", "笔记")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }

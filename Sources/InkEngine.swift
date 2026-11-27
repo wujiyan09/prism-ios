@@ -641,6 +641,11 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
 
     let inkView = UIView()
     private let strokeHost = CALayer()
+    private let bitmapLayer = CALayer()
+    /// Strokes currently drawn by bitmapLayer (no vector layer of their own), with their transforms then.
+    private var flat: [UUID: CGAffineTransform] = [:]
+    private var flatScale: CGFloat = 0
+    private var bitmapGen = 0
     private let activeLayer = CAShapeLayer()
     private let remoteLayer = CAShapeLayer()
     private let lassoLayer = CAShapeLayer()
@@ -659,7 +664,7 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
     /// Another window's in-progress stroke, drawn exactly like ours.
     var remoteActive: InkStroke? { didSet { renderRemote() } }
 
-    var drawing = InkDrawing() { didSet { if !applyingDrawing { sync() } } }
+    var drawing = InkDrawing() { didSet { if !applyingDrawing { adoptBitmap(); sync() } } }
 
     override var delegate: UIScrollViewDelegate? {
         get { proxy.outer }
@@ -679,6 +684,8 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
         inkView.isUserInteractionEnabled = false
         inkView.backgroundColor = .clear
         addSubview(inkView)
+        bitmapLayer.anchorPoint = .zero
+        inkView.layer.addSublayer(bitmapLayer)
         inkView.layer.addSublayer(strokeHost)
         for l in [activeLayer, remoteLayer, laserLayer, remoteLaserLayer] { l.fillRule = .nonZero; inkView.layer.addSublayer(l) }
         lassoLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.06).cgColor
@@ -717,7 +724,7 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
 
     override func traitCollectionDidChange(_ p: UITraitCollection?) {
         super.traitCollectionDidChange(p)
-        if p?.userInterfaceStyle != traitCollection.userInterfaceStyle { layers.values.forEach { $0.layer.removeFromSuperlayer() }; layers = [:]; sync() }
+        if p?.userInterfaceStyle != traitCollection.userInterfaceStyle { layers.values.forEach { $0.layer.removeFromSuperlayer() }; layers = [:]; adoptBitmap(); sync() }
     }
     private var dark: Bool { traitCollection.userInterfaceStyle == .dark }
 
@@ -748,16 +755,67 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
         CATransaction.begin(); CATransaction.setDisableActions(true)
         for l in (strokeHost.sublayers ?? []) + [activeLayer, remoteLayer, lassoLayer, laserLayer, remoteLaserLayer] { l.contentsScale = s }
         CATransaction.commit()
+        if !flat.isEmpty, needsSharper { refreshBitmap() }
     }
     override func didMoveToWindow() { super.didMoveToWindow(); applyScale() }
+
+    // MARK: Flattened bitmap
+    private func unflatten() {
+        flat = [:]; flatScale = 0; bitmapGen += 1
+        CATransaction.begin(); CATransaction.setDisableActions(true); bitmapLayer.contents = nil; CATransaction.commit()
+    }
+    private func show(_ b: InkBitmap, for d: InkDrawing) {
+        let ratio = InkBitmapCache.k(d) / b.refK
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        bitmapLayer.contents = b.image
+        bitmapLayer.frame = CGRect(x: b.rect.minX * ratio, y: b.rect.minY * ratio, width: b.rect.width * ratio, height: b.rect.height * ratio)
+        flat = [:]
+        for s in d.strokes where b.ids.contains(s.id) { flat[s.id] = s.transform }
+        flatScale = b.scale / ratio
+        for id in flat.keys { layers[id]?.layer.removeFromSuperlayer(); layers[id] = nil }
+        CATransaction.commit()
+    }
+    /// New drawing loaded: cached bitmap → shown at once; otherwise vector now, bitmap swapped in when rendered.
+    private func adoptBitmap() {
+        unflatten()
+        let d = drawing
+        guard d.strokes.count >= InkBitmapCache.minStrokes else { return }
+        let key = InkBitmapCache.key(d, dark: dark)
+        if let b = InkBitmapCache.cache.object(forKey: key) { show(b, for: d); if needsSharper { refreshBitmap() }; return }
+        refreshBitmap()
+    }
+    private var needsSharper: Bool { flatScale > 0 && renderScale > flatScale * 1.25 && flatScale < InkBitmapCache.maxPixels / max(1, bitmapLayer.bounds.width, bitmapLayer.bounds.height) * 0.99 }
+    private func refreshBitmap() {
+        bitmapGen += 1
+        let gen = bitmapGen, d = drawing, dk = dark, px = renderScale
+        guard d.strokes.count >= InkBitmapCache.minStrokes else { return }
+        let key = InkBitmapCache.key(d, dark: dk)
+        InkBitmapCache.queue.async { [weak self] in
+            guard let b = InkBitmapCache.render(d, dark: dk, pxPerUnit: px) else { return }
+            InkBitmapCache.store(b, key)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.bitmapGen == gen, self.drawingGestureRecognizer.touch == nil else { return }
+                // Only strokes still unchanged since the render get flattened.
+                let cur = self.drawing
+                guard InkBitmapCache.key(cur, dark: self.dark) == key else { return }
+                self.show(b, for: cur)
+            }
+        }
+    }
 
     // MARK: Rendering
     private var syncGen = 0
     private func sync() {
         syncGen += 1
+        if !flat.isEmpty {
+            // A flattened stroke was erased or moved: back to vector layers for everything.
+            var still = 0
+            for s in drawing.strokes { if let t = flat[s.id] { if t != s.transform { unflatten(); break }; still += 1 } }
+            if !flat.isEmpty && still != flat.count { unflatten() }
+        }
         // A page coming on screen with lots of ink: build the stroke outlines off the main thread (CGPath is
         // immutable once built), then attach the layers in one go. Keeps page turns from stalling on outline maths.
-        let fresh = drawing.strokes.filter { layers[$0.id] == nil }
+        let fresh = drawing.strokes.filter { layers[$0.id] == nil && flat[$0.id] == nil }
         if fresh.count > 40 {
             let gen = syncGen, d = drawing
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -776,6 +834,7 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
         CATransaction.begin(); CATransaction.setDisableActions(true)
         var seen = Set<UUID>()
         for s in drawing.strokes {
+            if flat[s.id] != nil { continue }
             seen.insert(s.id)
             if let e = layers[s.id] {
                 if e.t != s.transform { e.layer.path = InkGeometry.outline(s); layers[s.id] = (e.layer, s.transform) }
@@ -1126,4 +1185,75 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
         let p = InkPresets.shared.presets[i]
         if let pk = picker { pk.select(p) } else { tool = p.tool }
     }
+}
+
+// MARK: - Flattened ink bitmaps (instant page turns)
+//
+// Committed strokes of a page are drawn once, off the main thread, into one bitmap. A canvas that shows a drawing
+// whose bitmap is cached puts that single image up at once instead of building one shape layer per stroke; only
+// strokes added afterwards get live vector layers. Erasing / moving a flattened stroke falls back to vector layers.
+// Every page of an open document is pre-rendered in the background; the cache is memory-capped (NSCache evicts).
+final class InkBitmap {
+    let image: CGImage
+    let rect: CGRect        // in the drawing's coordinates at reference scale
+    let scale: CGFloat      // pixels per unit at reference scale
+    let refK: CGFloat       // stroke transform scale the bitmap was made at
+    let ids: Set<UUID>
+    init(image: CGImage, rect: CGRect, scale: CGFloat, refK: CGFloat, ids: Set<UUID>) {
+        self.image = image; self.rect = rect; self.scale = scale; self.refK = refK; self.ids = ids
+    }
+}
+
+enum InkBitmapCache {
+    static let cache: NSCache<NSString, InkBitmap> = { let c = NSCache<NSString, InkBitmap>(); c.totalCostLimit = 320 * 1024 * 1024; return c }()
+    static let queue = DispatchQueue(label: "ink.bitmap", qos: .userInitiated)
+    static let maxPixels: CGFloat = 4096
+
+    static func k(_ d: InkDrawing) -> CGFloat {
+        guard let t = d.strokes.first?.transform else { return 1 }
+        return max(0.0001, sqrt(abs(t.a * t.d - t.b * t.c)))
+    }
+    /// Same strokes (ids, in order) + same appearance → same bitmap, whatever uniform scale the canvas applies.
+    static func key(_ d: InkDrawing, dark: Bool) -> NSString {
+        var h = Hasher()
+        for s in d.strokes { h.combine(s.id) }
+        let kk = k(d)
+        // relative transforms must match too (a lasso move changes them)
+        for s in d.strokes { h.combine(Int((s.transform.tx / kk).rounded())); h.combine(Int((s.transform.ty / kk).rounded())) }
+        return "\(d.strokes.count)|\(h.finalize())|\(dark ? 1 : 0)" as NSString
+    }
+    static func render(_ d: InkDrawing, dark: Bool, pxPerUnit: CGFloat) -> InkBitmap? {
+        guard !d.strokes.isEmpty else { return nil }
+        var paths: [(CGPath, CGColor, CGFloat)] = []
+        var r = CGRect.null
+        for s in d.strokes where s.kind.isInk {
+            let p = InkGeometry.outline(s)
+            r = r.union(p.boundingBoxOfPath)
+            paths.append((p, InkGeometry.display(s.color, dark: dark).cgColor, s.opacity))
+        }
+        guard !r.isNull, r.width > 0, r.height > 0 else { return nil }
+        r = r.insetBy(dx: -2, dy: -2)
+        let sc = min(pxPerUnit, maxPixels / max(r.width, r.height))
+        let w = Int(ceil(r.width * sc)), h = Int(ceil(r.height * sc))
+        guard w > 0, h > 0, let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.translateBy(x: 0, y: CGFloat(h)); ctx.scaleBy(x: sc, y: -sc); ctx.translateBy(x: -r.minX, y: -r.minY)
+        ctx.setShouldAntialias(true)
+        for (p, c, a) in paths {
+            ctx.setAlpha(a); ctx.setFillColor(c); ctx.addPath(p); ctx.fillPath(using: .winding)
+        }
+        guard let im = ctx.makeImage() else { return nil }
+        return InkBitmap(image: im, rect: r, scale: sc, refK: k(d), ids: Set(d.strokes.map(\.id)))
+    }
+    static func store(_ b: InkBitmap, _ key: NSString) { cache.setObject(b, forKey: key, cost: b.image.width * b.image.height * 4) }
+    /// Background pre-render of a page (call for every page when a document opens).
+    static func prewarm(_ d: @escaping () -> InkDrawing?, dark: Bool = false) {
+        queue.async {
+            guard let dr = d(), dr.strokes.count >= minStrokes else { return }
+            let key = key(dr, dark: dark)
+            if cache.object(forKey: key) != nil { return }
+            if let b = render(dr, dark: dark, pxPerUnit: 2.5 / k(dr) * UITraitCollection.current.displayScale / 2) { store(b, key) }
+        }
+    }
+    static let minStrokes = 12
 }
