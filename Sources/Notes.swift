@@ -136,8 +136,9 @@ final class NoteStore {
         var n = NoteDoc(id: UUID().uuidString, title: title, created: now, modified: now, hasBase: true)
         try? FileManager.default.createDirectory(at: Self.dir(n.id), withIntermediateDirectories: true)
         PDFFile.save(pdf, to: Self.baseURL(n.id))
+        let known = PageSizes.get(pdf.documentURL)   // read in the background during import
         n.pages = (0..<pdf.pageCount).map { i in
-            let b = pdf.page(at: i)?.bounds(for: .mediaBox) ?? CGRect(x: 0, y: 0, width: 595, height: 842)
+            let b = known.flatMap { $0.indices.contains(i) ? CGRect(origin: .zero, size: $0[i]) : nil } ?? pdf.page(at: i)?.bounds(for: .mediaBox) ?? CGRect(x: 0, y: 0, width: 595, height: 842)
             return NotePage(src: i, size: [Double(b.width), Double(b.height)])
         }
         save(n)
@@ -424,6 +425,7 @@ struct NotesLibraryView: View {
 
     private var listView: some View {
         List(selection: $selection) {
+            ImportPendingRows()
             folderSection
             if store.docs.isEmpty && folder.isEmpty {
                 ContentUnavailableView("还没有笔记", systemImage: "note.text", description: Text("右上角 + 新建空白笔记，或导入 PDF、照片、扫描。"))

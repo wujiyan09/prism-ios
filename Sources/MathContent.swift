@@ -429,4 +429,7 @@ struct MathStatsView: View {
     }
 }
 
-nonisolated(unsafe) private var mathLastSync = Date.distantPast
+nonisolated(unsafe) private var mathLastSync: Date {
+    get { Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: "math.lastSync")) }
+    set { UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: "math.lastSync") }
+}

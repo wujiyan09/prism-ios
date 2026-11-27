@@ -259,6 +259,7 @@ struct ImportLibraryView: View {
 
     var body: some View {
         List(selection: $selection) {
+            ImportPendingRows()
             if store.papers.isEmpty {
                 ContentUnavailableView("还没有导入的试卷", systemImage: "square.and.arrow.down", description: Text("右上角 + 可以从文件、照片导入，或直接扫描纸本试卷。"))
                     .listRowBackground(Color.clear)
@@ -395,6 +396,8 @@ struct ImportPickers: ViewModifier {
     private func handle(_ urls: [URL]) {
         // Feedback right away; reading/merging the PDF happens off the main thread.
         busy = true; busyText = "正在导入…"; busyProgress = nil
+        let pendingNames = urls.map { $0.deletingPathExtension().lastPathComponent }
+        ImportPending.shared.names += pendingNames
         let t0 = Date()
         let done = self.done
         // Copy the picked files now, while the picker's security-scoped URLs are still valid (they can vanish after
@@ -439,9 +442,13 @@ struct ImportPickers: ViewModifier {
                 let f = tmp.appendingPathComponent("merged.pdf")
                 if (try? data.write(to: f, options: .atomic)) != nil, let fd = PDFDocument(url: f) { fd.documentAttributes = d.documentAttributes; result.0 = fd }
             }
+            if let d = result.0, let u = d.documentURL {
+                PageSizes.put(u, (0..<d.pageCount).map { d.page(at: $0)?.bounds(for: .mediaBox).size ?? CGSize(width: 595, height: 842) })
+            }
             // Wait for the picker to finish dismissing, or the next sheet can't be presented (that was the 108 regression).
             DispatchQueue.main.asyncAfter(deadline: .now() + max(0, 0.6 - Date().timeIntervalSince(t0))) {
                 busy = false
+                for n in pendingNames { if let k = ImportPending.shared.names.firstIndex(of: n) { ImportPending.shared.names.remove(at: k) } }
                 // Hand the UI a document created on the main thread (from the copied file: lazy, cheap); a
                 // PDFDocument built on a background queue must not be used by PDFKit views on main.
                 var d = result.0
@@ -845,6 +852,31 @@ struct ImportPaperView: View {
 }
 
 struct ShareItem: Identifiable { let id = UUID(); let url: URL }
+
+/// Imports in flight: shown as placeholder rows at the top of the lists right away.
+@Observable final class ImportPending {
+    static let shared = ImportPending()
+    var names: [String] = []
+}
+/// Page sizes read in the background during import, so creating the note doesn't parse every page on main.
+enum PageSizes {
+    nonisolated(unsafe) private static var cache: [URL: [CGSize]] = [:]
+    private static let lock = NSLock()
+    static func put(_ u: URL, _ s: [CGSize]) { lock.lock(); cache[u.standardizedFileURL] = s; lock.unlock() }
+    static func get(_ u: URL?) -> [CGSize]? { guard let u else { return nil }; lock.lock(); defer { lock.unlock() }; return cache[u.standardizedFileURL] }
+}
+struct ImportPendingRows: View {
+    @State private var p = ImportPending.shared
+    var body: some View {
+        ForEach(Array(p.names.enumerated()), id: \.offset) { _, n in
+            HStack(spacing: 12) {
+                ProgressView()
+                VStack(alignment: .leading) { Text(n).lineLimit(1); Text("正在导入…").font(.caption).foregroundStyle(.secondary) }
+            }
+            .selectionDisabled()
+        }
+    }
+}
 
 /// Every PDF export: choose 全部 / 当前页 / 自定义 (e.g. "1-3,5") before sharing. Other files are shared as they are.
 struct RangeShareSheet: View {
