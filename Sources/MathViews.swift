@@ -820,19 +820,21 @@ final class ScratchStore {
     func clear(_ key: String? = nil, force: Bool = false) {
         guard let k = key ?? current else { return }
         if !force && (ReviewStore.shared.inReview(k) || kept.contains(k)) { return }
-        try? FileManager.default.removeItem(at: url(k))
+        let u = url(k)
+        PDFInk.saveQ.async { try? FileManager.default.removeItem(at: u) }   // after any pending background save of this sheet
         kept.removeAll { $0 == k }
         if current == k { current = nil }
     }
     func touch(_ id: String) {}
-    func has(_ id: String) -> Bool { FileManager.default.fileExists(atPath: url(id).path) }
+    func has(_ id: String) -> Bool { PDFInk.saveQ.sync {}; return FileManager.default.fileExists(atPath: url(id).path) }
     func load(_ id: String) -> ScratchDraft? {
+        PDFInk.saveQ.sync {}
         guard let d = try? Data(contentsOf: url(id)) else { return nil }
         return try? JSONDecoder().decode(ScratchDraft.self, from: d)
     }
     func save(_ id: String, _ draft: ScratchDraft) {
         if let d = try? JSONEncoder().encode(draft) { try? d.write(to: url(id), options: .atomic) }
-        NotificationCenter.default.post(name: .scratchSaved, object: id)
+        DispatchQueue.main.async { NotificationCenter.default.post(name: .scratchSaved, object: id) }
     }
 }
 extension Notification.Name { static let scratchSaved = Notification.Name("scratchSaved") }
@@ -1106,6 +1108,7 @@ struct CanvasRep: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ v: PKCanvasView, coordinator: Coord) {
+        if coordinator.saveWork != nil { coordinator.save() }   // a stroke still waiting to be saved
         coordinator.link?.tearDown(); coordinator.link = nil
         PadHub.shared.deactivate("scratch:" + coordinator.parent.itemID)
         coordinator.picker?.setVisible(false, forFirstResponder: v)
@@ -1197,8 +1200,14 @@ struct CanvasRep: UIViewRepresentable {
             // Extend the sheet when writing near the bottom.
             if !c.drawing.strokes.isEmpty && c.drawing.bounds.maxY > height - 150 { setHeight(CanvasRep.pages(for: c.drawing.bounds.maxY + 200)) }
             link?.changed(c.drawing)
-            save()
+            // Saving used to run on every stroke on the main thread (whole drawing → Data → JSON → atomic write),
+            // which is what made the pen lag on a full sheet. Now: debounced, encoded and written in the background.
+            saveWork?.cancel()
+            let w = DispatchWorkItem { [weak self] in self?.save() }
+            saveWork = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: w)
         }
+        var saveWork: DispatchWorkItem?
 
         func scrollViewDidZoom(_ sv: UIScrollView) {
             guard let u = under else { return }
@@ -1357,8 +1366,10 @@ struct CanvasRep: UIViewRepresentable {
 
         func save() {
             guard let c = canvas else { return }
+            saveWork?.cancel(); saveWork = nil
             if c.drawing.strokes.isEmpty && parent.placed.isEmpty && !ScratchStore.shared.has(parent.itemID) { return }
-            ScratchStore.shared.save(parent.itemID, ScratchDraft(drawing: c.drawing.dataRepresentation(), placed: parent.placed, height: Double(height)))
+            let d = c.drawing, placed = parent.placed, h = Double(height), id = parent.itemID
+            PDFInk.saveQ.async { ScratchStore.shared.save(id, ScratchDraft(drawing: d.dataRepresentation(), placed: placed, height: h)) }
         }
 
         @discardableResult

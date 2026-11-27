@@ -1256,8 +1256,10 @@ final class ToolSync: NSObject, PKToolPickerObserver {
     static func makePicker() -> PKToolPicker {
         if #available(iOS 18.0, *) {
             var items: [PKToolPickerItem] = [PKToolPickerInkingItem(type: .pen), PKToolPickerInkingItem(type: .pencil),
-                                             PKToolPickerInkingItem(type: .marker), PKToolPickerInkingItem(type: .monoline),
-                                             PKToolPickerEraserItem(type: .vector), PKToolPickerLassoItem(), PKToolPickerRulerItem()]
+                                             PKToolPickerInkingItem(type: .marker), PKToolPickerInkingItem(type: .monoline)]
+            // Saved pen presets (e.g. monoline red / black / blue), each its own slot in the picker.
+            for pr in PenPresets.shared.list { items.append(PKToolPickerInkingItem(type: pr.inkType, color: pr.uiColor, width: pr.width, identifier: pr.id)) }
+            items += [PKToolPickerEraserItem(type: .vector), PKToolPickerLassoItem(), PKToolPickerRulerItem()]
             let p = PKToolPicker(toolItems: items)
             return p
         }
@@ -1288,7 +1290,11 @@ final class ToolSync: NSObject, PKToolPickerObserver {
         NotificationCenter.default.post(name: .toolChanged, object: nil)
         guard !busy, PadHub.shared.padOpen else { return }
         busy = true; defer { busy = false }
-        for p in pickers where p !== src { p.selectedTool = src.selectedTool }
+        for p in pickers where p !== src {
+            if #available(iOS 18.0, *), p.toolItems.contains(where: { $0.identifier == src.selectedToolItemIdentifier }) {
+                p.selectedToolItemIdentifier = src.selectedToolItemIdentifier   // same preset slot, not just the same tool
+            } else { p.selectedTool = src.selectedTool }
+        }
     }
 }
 
@@ -1733,4 +1739,63 @@ private struct PadSubmitHook: ViewModifier {
 }
 extension View {
     func padSubmit(_ active: Bool, _ action: @escaping () -> Void) -> some View { modifier(PadSubmitHook(active: active, action: action)) }
+}
+
+
+// MARK: - Saved pen presets (shared by the pad and the main window; new pickers pick them up)
+
+struct PenPreset: Codable, Identifiable, Hashable {
+    var id: String = "preset-" + UUID().uuidString
+    var type: String          // pen | pencil | marker | monoline
+    var rgba: [Double]        // 0–1
+    var width: CGFloat
+    var inkType: PKInkingTool.InkType {
+        switch type { case "pencil": return .pencil; case "marker": return .marker; case "monoline": if #available(iOS 17.0, *) { return .monoline } else { return .pen }; default: return .pen }
+    }
+    var uiColor: UIColor { UIColor(red: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba.count > 3 ? rgba[3] : 1) }
+    static func name(_ t: String) -> String { ["pen": "钢笔", "pencil": "铅笔", "marker": "马克笔", "monoline": "单线笔"][t] ?? t }
+}
+
+@Observable
+final class PenPresets {
+    static let shared = PenPresets()
+    var list: [PenPreset] = [] { didSet { if let d = try? JSONEncoder().encode(list) { UserDefaults.standard.set(d, forKey: "pen.presets") }; NotificationCenter.default.post(name: .penPresetsChanged, object: nil) } }
+    init() { if let d = UserDefaults.standard.data(forKey: "pen.presets"), let l = try? JSONDecoder().decode([PenPreset].self, from: d) { list = l } }
+}
+extension Notification.Name { static let penPresetsChanged = Notification.Name("penPresetsChanged") }
+
+struct PenPresetsView: View {
+    @State private var store = PenPresets.shared
+    @State private var type = "monoline"
+    @State private var color = Color.red
+    @State private var width: Double = 3
+    var body: some View {
+        List {
+            Section {
+                ForEach(store.list) { p in
+                    HStack {
+                        Circle().fill(Color(p.uiColor)).frame(width: 20, height: 20)
+                        Text(PenPreset.name(p.type))
+                        Spacer()
+                        Text(String(format: "%.1f", p.width)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
+                .onDelete { store.list.remove(atOffsets: $0) }
+                .onMove { store.list.move(fromOffsets: $0, toOffset: $1) }
+                if store.list.isEmpty { Text("还没有预设").foregroundStyle(.secondary) }
+            } header: { Text("我的笔") } footer: { Text("每个预设在笔盘里单独占一格，手写板和大屏共用。改完后重新打开页面生效。左滑删除，右上角「编辑」排序。") }
+            Section("新增") {
+                Picker("笔", selection: $type) { ForEach(["monoline", "pen", "pencil", "marker"], id: \.self) { Text(PenPreset.name($0)).tag($0) } }
+                ColorPicker("颜色", selection: $color, supportsOpacity: false)
+                HStack { Text("粗细"); Slider(value: $width, in: 0.5...20); Text(String(format: "%.1f", width)).monospacedDigit().frame(width: 40) }
+                Button("加入") {
+                    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                    UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+                    store.list.append(PenPreset(type: type, rgba: [r, g, b, a].map(Double.init), width: CGFloat(width)))
+                }
+            }
+        }
+        .toolbar { EditButton() }
+        .navigationTitle("笔的预设")
+    }
 }
