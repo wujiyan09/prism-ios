@@ -383,7 +383,7 @@ struct MathChapterView: View {
             .navigationTitle(c.label)
             .navigationBarTitleDisplayMode(.inline)
             .noteRecent(.chapter(c.id), c.label, c.isZh ? T("Chinese", "中文") : T("Maths", "数学"))
-            .overlay { if MathContent.shared.loading.contains(c.id) { DownloadOverlay() } }
+            .overlay { if MathContent.shared.loading.contains(c.id) && !MathContent.shared.isOnDisk(c.id) { DownloadOverlay() } }
             .task { await MathContent.shared.ensure(c.id) }
         } else {
             ContentUnavailableView(T("Not found", "找不到"), systemImage: "questionmark")

@@ -87,7 +87,11 @@ final class MathContent {
 
     /// On launch: refresh the index and the small chapter list; refresh downloaded groups that changed.
     @MainActor
+    /// Content update check: at most once every 3 hours (not on every window appear / return to the app).
+    private var lastSync = Date.distantPast
     func sync() async {
+        if hasMeta, Date().timeIntervalSince(lastSync) < 3 * 3600 { return }
+        lastSync = Date()
         if state == .checking { return }
         if case .downloading = state { return }
         state = .checking
@@ -107,12 +111,23 @@ final class MathContent {
     }
 
     var hasMeta: Bool { local("math.json") != nil }
+    func isOnDisk(_ g: String) -> Bool { (remote ?? localIndex)?.files.contains { $0.value.g == g && local($0.key) != nil } ?? false }
 
     /// Make sure a chapter's files are on disk (downloads on first open).
     @MainActor
     func ensure(_ g: String) async {
         used[g] = Date().timeIntervalSince1970
         if isDownloaded(g) && MathLibrary.shared.isLoaded(g) { return }
+        // Already on disk (maybe an older version): show it right away, never a download screen; refresh quietly.
+        let onDisk = (remote ?? localIndex)?.files.contains { $0.value.g == g && local($0.key) != nil } ?? false
+        if onDisk {
+            if !MathLibrary.shared.isLoaded(g) { MathLibrary.shared.reloadChapter(g); MathMC.shared.reloadChapter(g) }
+            guard !loading.contains(g), let r = remote else { return }
+            loading.insert(g)
+            defer { loading.remove(g) }
+            if (try? await download(group: g, index: r, progress: false)) != nil { MathLibrary.shared.reloadChapter(g); MathMC.shared.reloadChapter(g) }
+            return
+        }
         guard !loading.contains(g) else { return }
         loading.insert(g)
         defer { loading.remove(g) }

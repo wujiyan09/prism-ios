@@ -445,8 +445,10 @@ enum InkPaletteHost {
                 drags[id] = d
                 hosts[id] = h
             }
-            if h.view.superview !== w { w.addSubview(h.view) }
-            w.bringSubviewToFront(h.view)
+            // In the content layer (root view controller's view): sheets, popovers, alerts and menus cover it.
+            let parent: UIView = w.rootViewController?.view ?? w
+            if h.view.superview !== parent { parent.addSubview(h.view) }
+            parent.bringSubviewToFront(h.view)
             if p.overrideUserInterfaceStyle != .unspecified { h.overrideUserInterfaceStyle = p.overrideUserInterfaceStyle }
             if !(drags[id]?.dragging ?? false) { place(h.view, in: w) }
         }
@@ -480,6 +482,7 @@ struct InkPalette: View {
     weak var canvas: InkCanvas?
     @State private var presets = InkPresets.shared
     @State private var editing = false
+    @State private var quick: UUID?
     @State private var tick = 0
 
     var body: some View {
@@ -508,7 +511,7 @@ struct InkPalette: View {
             Button { canvas?.redo() } label: { Image(systemName: "arrow.uturn.forward") }.keyboardShortcut("z", modifiers: [.command, .shift])
             Divider().frame(height: 32)
             ForEach(presets.presets) { p in
-                Button { picker.select(p) } label: {
+                Button { if t.presetID == p.id { quick = p.id } else { picker.select(p) } } label: {
                     ZStack {
                         Circle().fill(Color(p.color)).frame(width: 34, height: 34)
                         Image(systemName: p.kind.icon).font(.system(size: 15, weight: .bold)).foregroundStyle(.white).shadow(radius: 1)
@@ -517,6 +520,9 @@ struct InkPalette: View {
                     .overlay(Circle().stroke(t.presetID == p.id ? Color.accentColor : .clear, lineWidth: 2))
                 }
                 .contextMenu { Button("编辑笔", systemImage: "slider.horizontal.3") { editing = true } }
+                .popover(isPresented: Binding(get: { quick == p.id }, set: { if !$0 { quick = nil } })) {
+                    QuickPen(id: p.id, picker: picker).presentationCompactAdaptation(.popover)
+                }
                 .accessibilityLabel("\(p.kind.title)")
             }
             Divider().frame(height: 32)
@@ -556,7 +562,7 @@ struct InkPresetEditor: View {
                             }
                             HStack {
                                 Text("粗细 \(String(format: "%.1f", p.width))").font(.caption.monospacedDigit()).frame(width: 70, alignment: .leading)
-                                Slider(value: $p.width, in: p.kind == .marker ? 4...40 : 0.5...20)
+                                Slider(value: $p.width, in: p.kind == .marker ? 4...40 : 0.3...20, step: p.width < 5 ? 0.1 : 0.5)
                             }
                         }
                         .onChange(of: p) { _, n in if picker.selectedTool.presetID == n.id { picker.select(n) } }
@@ -1397,5 +1403,51 @@ extension View {
     @ViewBuilder func glassBackground<S: Shape>(_ s: S) -> some View {
         if #available(iOS 26.0, *) { self.glassEffect(.regular.interactive(), in: s) }
         else { self.background(.ultraThinMaterial, in: s).shadow(color: .black.opacity(0.15), radius: 6, y: 2) }
+    }
+}
+
+
+/// Second tap on the selected pen: colours + width right there, editing that saved pen.
+struct QuickPen: View {
+    let id: UUID
+    let picker: InkToolPicker
+    @State private var presets = InkPresets.shared
+    private let swatches: [UIColor] = [.black, .darkGray, .systemBlue, .systemRed, .systemGreen, .systemOrange, .systemPurple, .systemYellow, .systemPink, .systemTeal]
+    var body: some View {
+        if let i = presets.presets.firstIndex(where: { $0.id == id }) {
+            let p = presets.presets[i]
+            VStack(alignment: .leading, spacing: 12) {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(30), spacing: 10), count: 5), spacing: 10) {
+                    ForEach(swatches, id: \.self) { c in
+                        Button { set { $0.color = c } } label: {
+                            Circle().fill(Color(c)).frame(width: 28, height: 28)
+                                .overlay(Circle().stroke(p.color == c ? Color.accentColor : .clear, lineWidth: 3).padding(-3))
+                        }.buttonStyle(.plain)
+                    }
+                }
+                ColorPicker("自定义颜色", selection: Binding(get: { Color(p.color) }, set: { c in set { $0.color = UIColor(c) } }))
+                HStack {
+                    Text(String(format: "%.1f", p.width)).font(.callout.monospacedDigit()).frame(width: 40, alignment: .leading)
+                    Slider(value: Binding(get: { p.width }, set: { v in set { $0.width = v } }),
+                           in: p.kind == .marker ? 4...40 : 0.3...20, step: p.width < 5 ? 0.1 : 0.5)
+                }
+                HStack(spacing: 14) {
+                    ForEach(p.kind == .marker ? [8.0, 14, 20, 28] : [0.8, 1.5, 2.5, 4], id: \.self) { w in
+                        Button { set { $0.width = w } } label: {
+                            Circle().fill(Color.primary).frame(width: max(4, min(24, w * (p.kind == .marker ? 0.8 : 4))), height: max(4, min(24, w * (p.kind == .marker ? 0.8 : 4))))
+                                .frame(width: 30, height: 30)
+                                .background(abs(p.width - w) < 0.05 ? Color.accentColor.opacity(0.25) : .clear, in: Circle())
+                        }.buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(16)
+            .frame(width: 260)
+        }
+    }
+    private func set(_ f: (inout InkPreset) -> Void) {
+        guard let i = presets.presets.firstIndex(where: { $0.id == id }) else { return }
+        f(&presets.presets[i])
+        picker.select(presets.presets[i])
     }
 }
