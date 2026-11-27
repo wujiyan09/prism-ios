@@ -29,7 +29,15 @@ struct RootView: View {
             Reminders.shared.openExam = nil
         }
         .focusedSceneValue(\.sectionSelection, Binding(get: { scene.section }, set: { scene.section = $0 }))
-        .onAppear { KeyRouter.shared.section = Binding(get: { scene.section }, set: { scene.section = $0 }) }
+        .onAppear {
+            KeyRouter.shared.section = Binding(get: { scene.section }, set: { scene.section = $0 })
+            // Launch: reopen the document that was open last time; with none (or it was deleted), start on 最近使用.
+            if !RootRestore.done {
+                RootRestore.done = true
+                if let (s, r) = LastOpen.route() { scene.section = s; var p = NavigationPath(); p.append(r); scene.paths[s] = p }
+                else { scene.section = .recent }
+            }
+        }
         .fullScreenCover(item: Binding(get: { scene.session }, set: { scene.session = $0 })) { s in
             SessionView(session: s)
                 .environment(scene)
@@ -192,6 +200,8 @@ struct RouteView: View {
         case .section(let s): SectionRoot(section: s)
         case .paper2(let code): Paper2View(code: code)
         case .pdf(let u, let title): PDFPage(url: u, title: title)
+        case .note(let id): NoteDocView(id: id)
+        case .imported(let id): ImportPaperView(id: id)
         case .mathBook(let id): MathBookView(bookID: id)
         case .mathChapter(let id): MathChapterView(chapterID: id)
         case .mathCards(let id, let i): MathCardPager(chapterID: id, start: i)
@@ -478,6 +488,10 @@ struct SettingsView: View {
     var body: some View {
         let T = Tr(en: lang == "en")
         Form {
+            Section(T("Writing & AI", "书写与 AI")) {
+                NavigationLink { PenPresetsView() } label: { Label(T("Pen presets", "笔的预设"), systemImage: "pencil.tip") }
+                NavigationLink { DSPromptEditor() } label: { Label(T("DeepSeek system prompt", "DeepSeek 系统提示词"), systemImage: "text.quote") }
+            }
             Section {
                 NavigationLink {
                     AccountView()
@@ -681,3 +695,5 @@ struct PadSyncPicker: View {
         }
     }
 }
+
+@MainActor enum RootRestore { static var done = false }

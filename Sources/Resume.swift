@@ -158,7 +158,9 @@ struct RecentActivityView: View {
                 .listRowBackground(Color.cardBackground)
             }
         }
-        .appScreen()
+        .listStyle(.insetGrouped)
+        .appList()
+        .tint(AppSection.recent.tint)
         .navigationTitle("最近使用")
         .sheet(item: $result) { r in NavigationStack { RunDetailView(run: r).toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { result = nil } } } } }
     }
@@ -232,6 +234,8 @@ struct RecentActivityView: View {
         case .mathQuiz(let q): r = .mathQuiz(q)
         case .daily(let d): r = .daily(d)
         case .ppSet(let s): r = .ppSet(s)
+        case .note(let id): r = .note(id)
+        case .imported(let id): r = .imported(id)
         case .session: r = nil
         }
         if let r {

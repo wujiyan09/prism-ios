@@ -217,6 +217,8 @@ enum Route: Hashable {
     case ppSet(String)
     case awardChapter(String)
     case longSet(String, String?)
+    case note(String)
+    case imported(String)
 }
 
 enum ToolKind: String, CaseIterable, Hashable, Identifiable {
@@ -254,7 +256,9 @@ enum ToolKind: String, CaseIterable, Hashable, Identifiable {
 /// Per-window state: current section, navigation paths and the active practice session.
 @Observable
 final class SceneModel {
-    var section: AppSection = .learn
+    var section: AppSection = AppSection(rawValue: UserDefaults.standard.string(forKey: "last.section") ?? "") ?? .recent {
+        didSet { UserDefaults.standard.set(section.rawValue, forKey: "last.section") }
+    }
     var paths: [AppSection: NavigationPath] = [:]
     var session: Session? {
         didSet {

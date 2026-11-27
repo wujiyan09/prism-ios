@@ -61,7 +61,12 @@ struct DSPart { var text: String; var images: [UIImage] = [] }
 enum DSClient {
     static let endpoint = URL(string: "https://api.deepseek.com/chat/completions")!
 
-    static let systemPrompt = """
+    /// The prompt actually sent: the edited one from 设置 if set, else the built-in default.
+    static var systemPrompt: String {
+        let c = UserDefaults.standard.string(forKey: "ds.systemPrompt") ?? ""
+        return c.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? defaultSystemPrompt : c
+    }
+    static let defaultSystemPrompt = """
     你是一位熟悉香港中学文凭试（HKDSE）的私人导师，学生是香港 S5 学生，科目包括 ICT、Mathematics（Core 与 M2）、Physics、Chemistry 和中文。
     规则：
     - 默认用简体中文回答；英文专业名词、课本术语、程序代码保留英文。学生用英文提问就用英文答。
@@ -1190,9 +1195,17 @@ struct DSInput: UIViewRepresentable {
     @Binding var text: String
     @Binding var focused: Bool
     var submit: () -> Void
-    static var holding = false
+    /// "DeepSeek input keeps focus" — only true while that text view is really on screen
+    /// (a stuck flag used to block every canvas from taking the pen).
+    static var holding: Bool {
+        get { _holding && (live?.window != nil) }
+        set { _holding = newValue }
+    }
+    private static var _holding = false
+    static weak var live: UITextView?
     func makeUIView(context: Context) -> UITextView {
         let v = UITextView()
+        DSInput.live = v
         v.font = .preferredFont(forTextStyle: .body); v.backgroundColor = .clear
         v.isScrollEnabled = false; v.textContainerInset = UIEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
         v.returnKeyType = .send; v.delegate = context.coordinator
@@ -1248,6 +1261,29 @@ struct DSInput: UIViewRepresentable {
             let toPad = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.contains { $0 !== v.window && $0.isKeyWindow }
             if !toPad { DSInput.holding = false; if parent.focused { parent.focused = false } }
             if v.markedTextRange == nil { parent.text = v.text }
+        }
+    }
+}
+
+struct DSPromptEditor: View {
+    @AppStorage("ds.systemPrompt") private var custom = ""
+    @State private var text = ""
+    @State private var confirmReset = false
+    var body: some View {
+        Form {
+            Section {
+                TextEditor(text: $text).font(.system(.callout, design: .monospaced)).frame(minHeight: 380)
+            } footer: { Text(custom.isEmpty ? "现在用的是默认提示词。" : "现在用的是你改过的提示词。") }
+            Section {
+                Button("保存") { custom = text == DSClient.defaultSystemPrompt ? "" : text }
+                    .disabled(text == (custom.isEmpty ? DSClient.defaultSystemPrompt : custom))
+                Button("恢复默认", role: .destructive) { confirmReset = true }
+            }
+        }
+        .navigationTitle("DeepSeek 系统提示词")
+        .onAppear { text = custom.isEmpty ? DSClient.defaultSystemPrompt : custom }
+        .confirmationDialog("恢复默认提示词？", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("恢复默认", role: .destructive) { custom = ""; text = DSClient.defaultSystemPrompt }
         }
     }
 }

@@ -1,3 +1,4 @@
+import PencilKit
 import SwiftUI
 import Observation
 
@@ -150,9 +151,26 @@ struct PagerCommands: Commands {
                     .disabled(pager?.choose == nil)
             }
             Divider()
-            Button(T("Submit", "交卷")) { pager?.submit?() }
+            Button(T("Submit", "交卷")) {
+                if let f = pager?.submit { f() } else if PadHub.shared.canSubmit { NotificationCenter.default.post(name: .padSubmit, object: nil) }
+            }
                 .keyboardShortcut(.return, modifiers: .command)
         }
+        CommandMenu(T("Tools", "工具")) {
+            Button(T("Pen", "钢笔")) { ToolSync.shared.select(PKInkingTool(.pen, color: .black, width: 2)) }.keyboardShortcut("1", modifiers: .command)
+            Button(T("Pencil", "铅笔")) { ToolSync.shared.select(PKInkingTool(.pencil, color: .darkGray, width: 2)) }.keyboardShortcut("2", modifiers: .command)
+            Button(T("Marker", "马克笔")) { ToolSync.shared.select(PKInkingTool(.marker, color: .systemYellow, width: 15)) }.keyboardShortcut("3", modifiers: .command)
+            Button(T("Eraser", "橡皮擦")) { ToolSync.shared.select(PKEraserTool(.vector)) }.keyboardShortcut("e", modifiers: .command)
+            Button(T("Lasso", "套索")) { ToolSync.shared.select(PKLassoTool()) }.keyboardShortcut("l", modifiers: .command)
+            Divider()
+            Button(T("Show/hide pad tools", "手写板显示/隐藏工具")) { NotificationCenter.default.post(name: .padToggleTools, object: nil) }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+            Button(T("Add page", "加一页")) { if let s = PadHub.shared.source { NotificationCenter.default.post(name: .padAddPage, object: s.owner) } }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            Button(T("Ask DeepSeek", "问 DeepSeek")) { NotificationCenter.default.post(name: .padAskDS, object: nil) }
+                .keyboardShortcut("k", modifiers: .command)
+        }
+
     }
 }
 

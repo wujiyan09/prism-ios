@@ -573,6 +573,7 @@ struct ImportPaperView: View {
         } message: { Text("用 deepseek-flash 逐页看图拆题，已解析的页会缓存，不会重复收费。") }
         .alert("解析出错", isPresented: Binding(get: { parseError != nil }, set: { if !$0 { parseError = nil } })) {} message: { Text(parseError ?? "") }
         .workingSession(sheet, clearOnLeave: false)
+        .noteRecent(.imported(id), p?.name ?? "导入的试卷", "导入")
         .task {
             // Open off the main thread; the page appears as soon as PDFKit has the document.
             let s = store, i = id
@@ -610,6 +611,7 @@ struct ImportPaperView: View {
         PDFKitView(doc: d, onPage: { if !isMS { page = $0 } }, ink: isMS ? msInk : ink,
                    inkKey: "imp:" + id + (isMS ? "-ms" : ""), inkTitle: (p?.name ?? "") + (isMS ? " · 评分标准" : ""), ctl: isMS ? msCtl : vctl)
             .id((isMS ? "ms" : "p") + (swap ? "1" : "0"))
+            .ignoresSafeArea(edges: .bottom)
             .overlay(alignment: .topTrailing) { ViewHUD(ctl: isMS ? msCtl : vctl) }
             .deepSeek(pageContext(d, isMS: isMS))
     }

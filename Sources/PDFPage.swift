@@ -119,6 +119,26 @@ struct PDFKitView: UIViewRepresentable {
         }
         @objc func padAdd(_ n: Notification) { if !owner.isEmpty, (n.object as? String) == owner { addPage() } }
         var userMoved = Date.distantPast
+        // Reopening shows the same page, spot and zoom as last time.
+        var posKey = ""
+        private var posSaveAt = Date.distantPast
+        private var restoring = true
+        func rememberPos() {
+            guard !posKey.isEmpty, !restoring, let v = view, let p = v.currentPage, let d = v.document, v.scaleFactorForSizeToFit > 0 else { return }
+            guard Date().timeIntervalSince(posSaveAt) > 0.3 else { return }
+            posSaveAt = Date()
+            let pt = v.convert(CGPoint(x: v.bounds.minX, y: v.bounds.minY + v.safeAreaInsets.top), to: p)
+            UserDefaults.standard.set([Double(d.index(for: p)), Double(pt.x), Double(pt.y), Double(v.scaleFactor / v.scaleFactorForSizeToFit)], forKey: posKey)
+        }
+        func restorePos() {
+            guard !posKey.isEmpty, let a = UserDefaults.standard.array(forKey: posKey) as? [Double], a.count == 4 else { restoring = false; return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self, let v = self.view, let d = v.document, let p = d.page(at: Int(a[0])) else { self?.restoring = false; return }
+                if a[3] > 0.2, v.scaleFactorForSizeToFit > 0, abs(a[3] - 1) > 0.01 { v.autoScales = false; v.scaleFactor = v.scaleFactorForSizeToFit * CGFloat(a[3]); v.layoutIfNeeded() }
+                v.go(to: PDFDestination(page: p, at: CGPoint(x: a[1], y: a[2])))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.restoring = false }
+            }
+        }
         var kvo: NSKeyValueObservation?
         var vpObs: NSObjectProtocol?
         /// Pad moved within a page: show the same rect.
@@ -218,14 +238,16 @@ struct PDFKitView: UIViewRepresentable {
             }
             DispatchQueue.main.async { [weak v, weak co] in
                 guard let v, let sv = Self.scroller(in: v) else { return }
-                co?.kvo = sv.observe(\.contentOffset, options: [.new]) { _, _ in DispatchQueue.main.async { co?.mainScrolled(); co?.updateAdd() } }
+                co?.kvo = sv.observe(\.contentOffset, options: [.new]) { _, _ in DispatchQueue.main.async { co?.mainScrolled(); co?.updateAdd(); co?.rememberPos() } }
                 co?.updateAdd()
             }
             NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coord.padPage(_:)), name: .padPage, object: nil)
             PadHub.shared.activate(src)
         }
         context.coordinator.view = v
+        context.coordinator.posKey = inkKey.isEmpty ? "" : "pos.pdf:" + inkKey
         v.document = doc
+        context.coordinator.restorePos()
         if let ctl {
             let c = context.coordinator
             c.ctl = ctl

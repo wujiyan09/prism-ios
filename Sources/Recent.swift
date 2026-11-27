@@ -17,6 +17,8 @@ enum RecentTarget: Codable, Hashable {
     case daily(String)
     case ppSet(String)
     case session            // a practice session still open in this run of the app
+    case note(String)
+    case imported(String)
 }
 
 struct RecentEntry: Codable, Hashable {
@@ -131,6 +133,8 @@ struct RecentSection: View {
         case .daily: return "pencil.and.list.clipboard"
         case .ppSet: return "doc.text"
         case .session: return "play.fill"
+        case .note: return "note.text"
+        case .imported: return "doc.richtext"
         }
     }
 
@@ -150,6 +154,8 @@ struct RecentSection: View {
         case .mathQuiz(let q): r = .mathQuiz(q)
         case .daily(let d): r = .daily(d)
         case .ppSet(let s): r = .ppSet(s)
+        case .note(let id): r = .note(id)
+        case .imported(let id): r = .imported(id)
         case .session:
             if let s = store.sessions[section] { scene.session = s }
             r = nil
@@ -175,15 +181,52 @@ private struct NoteRecent: ViewModifier {
                 case .mathQuiz, .session, .exam, .tool: break
                 default:
                     let subj: String
-                    switch target { case .pdf: subj = "pdf"; case .daily: subj = "daily"; default: subj = RecentStore.subject(of: target) ?? "pdf" }
+                    switch target { case .pdf, .imported: subj = "pdf"; case .daily: subj = "daily"; case .note: subj = "notes"; default: subj = RecentStore.subject(of: target) ?? "pdf" }
+                    LastOpen.set(target, section: scene.section)
                     ResumeStore.shared.touch(Activity(id: "t:" + String(describing: target), title: title, subject: subj, target: target))
                 }
             }
             .onChange(of: target) { _, t in RecentStore.shared.note(scene.section, t, title, detail) }
+            .onDisappear { LastOpen.clear(target) }
     }
 }
 extension View {
     func noteRecent(_ target: RecentTarget, _ title: String, _ detail: String = "") -> some View {
         modifier(NoteRecent(target: target, title: title, detail: detail))
+    }
+}
+
+/// The document open when the app was last closed, so a relaunch reopens it.
+enum LastOpen {
+    static func set(_ t: RecentTarget, section: AppSection) {
+        guard let d = try? JSONEncoder().encode(t) else { return }
+        UserDefaults.standard.set(d, forKey: "last.target"); UserDefaults.standard.set(section.rawValue, forKey: "last.targetSection")
+    }
+    static func clear(_ t: RecentTarget) {
+        // Only when the app is active: views also disappear while the app is being closed.
+        guard UIApplication.shared.applicationState == .active,
+              let d = UserDefaults.standard.data(forKey: "last.target"), let cur = try? JSONDecoder().decode(RecentTarget.self, from: d), cur == t else { return }
+        UserDefaults.standard.removeObject(forKey: "last.target")
+    }
+    /// Route to reopen at launch (nil if none, or the document is gone).
+    static func route() -> (AppSection, Route)? {
+        guard let d = UserDefaults.standard.data(forKey: "last.target"), let t = try? JSONDecoder().decode(RecentTarget.self, from: d) else { return nil }
+        let s = AppSection(rawValue: UserDefaults.standard.string(forKey: "last.targetSection") ?? "") ?? .recent
+        switch t {
+        case .note(let id): return NoteStore.shared.docs[id] == nil ? nil : (s, .note(id))
+        case .imported(let id): return ImportStore.shared.papers[id] == nil ? nil : (s, .imported(id))
+        case .chapter(let c): return (s, .chapter(c))
+        case .cards(let c, let i): return (s, .cards(c, i))
+        case .mathCards(let c, let i): return (s, .mathCards(c, i))
+        case .mathItem(let i): return (s, .mathItem(i))
+        case .mathQuiz(let q): return (s, .mathQuiz(q))
+        case .daily(let d): return (s, .daily(d))
+        case .ppSet(let p): return (s, .ppSet(p))
+        case .pdf(let u, let tt): return URL(string: u).map { (s, .pdf($0, tt)) }
+        case .year(let y): return (s, .year(y))
+        case .paper2(let c): return (s, .paper2(c))
+        case .practical(let k): return (s, .practical(k))
+        default: return nil
+        }
     }
 }

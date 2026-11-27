@@ -671,6 +671,7 @@ struct NoteDocView: View {
         }
         .appScreen()
         .navigationTitle(doc?.title ?? "")
+        .noteRecent(.note(id), doc?.title ?? "笔记", "笔记")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .deepSeek(ctx)

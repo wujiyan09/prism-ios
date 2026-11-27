@@ -42,6 +42,15 @@ final class PadHub {
     /// A quiz/paper on the main window that can be handed in (交卷) from the pad.
     var canSubmit = false
     var mcSelected: Int?
+    /// padOpen, but also checking the pad window still exists and is in the foreground
+    /// (closing the pad window doesn't always run onDisappear, which left padOpen stuck on).
+    var padReallyOpen: Bool {
+        guard padOpen else { return false }
+        guard let s = padScene else { return true }   // not attached yet: trust the flag
+        let alive = UIApplication.shared.connectedScenes.contains { $0 === s } && (s.activationState == .foregroundActive || s.activationState == .foregroundInactive)
+        if !alive { DispatchQueue.main.async { if self.padOpen { self.padOpen = false } } }
+        return alive
+    }
     var padOpen = false { didSet { if padOpen != oldValue { if !padOpen { latest = [:] }; NotificationCenter.default.post(name: .padState, object: nil) } } }
     /// Id of the stroke being previewed; cleared when its PKStroke commits or the touch is cancelled.
     @ObservationIgnored var strokeSeq = 0
@@ -1230,7 +1239,7 @@ final class QuietCanvas: PKCanvasView {
         }
     }
     override func becomeFirstResponder() -> Bool {
-        if !isPadCanvas && (PadHub.shared.padOpen || DSInput.holding) { return false }
+        if !isPadCanvas && (PadHub.shared.padReallyOpen || DSInput.holding) { return false }
         return super.becomeFirstResponder()
     }
     deinit { obs.forEach { NotificationCenter.default.removeObserver($0) } }
@@ -1285,6 +1294,12 @@ final class ToolSync: NSObject, PKToolPickerObserver {
         }
     }
     var padPickers: [PKToolPicker] = []
+    /// Keyboard shortcut: same tool on every picker.
+    func select(_ t: PKTool) {
+        busy = true; defer { busy = false }
+        for p in pickers { p.selectedTool = t }
+        NotificationCenter.default.post(name: .toolChanged, object: nil)
+    }
     func unregister(_ p: PKToolPicker) { p.removeObserver(self); pickers.removeAll { $0 === p } }
     func toolPickerSelectedToolDidChange(_ src: PKToolPicker) {
         NotificationCenter.default.post(name: .toolChanged, object: nil)

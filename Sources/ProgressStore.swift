@@ -144,7 +144,8 @@ struct RunHistoryView: View {
                     .listRowBackground(Color.cardBackground)
             }
         }
-        .appScreen()
+        .listStyle(.insetGrouped)
+        .appList()
         .navigationTitle(filter == nil ? "练习记录" : "成绩")
     }
 }
