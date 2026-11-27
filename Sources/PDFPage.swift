@@ -94,7 +94,9 @@ struct PDFKitView: UIViewRepresentable {
         @objc func changed(_ n: Notification) {
             guard let v = n.object as? PDFView, let p = v.currentPage, let d = v.document else { return }
             let i = d.index(for: p)
-            PadHub.shared.setIndex(owner, i)
+            // While following the pad's offset, the page comes from the pad: don't send it back (that ping-pong made the
+            // page number flicker and stuttered at page boundaries).
+            if Date().timeIntervalSince(PadHub.shared.mainApplied) > 0.4 { PadHub.shared.setIndex(owner, i) }
             ctl?.report(page: i, of: d.pageCount)
             DispatchQueue.main.async { self.onPage?(i) }
         }
@@ -134,7 +136,7 @@ struct PDFKitView: UIViewRepresentable {
             if let sv = PDFKitView.scroller(in: v) {
                 let pt = v.convert(CGPoint(x: b.minX + r.minX, y: b.maxY - r.minY), from: p)
                 let dy = pt.y
-                let dx = PadHub.syncZoom ? pt.x : 0
+                let dx = pt.x
                 let maxY = max(-sv.adjustedContentInset.top, sv.contentSize.height - sv.bounds.height + sv.adjustedContentInset.bottom)
                 let maxX = max(0, sv.contentSize.width - sv.bounds.width)
                 let o = CGPoint(x: min(maxX, max(0, sv.contentOffset.x + dx)), y: min(maxY, max(-sv.adjustedContentInset.top, sv.contentOffset.y + dy)))

@@ -157,6 +157,8 @@ final class PadHub {
     static var syncZoom: Bool { shared.syncMode == 2 }
     /// Page the pad shows (paged sources); main window follows.
     var padIndex = 0
+    /// padIndex was derived from a scroll offset (leader or follower): don't turn it into a separate page jump.
+    @ObservationIgnored var indexFromOffset = false
     @ObservationIgnored private var posListeners: [String: [(id: ObjectIdentifier, f: (CGFloat, CGFloat) -> Void)]] = [:]
     /// Pad's top y in logical units (continuous sources).
     /// Pad is the master: the main window always follows the pad's viewport (top y, visible width; sheet units).
@@ -710,10 +712,11 @@ struct PadView: View {
         .onChange(of: phase) { _, p in hub.padOpen = p != .background }
         .onChange(of: hub.source?.owner) { _, _ in if hub.mainFollows { hub.padIndex = hub.index } }
         .onChange(of: hub.padIndex) { _, i in
+            if hub.indexFromOffset { hub.indexFromOffset = false; return }   // offset sync already moved the other window
             guard hub.mainFollows, let o = hub.source?.owner, i != hub.index else { return }
             NotificationCenter.default.post(name: .padPage, object: o, userInfo: ["i": i])
         }
-        .onChange(of: hub.index) { _, i in if hub.mainFollows && hub.padIndex != i { hub.padIndex = i } }
+        .onChange(of: hub.index) { _, i in if hub.mainFollows && hub.padIndex != i { hub.indexFromOffset = true; hub.padIndex = i } }
         .onChange(of: hub.mainFollows) { _, on in if on { hub.padIndex = hub.index } }
         .onChange(of: hub.source?.owner, initial: true) { _, o in zlock = ZoomLock.get(o ?? "") }
         .onReceive(NotificationCenter.default.publisher(for: .zoomLockChanged)) { n in
@@ -1309,7 +1312,7 @@ struct PadPagedCanvas: UIViewRepresentable {
             if user { userScrolled = Date() }
             if pi != shownIndex, user {
                 shownIndex = pi
-                DispatchQueue.main.async { self.parent.onPage(pi) }
+                DispatchQueue.main.async { PadHub.shared.indexFromOffset = true; self.parent.onPage(pi) }
             }
             guard user, PadHub.shared.mainFollows else { return }
             // Visible rect in the units of the page at the top of the view.
@@ -1333,8 +1336,10 @@ struct PadPagedCanvas: UIViewRepresentable {
             }
             let z = sv.zoomScale
             let maxY = max(0, sv.contentSize.height - sv.bounds.height)
-            sv.contentOffset = CGPoint(x: sv.contentOffset.x, y: min(maxY, max(0, (tops[i] + r.minY * f) * z)))
-            if shownIndex != i { shownIndex = i; DispatchQueue.main.async { self.parent.onPage(i) } }
+            let maxX = max(0, sv.contentSize.width - sv.bounds.width)
+            let x = r.minX * f * z - sv.contentInset.left
+            sv.contentOffset = CGPoint(x: min(maxX, max(-sv.contentInset.left, x)), y: min(maxY, max(0, (tops[i] + r.minY * f) * z)))
+            if shownIndex != i { shownIndex = i; DispatchQueue.main.async { PadHub.shared.indexFromOffset = true; self.parent.onPage(i) } }
         }
     }
 }
