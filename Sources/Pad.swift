@@ -122,12 +122,18 @@ final class PadHub {
     }
     @ObservationIgnored private var liveListeners: [String: [(id: ObjectIdentifier, f: (Live?) -> Void)]] = [:]
     @ObservationIgnored private var hoverAt: [String: CFTimeInterval] = [:]
+    /// Refresh rate of the window that shows the mirror: the external display's scene if there is one, else this device.
+    static var receiverFPS: Int {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let ext = scenes.first { $0.screen != UIScreen.main }
+        return max(30, (ext?.screen ?? UIScreen.main).maximumFramesPerSecond)
+    }
     func live(_ ch: String, _ l: Live?) {
         guard let ls = liveListeners[ch], !ls.isEmpty else { return }   // nobody showing it: no work
         if l != nil, ch.hasPrefix("hover:") {
-            // Hover dot: at most once per display frame (≥ 90 Hz).
+            // Hover dot: at most once per display frame of the screen showing it.
             let now = CACurrentMediaTime()
-            if now - (hoverAt[ch] ?? 0) < 1.0 / Double(max(90, UIScreen.main.maximumFramesPerSecond)) * 0.9 { return }
+            if now - (hoverAt[ch] ?? 0) < 0.9 / Double(PadHub.receiverFPS) { return }
             hoverAt[ch] = now
         }
         for x in ls { x.f(l) }
