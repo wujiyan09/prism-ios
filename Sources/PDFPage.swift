@@ -207,6 +207,37 @@ struct PDFKitView: UIViewRepresentable {
             ])
             context.coordinator.addButton = add
             ink.reset(key: inkKey, title: inkTitle)
+            PDFMargins.apply(doc, key: inkKey)
+            let mb = UIButton(configuration: .gray())
+            mb.configuration?.image = UIImage(systemName: "arrow.left.and.right.square")
+            mb.configuration?.cornerStyle = .capsule
+            mb.accessibilityLabel = "页边距"
+            mb.showsMenuAsPrimaryAction = true
+            let key = inkKey, title = inkTitle
+            mb.menu = UIMenu(title: "页边距（可书写）", children: [UIDeferredMenuElement.uncached { done in
+                let m = PDFMargins.get(key)
+                func side(_ name: String, _ cur: CGFloat, _ f: @escaping (CGFloat) -> Void) -> UIMenu {
+                    UIMenu(title: name, options: .displayInline, children: PDFMargins.steps.map { s in
+                        UIAction(title: s == 0 ? "\(name) 无" : "\(name) \(Int(s))", state: abs(s - cur) < 0.5 ? .on : .off) { _ in f(s) }
+                    })
+                }
+                let change: (CGFloat, CGFloat) -> Void = { [weak v, weak ink] l, r in
+                    guard let v, let d = v.document else { return }
+                    PDFMargins.set(key, l: l, r: r, doc: d, title: title)
+                    ink?.reload()
+                    let at = v.currentPage.flatMap { d.index(for: $0) } ?? 0
+                    v.document = nil; v.document = d
+                    if let p = d.page(at: at) { v.go(to: p) }
+                    PadHub.shared.activate(PadSources.pdf(d, key: key, title: title), force: true)
+                }
+                done([side("左", m.l) { change($0, PDFMargins.get(key).r) }, side("右", m.r) { change(PDFMargins.get(key).l, $0) }])
+            }])
+            v.addSubview(mb)
+            mb.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                mb.leadingAnchor.constraint(equalTo: v.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+                mb.bottomAnchor.constraint(equalTo: v.safeAreaLayoutGuide.bottomAnchor, constant: -16)
+            ])
             v.pageOverlayViewProvider = ink
             v.isInMarkupMode = true
             let src = PadSources.pdf(doc, key: inkKey, title: inkTitle)
@@ -218,7 +249,18 @@ struct PDFKitView: UIViewRepresentable {
             }
             DispatchQueue.main.async { [weak v, weak co] in
                 guard let v, let sv = Self.scroller(in: v) else { return }
-                co?.kvo = sv.observe(\.contentOffset, options: [.new]) { _, _ in DispatchQueue.main.async { co?.mainScrolled(); co?.updateAdd() } }
+                // Reopening restores the last zoom + scroll position of this document.
+                let posKey = "pdf.pos." + inkKey
+                if let p = UserDefaults.standard.array(forKey: posKey) as? [Double], p.count == 3, p[0] > 0 {
+                    v.scaleFactor = min(v.maxScaleFactor, max(v.minScaleFactor, CGFloat(p[0])))
+                    DispatchQueue.main.async { [weak sv] in sv?.contentOffset = CGPoint(x: p[1], y: p[2]) }
+                }
+                co?.kvo = sv.observe(\.contentOffset, options: [.new]) { [weak v] s, _ in
+                    DispatchQueue.main.async { co?.mainScrolled(); co?.updateAdd() }
+                    if let v, s.isTracking || s.isDragging || s.isDecelerating || s.isZooming {
+                        UserDefaults.standard.set([Double(v.scaleFactor), Double(s.contentOffset.x), Double(s.contentOffset.y)], forKey: posKey)
+                    }
+                }
                 co?.updateAdd()
             }
             NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coord.padPage(_:)), name: .padPage, object: nil)

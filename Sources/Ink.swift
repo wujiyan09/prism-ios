@@ -69,6 +69,9 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, InkCanvasDelegate
         }
     }
 
+    /// Pages changed size (margins): rebuild every overlay.
+    func reload() { canvases = [:]; links.values.forEach { $0.tearDown() }; links = [:] }
+
     func reset(key: String, title: String) {
         if key != self.key { canvases = [:]; links.values.forEach { $0.tearDown() }; links = [:] }
         self.key = key; self.title = title
@@ -163,4 +166,47 @@ enum PickerRestore {
     }
     private static var tokenKey: UInt8 = 0
     final class Token { let t: NSObjectProtocol; init(_ t: NSObjectProtocol) { self.t = t }; deinit { NotificationCenter.default.removeObserver(t) } }
+}
+
+
+// MARK: - Manual left/right margins on PDFs (blank writable paper beside the page). Saved per document.
+
+enum PDFMargins {
+    static let steps: [CGFloat] = [0, 40, 80, 120, 160, 240]
+    private static var originals: [ObjectIdentifier: CGRect] = [:]
+    static func get(_ key: String) -> (l: CGFloat, r: CGFloat) {
+        let a = UserDefaults.standard.array(forKey: "pdf.margins." + key) as? [Double] ?? []
+        return a.count == 2 ? (CGFloat(a[0]), CGFloat(a[1])) : (0, 0)
+    }
+    private static func base(_ p: PDFKit.PDFPage) -> CGRect {
+        let id = ObjectIdentifier(p)
+        if let r = originals[id] { return r }
+        let r = p.bounds(for: .mediaBox); originals[id] = r; return r
+    }
+    /// Widen every page's boxes by the saved margins (the PDF file itself is untouched).
+    static func apply(_ doc: PDFDocument, key: String) {
+        let m = get(key)
+        for i in 0..<doc.pageCount {
+            guard let p = doc.page(at: i) else { continue }
+            let b = base(p)
+            let r = CGRect(x: b.minX - m.l, y: b.minY, width: b.width + m.l + m.r, height: b.height)
+            p.setBounds(r, for: .mediaBox); p.setBounds(r, for: .cropBox)
+        }
+    }
+    /// Change margins: existing ink moves with the page so it stays where it was written.
+    static func set(_ key: String, l: CGFloat, r: CGFloat, doc: PDFDocument, title: String) {
+        let old = get(key)
+        let dx = l - old.l
+        UserDefaults.standard.set([Double(l), Double(r)], forKey: "pdf.margins." + key)
+        for i in 0..<doc.pageCount {
+            guard let p = doc.page(at: i) else { continue }
+            let w = base(p).width + l + r
+            if let d = PDFInk.load(key, i) {
+                let ow = PDFInk.width(key, i) ?? (base(p).width + old.l + old.r)
+                let k = ow / max(1, base(p).width + old.l + old.r)   // canvas units per page point
+                PDFInk.save(key, i, d.transformed(using: CGAffineTransform(translationX: dx * k, y: 0)), title: title, width: w * k)
+            }
+        }
+        apply(doc, key: key)
+    }
 }
