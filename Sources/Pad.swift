@@ -1008,7 +1008,7 @@ struct PadCanvas: UIViewRepresentable {
                 under.addSubview(iv); return iv
             }
         }
-        let picker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
+        let picker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); ToolSync.shared.padPickers.append(p); return p }()
         var base: CGFloat = 1
         var fittedWidth: CGFloat = 0
         var lastFollow: CGFloat = -1
@@ -1178,18 +1178,20 @@ final class QuietCanvas: PKCanvasView {
     private var parked: [(UIView, UIEditMenuInteraction)] = []
     private var lassoOn: Bool { tool is PKLassoTool }
     var isPadCanvas = false
+    static let live = NSHashTable<QuietCanvas>.weakObjects()
     private var lastLasso = false
     private var obs: [NSObjectProtocol] = []
     override func didMoveToWindow() {
-        super.didMoveToWindow(); lastLasso = lassoOn; sync()
+        super.didMoveToWindow(); lastLasso = lassoOn; sync(); QuietCanvas.live.add(self)
         if obs.isEmpty {
             obs.append(NotificationCenter.default.addObserver(forName: .toolChanged, object: nil, queue: .main) { [weak self] _ in
                 DispatchQueue.main.async { guard let self, self.lassoOn != self.lastLasso else { return }; self.lastLasso = self.lassoOn; self.sync() }
             })
             // 手写板 open: it owns the tools, so the big-screen canvases give up the tool picker.
             obs.append(NotificationCenter.default.addObserver(forName: .padState, object: nil, queue: .main) { [weak self] _ in
-                guard let self, !self.isPadCanvas, PadHub.shared.padOpen, self.isFirstResponder else { return }
-                self.resignFirstResponder()
+                guard let self, !self.isPadCanvas, PadHub.shared.padOpen else { return }
+                ToolSync.shared.hideAll()
+                if self.isFirstResponder { self.resignFirstResponder() }
             })
         }
     }
@@ -1240,6 +1242,13 @@ final class ToolSync: NSObject, PKToolPickerObserver {
         if let other = pickers.first(where: { $0 !== p }) { busy = true; p.selectedTool = other.selectedTool; busy = false }
         if !ToolSync.allowed(p.selectedTool) { p.selectedTool = PKInkingTool(.pen, color: .black, width: 2) }
     }
+    /// Hide every big-screen picker (pad pickers are left alone).
+    func hideAll() {
+        for p in pickers where !padPickers.contains(where: { $0 === p }) {
+            for c in QuietCanvas.live.allObjects where !c.isPadCanvas { p.setVisible(false, forFirstResponder: c) }
+        }
+    }
+    var padPickers: [PKToolPicker] = []
     func unregister(_ p: PKToolPicker) { p.removeObserver(self); pickers.removeAll { $0 === p } }
     func toolPickerSelectedToolDidChange(_ src: PKToolPicker) {
         NotificationCenter.default.post(name: .toolChanged, object: nil)
@@ -1356,7 +1365,7 @@ struct PadPagedCanvas: UIViewRepresentable {
         var following = false
         var userScrolled = Date.distantPast
         var vpObs: NSObjectProtocol?
-        let picker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
+        let picker: PKToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); ToolSync.shared.padPickers.append(p); return p }()
         init(_ p: PadPagedCanvas) { parent = p; shownIndex = p.index }
 
         func viewForZooming(in s: UIScrollView) -> UIView? { box }

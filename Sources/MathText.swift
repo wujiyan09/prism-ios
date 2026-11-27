@@ -30,6 +30,8 @@ enum TeX {
             (#"\bigl"#, ""), (#"\bigr"#, ""), (#"\Bigl"#, ""), (#"\Bigr"#, ""), (#"\big"#, ""), (#"\Big"#, ""),
         ]
         for (a, b) in simple { t = t.replacingOccurrences(of: a, with: b) }
+        // mhchem \ce{…} isn't in SwiftMath: convert to plain TeX (upright formulas, subscripts, charges, arrows).
+        t = replaceBraced(t, command: #"\ce"#) { Chem.tex($0) }
         // \text{a b} -> \mathrm{a\ b} (keeps spaces)
         t = replaceBraced(t, command: #"\text"#) { #"\mathrm{"# + $0.replacingOccurrences(of: " ", with: #"\ "#) + "}" }
         t = replaceBraced(t, command: #"\textbf"#) { #"\mathbf{"# + $0.replacingOccurrences(of: " ", with: #"\ "#) + "}" }
@@ -338,5 +340,49 @@ enum CJKMath {
         }
         if last < ns.length { math(ns.substring(from: last)) }
         return result
+    }
+}
+
+
+/// Minimal mhchem: H2SO4 → \mathrm{H_{2}SO_{4}}, Fe^{3+}/Fe^3+ → charge, ->, <=>, (aq)/(s)/(l)/(g), coefficients.
+enum Chem {
+    static func tex(_ s: String) -> String {
+        var out = ""
+        let arrows: [(String, String)] = [("<=>", #"\rightleftharpoons "#), ("<->", #"\leftrightarrow "#), ("->", #"\rightarrow "#), ("<-", #"\leftarrow "#)]
+        var rest = Substring(s)
+        while !rest.isEmpty {
+            if let a = arrows.first(where: { rest.hasPrefix($0.0) }) { out += " " + a.1; rest = rest.dropFirst(a.0.count); continue }
+            let ch = rest.first!
+            if ch == " " { out += #"\ "#; rest = rest.dropFirst(); continue }
+            if ch == "+" { out += " + "; rest = rest.dropFirst(); continue }
+            if ch == "^" {
+                rest = rest.dropFirst()
+                var chg = ""
+                if rest.first == "{" { rest = rest.dropFirst(); while let c = rest.first, c != "}" { chg.append(c); rest = rest.dropFirst() }; rest = rest.dropFirst() }
+                else { while let c = rest.first, c.isNumber || c == "+" || c == "-" { chg.append(c); rest = rest.dropFirst() } }
+                out += "^{" + chg.replacingOccurrences(of: "-", with: "−") + "}"; continue
+            }
+            if ch == "_" {
+                rest = rest.dropFirst()
+                var sub = ""
+                if rest.first == "{" { rest = rest.dropFirst(); while let c = rest.first, c != "}" { sub.append(c); rest = rest.dropFirst() }; rest = rest.dropFirst() }
+                else { while let c = rest.first, c.isNumber { sub.append(c); rest = rest.dropFirst() } }
+                out += "_{" + sub + "}"; continue
+            }
+            if ch.isNumber {
+                var n = ""
+                while let c = rest.first, c.isNumber { n.append(c); rest = rest.dropFirst() }
+                // A number right after a letter or ) is a subscript; at the start of a species it's a coefficient.
+                if let p = out.last, p.isLetter || p == ")" || p == "}" && !out.hasSuffix(" ") { out += "_{" + n + "}" } else { out += n }
+                continue
+            }
+            if ch.isLetter {
+                var w = ""
+                while let c = rest.first, c.isLetter { w.append(c); rest = rest.dropFirst() }
+                out += #"\mathrm{"# + w + "}"; continue
+            }
+            out.append(ch); rest = rest.dropFirst()
+        }
+        return out
     }
 }
