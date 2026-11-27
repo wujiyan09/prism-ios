@@ -74,6 +74,20 @@ struct PDFPage: View {
     }
 }
 
+/// PDFView whose scroll view runs to the very bottom edge: no automatic bottom inset (home indicator), the top
+/// inset is kept so the first page isn't under the navigation bar.
+final class EdgePDFView: PDFView {
+    override func safeAreaInsetsDidChange() { super.safeAreaInsetsDidChange(); fixInsets() }
+    override func layoutSubviews() { super.layoutSubviews(); fixInsets() }
+    private func fixInsets() {
+        guard let sv = PDFKitView.scroller(in: self) else { return }
+        if sv.contentInsetAdjustmentBehavior != .never { sv.contentInsetAdjustmentBehavior = .never }
+        let top = safeAreaInsets.top
+        if sv.contentInset.top != top || sv.contentInset.bottom != 0 { sv.contentInset = UIEdgeInsets(top: top, left: 0, bottom: 0, right: 0) }
+        sv.verticalScrollIndicatorInsets = UIEdgeInsets(top: top, left: 0, bottom: 0, right: 0)
+    }
+}
+
 struct PDFKitView: UIViewRepresentable {
     let doc: PDFDocument
     var onPage: ((Int) -> Void)? = nil
@@ -206,7 +220,7 @@ struct PDFKitView: UIViewRepresentable {
         return nil
     }
     func makeUIView(context: Context) -> PDFView {
-        let v = PDFView()
+        let v = EdgePDFView()
         context.coordinator.onPage = onPage
         NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coord.changed(_:)), name: .PDFViewPageChanged, object: v)
         v.autoScales = true
