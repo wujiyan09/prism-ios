@@ -39,6 +39,8 @@ final class PadHub {
     /// Visible width of the main scratch column, in sheet units (zoom sync).
     var scratchW: CGFloat = 0
     var mcCount = 0
+    /// A quiz/paper on the main window that can be handed in (交卷) from the pad.
+    var canSubmit = false
     var mcSelected: Int?
     var padOpen = false { didSet { if padOpen != oldValue { if !padOpen { latest = [:] }; NotificationCenter.default.post(name: .padState, object: nil) } } }
     /// Id of the stroke being previewed; cleared when its PKStroke commits or the touch is cancelled.
@@ -535,6 +537,7 @@ extension Notification.Name {
     static let padViewport = Notification.Name("padViewport")
     static let toolChanged = Notification.Name("toolChanged")
     static let padToggleTools = Notification.Name("padToggleTools")
+    static let padSubmit = Notification.Name("padSubmit")
     static let mainViewport = Notification.Name("mainViewport")
 }
 
@@ -728,6 +731,7 @@ struct PadButton: View {
 // MARK: Pad window
 
 struct PadView: View {
+    @State private var confirmPadSubmit = false
     @State private var hub = PadHub.shared
     @Environment(\.scenePhase) private var phase
     @State private var zoom: CGFloat = 1
@@ -845,6 +849,15 @@ struct PadView: View {
                 }
             }
             Spacer(minLength: 0)
+            if hub.canSubmit {
+                glass {
+                    Button { confirmPadSubmit = true } label: { Label("交卷", systemImage: "flag.checkered") }
+                }
+                .confirmationDialog("确定交卷？", isPresented: $confirmPadSubmit, titleVisibility: .visible) {
+                    Button("交卷") { NotificationCenter.default.post(name: .padSubmit, object: nil) }
+                    Button("取消", role: .cancel) {}
+                }
+            }
             if let s = hub.source {
                 glass {
                     Button {
@@ -966,7 +979,7 @@ struct PadCanvas: UIViewRepresentable {
         if let s = v.window?.windowScene { PadHub.shared.padScene = s }
         if v.bounds.width > 10 && abs(v.bounds.width - c.fittedWidth) > 1 { c.fit(); DispatchQueue.main.async { [weak v] in if let v { c.sendPos(v) } } }
         if c.base > 0 {
-            v.minimumZoomScale = locked ? v.zoomScale : c.base * 0.5
+            v.minimumZoomScale = locked ? v.zoomScale : c.base * 0.25
             v.maximumZoomScale = locked ? v.zoomScale : max(c.base * 4, 8)
         }
         let target = c.base * zoom
@@ -1091,7 +1104,7 @@ struct PadCanvas: UIViewRepresentable {
             guard let v = canvas, v.bounds.width > 10 else { return }
             fittedWidth = v.bounds.width
             base = v.bounds.width / parent.page.size.width
-            v.minimumZoomScale = base * 0.5
+            v.minimumZoomScale = base * 0.25
             v.maximumZoomScale = max(base * 4, 8)
             v.zoomScale = base * parent.zoom
             layout(v)
@@ -1352,7 +1365,7 @@ struct PadPagedCanvas: UIViewRepresentable {
         if let s = sv.window?.windowScene { PadHub.shared.padScene = s }
         if sv.bounds.width > 10 && abs(sv.bounds.width - c.fitted) > 1 { c.fit() }
         if c.base > 0 {
-            sv.minimumZoomScale = locked ? sv.zoomScale : c.base * 0.5
+            sv.minimumZoomScale = locked ? sv.zoomScale : c.base * 0.25
             sv.maximumZoomScale = locked ? sv.zoomScale : max(c.base * 4, 8)
             let target = c.base * zoom
             if !sv.isZooming && !c.following && abs(sv.zoomScale - target) > 0.001 { sv.setZoomScale(target, animated: true) }
@@ -1404,7 +1417,7 @@ struct PadPagedCanvas: UIViewRepresentable {
             guard let sv = scroll, sv.bounds.width > 10 else { return }
             fitted = sv.bounds.width
             base = sv.bounds.width / L
-            sv.minimumZoomScale = base * 0.5
+            sv.minimumZoomScale = base * 0.25
             sv.maximumZoomScale = max(base * 4, 8)
             following = true
             sv.zoomScale = base * parent.zoom
@@ -1699,4 +1712,25 @@ enum DisplayInfo {
         let ratio = e.nativeBounds.width / e.nativeScale / max(1, UIScreen.main.bounds.width)
         return max(4, (4 * ratio).rounded(.up))
     }
+}
+
+
+/// Lets the 手写板 hand in the quiz/paper shown on the main window (same submit as its own 交卷 button).
+private struct PadSubmitHook: ViewModifier {
+    let active: Bool
+    let action: () -> Void
+    @State private var token = UUID()
+    func body(content: Content) -> some View {
+        content
+            .onAppear { PadHub.shared.canSubmit = active; PadSubmitHook.owner = token }
+            .onChange(of: active) { _, v in if PadSubmitHook.owner == token { PadHub.shared.canSubmit = v } }
+            .onDisappear { if PadSubmitHook.owner == token { PadHub.shared.canSubmit = false; PadSubmitHook.owner = nil } }
+            .onReceive(NotificationCenter.default.publisher(for: .padSubmit)) { _ in
+                if active && PadSubmitHook.owner == token { action() }
+            }
+    }
+    @MainActor static var owner: UUID?
+}
+extension View {
+    func padSubmit(_ active: Bool, _ action: @escaping () -> Void) -> some View { modifier(PadSubmitHook(active: active, action: action)) }
 }

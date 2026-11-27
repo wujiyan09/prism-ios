@@ -224,6 +224,14 @@ struct SubjectListView: View {
     var body: some View {
         List {
             RecentSection(section: section)
+            if section == .progress {
+                Section {
+                    NavigationLink { RunHistoryView() } label: {
+                        Label("练习记录（\(prog.runs.count)）", systemImage: "checklist")
+                    }
+                } footer: { Text("每次交卷 / 结算的成绩和每题对错。") }
+                .listRowBackground(Color.cardBackground)
+            }
             Section {
                 ForEach(subjects) { sub in
                     NavigationLink(value: Route.subject(section, sub.id)) {

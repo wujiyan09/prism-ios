@@ -78,7 +78,12 @@ final class Session: Identifiable {
 
     func saveRun(_ lib: Library, _ prog: ProgressStore) {
         let s = score(lib)
-        prog.saveRun(RunRecord(t: started, title: title, got: s.got, tot: s.tot))
+        let qs: [RunQ] = keys.enumerated().map { i, k in
+            let it = lib.items[k]
+            let ok: Bool? = it.map { it in it.type == .mc ? (mc[i].map { _ in it.cancel || mc[i] == it.a }) : prog.mark(k) } ?? nil
+            return RunQ(l: "\(i + 1). " + String((it?.q ?? k).prefix(60)), ok: ok, key: k)
+        }
+        prog.saveRun(RunRecord(t: started, title: title, got: s.got, tot: s.tot, qs: qs))
     }
 
     func setSelfMark(_ i: Int, _ j: Int, _ v: Int, _ lib: Library, _ prog: ProgressStore) {
@@ -211,6 +216,7 @@ struct SessionView: View {
             .confirmationDialog(T("Quit without submitting?", "不交卷直接退出？"), isPresented: $confirmQuit, titleVisibility: .visible) {
                 Button(T("Quit", "退出"), role: .destructive) { scene.session = nil }
             }
+            .padSubmit(!session.submitted) { session.submit(lib, prog) }
             .confirmationDialog(T("\(unanswered) unanswered. Submit anyway?", "还有 \(unanswered) 题没做，确定交卷？"), isPresented: $confirmSubmit, titleVisibility: .visible) {
                 Button(T("Submit anyway", "仍然交卷")) { session.submit(lib, prog) }
             }

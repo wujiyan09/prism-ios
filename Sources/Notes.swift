@@ -833,7 +833,7 @@ struct NoteDocView: View {
                     ForEach(NotePaper.allCases) { s in Button(s.name) { addPage(style: s.rawValue) } }
                 } label: { Label("在后面加一页", systemImage: "plus.rectangle.on.rectangle") }
             } label: { Image(systemName: "plus.circle") }
-            Button { showQuiz = true } label: { Image(systemName: "sparkles.rectangle.stack") }.accessibilityLabel("根据此 PDF 出题")
+            Button { showQuiz = true } label: { Image(systemName: "sparkles.rectangle.stack") }.accessibilityLabel("把 PDF 题目转成可作答")
             Button { showPages = true } label: { Image(systemName: "square.grid.2x2") }.accessibilityLabel("页面")
             Menu {
                 Button { field = doc?.title ?? ""; rename = true } label: { Label("重命名", systemImage: "pencil") }

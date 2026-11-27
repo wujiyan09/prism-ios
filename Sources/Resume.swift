@@ -116,6 +116,7 @@ struct ResumedBanner: View {
 struct RecentActivityView: View {
     @State private var store = ResumeStore.shared
     @Environment(SceneModel.self) private var scene
+    @State private var result: RunRecord?
 
     private var groups: [(String, [Activity])] {
         let cal = Calendar.current
@@ -141,6 +142,17 @@ struct RecentActivityView: View {
                         Button { open(a) } label: { row(a) }
                             .buttonStyle(.plain)
                             .swipeActions { Button("移除", role: .destructive) { store.remove(a.id) } }
+                            .contextMenu {
+                                if let r = ProgressStore.shared.runs.first(where: { $0.title == a.title }) {
+                                    Button { result = r } label: { Label("看成绩", systemImage: "checklist") }
+                                }
+                            }
+                        if a.status >= 1, let r = ProgressStore.shared.runs.first(where: { $0.title == a.title }) {
+                            Button { result = r } label: {
+                                Label("成绩 \(r.got)/\(r.tot) · 看每题对错", systemImage: "checklist").font(.caption)
+                            }
+                            .padding(.leading, 46)
+                        }
                     }
                 }
                 .listRowBackground(Color.cardBackground)
@@ -148,6 +160,7 @@ struct RecentActivityView: View {
         }
         .appScreen()
         .navigationTitle("最近使用")
+        .sheet(item: $result) { r in NavigationStack { RunDetailView(run: r).toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { result = nil } } } } }
     }
 
     private func row(_ a: Activity) -> some View {

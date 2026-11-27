@@ -405,6 +405,7 @@ struct DailyRunner: View {
                 }
             }
         }
+        .padSubmit(!(store.results[date] ?? DailyResult()).submitted) { submit() }
         .confirmationDialog(T("Submit this paper?", "确定交卷？"), isPresented: $confirmSubmit, titleVisibility: .visible) {
             Button(T("Submit", "交卷")) { submit() }
             Button(T("Cancel", "取消"), role: .cancel) {}

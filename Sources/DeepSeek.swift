@@ -1043,7 +1043,29 @@ struct DSMarkdown: View {
 
     /// Outside $…$: wrap obvious bare TeX (\frac{..}{..}, \sqrt{..}, x^{..}, \alpha …) in $; while streaming,
     /// an unclosed trailing $ is shown as plain text until its closing $ arrives.
+    /// $$…$$ blocks are tokens of their own (they may span lines and never count toward inline $ parity);
+    /// inline $ pairing is then done per line, so one stray $ can't flip everything after it.
     static func wrapBareTeX(_ s: String) -> String {
+        let d = s.components(separatedBy: "$$")
+        var out = ""
+        for (i, seg) in d.enumerated() {
+            let inDisplay = i % 2 == 1
+            if inDisplay {
+                if i == d.count - 1 { out += "$$" + seg }        // unclosed display while streaming: leave as is
+                else { out += "$$" + seg + "$$" }
+                continue
+            }
+            out += seg.components(separatedBy: "\n").map(inlineLine).joined(separator: "\n")
+        }
+        return out
+    }
+    /// One line outside display maths: balance single $ (an unmatched last $ becomes a literal \$), wrap bare TeX.
+    static func inlineLine(_ line: String) -> String {
+        var l = line
+        if l.filter({ $0 == "$" }).count % 2 == 1, let r = l.range(of: "$", options: .backwards) { l.replaceSubrange(r, with: "\u{E000}") }
+        return wrapInline(l)
+    }
+    static func wrapInline(_ s: String) -> String {
         var parts = s.components(separatedBy: "$")
         // Odd number of parts = balanced. Even = one unclosed $: join the tail back as plain text.
         var tail = ""
