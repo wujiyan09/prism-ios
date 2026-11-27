@@ -663,11 +663,10 @@ struct SubjectOrderView: View {
 
 /// 设置 › 外接显示器 › 同步范围.
 struct PadSyncPicker: View {
-    @AppStorage("pad.syncZoom") private var zoom = true
+    @Bindable private var hub = PadHub.shared
     var body: some View {
-        Picker("同步范围", selection: $zoom) {
-            Text("页码 + 上下位置").tag(false)
-            Text("页码 + 上下位置 + 缩放").tag(true)
+        Picker("同步", selection: $hub.syncMode) {
+            Text("不同步").tag(0); Text("位置").tag(1); Text("位置 + 缩放").tag(2)
         }
     }
 }

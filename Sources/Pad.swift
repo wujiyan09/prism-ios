@@ -133,13 +133,18 @@ final class PadHub {
     }
 
     // The pad drives position; the main window follows while 主窗口跟随 is on.
-    var mainFollows = true
+    /// 同步: 0 不同步, 1 位置 (页码 + 上下位置), 2 位置+缩放. One persisted value; the link menu and 设置 both edit it.
+    var syncMode: Int = (UserDefaults.standard.object(forKey: "pad.syncMode") as? Int)
+        ?? ((UserDefaults.standard.object(forKey: "pad.syncZoom") as? Bool ?? true) ? 2 : 1) {
+        didSet { UserDefaults.standard.set(syncMode, forKey: "pad.syncMode") }
+    }
+    var mainFollows: Bool { syncMode > 0 }
     @ObservationIgnored var navOwner: UUID?
     /// Last time a window applied the other's viewport (echo guard).
     @ObservationIgnored var padApplied = Date.distantPast
     @ObservationIgnored var mainApplied = Date.distantPast
     /// 同步范围: true = 页码 + 上下位置 + 缩放 (default), false = 页码 + 上下位置.
-    static var syncZoom: Bool { UserDefaults.standard.object(forKey: "pad.syncZoom") as? Bool ?? true }
+    static var syncZoom: Bool { shared.syncMode == 2 }
     /// Page the pad shows (paged sources); main window follows.
     var padIndex = 0
     @ObservationIgnored private var posListeners: [String: [(id: ObjectIdentifier, f: (CGFloat, CGFloat) -> Void)]] = [:]
@@ -673,8 +678,14 @@ struct PadView: View {
             Button { if let o = hub.source?.owner { zlock.toggle(); ZoomLock.set(o, zlock) } } label: {
                 Label(zlock ? "解锁缩放" : "锁定缩放", systemImage: zlock ? "lock.fill" : "lock.open")
             }
-            Button { hub.mainFollows.toggle() } label: {
-                Label(hub.mainFollows ? "已与主窗口同步" : "独立浏览", systemImage: hub.mainFollows ? "link" : "link.badge.plus")
+            Menu {
+                Picker("同步", selection: Binding(get: { hub.syncMode }, set: { hub.syncMode = $0 })) {
+                    Label("不同步", systemImage: "link.badge.plus").tag(0)
+                    Label("位置", systemImage: "arrow.up.and.down").tag(1)
+                    Label("位置 + 缩放", systemImage: "arrow.up.left.and.down.right.magnifyingglass").tag(2)
+                }
+            } label: {
+                Label(["不同步", "同步位置", "同步位置 + 缩放"][min(2, max(0, hub.syncMode))], systemImage: hub.mainFollows ? "link" : "link.badge.plus")
             }
         }
     }

@@ -277,7 +277,8 @@ struct ChemLongRows: View {
                 NavigationLink { ZhLongSetView(chapterID: chapterID, src: k) } label: { Label("长题 · " + ChemKind.name(k), systemImage: "text.alignleft") }
             }
         }
-        .task {
+        // Recompute after the chapter download finishes (first open used to show only one mixed row).
+        .task(id: MathContent.shared.loading.count) {
             let qs = ZhLong.load(chapterID)?.qs ?? []
             srcs = ChemKind.order.filter { k in qs.contains { ChemKind.key($0.src) == k } }
         }
