@@ -74,7 +74,7 @@ final class SyncManager: NSObject, ASWebAuthenticationPresentationContextProvidi
 
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         MainActor.assumeIsolated {
-            UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? ASPresentationAnchor()
+            PadHub.mainWindow ?? ASPresentationAnchor()
         }
     }
 

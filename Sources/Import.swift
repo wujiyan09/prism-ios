@@ -1327,8 +1327,8 @@ enum FilePick {
     }
     private static var del: Del?
     static func top() -> UIViewController? {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        var vc = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.windows.first { $0.isKeyWindow }?.rootViewController
+        // Always the main window's scene, never the 手写板 window (it may be the key/active one).
+        var vc = PadHub.mainWindow?.rootViewController
         while let p = vc?.presentedViewController, !p.isBeingDismissed { vc = p }
         return vc
     }

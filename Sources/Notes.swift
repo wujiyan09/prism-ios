@@ -1026,7 +1026,7 @@ struct NoteCanvas: UIViewRepresentable {
     }
     /// True when some note canvas already owns the 笔盘.
     static var anyActive: Bool {
-        guard let w = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first?.keyWindow else { return false }
+        guard let w = PadHub.mainWindow else { return false }
         func find(_ v: UIView) -> Bool { (v is PKCanvasView && v.isFirstResponder) || v.subviews.contains(where: find) }
         return find(w)
     }

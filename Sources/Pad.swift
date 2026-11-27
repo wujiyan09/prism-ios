@@ -123,6 +123,14 @@ final class PadHub {
     @ObservationIgnored private var liveListeners: [String: [(id: ObjectIdentifier, f: (Live?) -> Void)]] = [:]
     @ObservationIgnored private var hoverAt: [String: CFTimeInterval] = [:]
     @ObservationIgnored private var inkAt: [String: CFTimeInterval] = [:]
+    /// The 手写板 window's scene, so sheets/pickers from the main window are never presented there.
+    @ObservationIgnored weak var padScene: UIWindowScene?
+    /// The main (non-pad) window scene to present from.
+    static var mainScene: UIWindowScene? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.filter { $0 !== shared.padScene }
+        return scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+    }
+    static var mainWindow: UIWindow? { mainScene.flatMap { s in s.keyWindow ?? s.windows.first } }
     /// Refresh rate of the window that shows the mirror: the external display's scene if there is one, else this device.
     static var receiverFPS: Int {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
@@ -955,6 +963,7 @@ struct PadCanvas: UIViewRepresentable {
     func updateUIView(_ v: PKCanvasView, context: Context) {
         let c = context.coordinator
         c.parent = self
+        if let s = v.window?.windowScene { PadHub.shared.padScene = s }
         if v.bounds.width > 10 && abs(v.bounds.width - c.fittedWidth) > 1 { c.fit(); DispatchQueue.main.async { [weak v] in if let v { c.sendPos(v) } } }
         if c.base > 0 {
             v.minimumZoomScale = locked ? v.zoomScale : c.base * 0.5
@@ -1340,6 +1349,7 @@ struct PadPagedCanvas: UIViewRepresentable {
     func updateUIView(_ sv: UIScrollView, context: Context) {
         let c = context.coordinator
         c.parent = self
+        if let s = sv.window?.windowScene { PadHub.shared.padScene = s }
         if sv.bounds.width > 10 && abs(sv.bounds.width - c.fitted) > 1 { c.fit() }
         if c.base > 0 {
             sv.minimumZoomScale = locked ? sv.zoomScale : c.base * 0.5
