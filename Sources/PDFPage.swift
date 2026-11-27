@@ -127,9 +127,21 @@ struct PDFKitView: UIViewRepresentable {
             PadHub.shared.mainApplied = Date()
             let b = p.bounds(for: .mediaBox)
             if PadHub.syncZoom, r.width > 1, v.bounds.width > 1 {
-                v.scaleFactor = min(v.maxScaleFactor, max(v.minScaleFactor, v.bounds.width / r.width))
+                let z = min(v.maxScaleFactor, max(v.minScaleFactor, v.bounds.width / r.width))
+                if abs(z - v.scaleFactor) / max(z, 0.01) > 0.01 { v.scaleFactor = z }   // only on a real change: each set relayouts PDFView
             }
-            v.go(to: CGRect(x: b.minX + r.minX, y: b.maxY - r.minY - 1, width: 1, height: 1), on: p)
+            // Move the scroll view directly (cheap) instead of go(to:), which relayouts every frame and stuttered.
+            if let sv = PDFKitView.scroller(in: v) {
+                let pt = v.convert(CGPoint(x: b.minX + r.minX, y: b.maxY - r.minY), from: p)
+                let dy = pt.y
+                let dx = PadHub.syncZoom ? pt.x : 0
+                let maxY = max(-sv.adjustedContentInset.top, sv.contentSize.height - sv.bounds.height + sv.adjustedContentInset.bottom)
+                let maxX = max(0, sv.contentSize.width - sv.bounds.width)
+                let o = CGPoint(x: min(maxX, max(0, sv.contentOffset.x + dx)), y: min(maxY, max(-sv.adjustedContentInset.top, sv.contentOffset.y + dy)))
+                if abs(o.y - sv.contentOffset.y) > 0.5 || abs(o.x - sv.contentOffset.x) > 0.5 { sv.contentOffset = o }
+            } else {
+                v.go(to: CGRect(x: b.minX + r.minX, y: b.maxY - r.minY - 1, width: 1, height: 1), on: p)
+            }
         }
         /// Main window scrolled: tell the pad (visible rect of the current page).
         func mainScrolled() {

@@ -291,19 +291,23 @@ final class LiveInk {
     func committed() { overlay?.drawing = PKDrawing(); overlay?.isHidden = true }
     func apply(_ l: PadHub.Live?, k s: CGFloat, to c: PKCanvasView, applying: (Bool) -> Void) {
         guard let l, let ink = l.ink, !l.points.isEmpty else { committed(); return }
+        // Overlay lives inside the canvas's own scroll content (works for scratch, notes and PDF page overlays alike):
+        // it scrolls with the page; zoom is applied to the points since scroll-view subviews aren't zoomed.
         let o: PKCanvasView
-        if let x = overlay, x.superview === c.superview { o = x } else {
+        if let x = overlay, x.superview === c { o = x } else {
             overlay?.removeFromSuperview()
             o = PKCanvasView(); o.isUserInteractionEnabled = false; o.backgroundColor = .clear; o.isOpaque = false
-            o.drawingPolicy = .pencilOnly; o.showsVerticalScrollIndicator = false; o.showsHorizontalScrollIndicator = false
-            c.superview?.insertSubview(o, aboveSubview: c)
+            o.isScrollEnabled = false; o.drawingPolicy = .pencilOnly
+            o.overrideUserInterfaceStyle = c.overrideUserInterfaceStyle
+            c.addSubview(o)
             overlay = o
         }
         o.isHidden = false
-        o.frame = c.frame
-        o.minimumZoomScale = c.minimumZoomScale; o.maximumZoomScale = c.maximumZoomScale
-        if o.zoomScale != c.zoomScale { o.zoomScale = c.zoomScale }
-        o.contentSize = c.contentSize; o.contentInset = c.contentInset; o.contentOffset = c.contentOffset
+        let zf = max(c.zoomScale, 0.0001)
+        let cs = CGSize(width: max(c.contentSize.width, c.bounds.width / zf) * zf, height: max(c.contentSize.height, c.bounds.height / zf) * zf)
+        if o.frame != CGRect(origin: .zero, size: cs) { o.frame = CGRect(origin: .zero, size: cs) }
+        c.bringSubviewToFront(o)
+        let s = s * zf
         let n = l.points.count
         let t0 = l.ts.first ?? 0
         var pts: [PKStrokePoint] = []
