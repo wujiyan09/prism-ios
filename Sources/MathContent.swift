@@ -88,10 +88,9 @@ final class MathContent {
     /// On launch: refresh the index and the small chapter list; refresh downloaded groups that changed.
     @MainActor
     /// Content update check: at most once every 3 hours (not on every window appear / return to the app).
-    nonisolated(unsafe) private static var lastSync = Date.distantPast
     func sync() async {
-        if hasMeta, Date().timeIntervalSince(Self.lastSync) < 3 * 3600 { return }
-        Self.lastSync = Date()
+        if hasMeta, Date().timeIntervalSince(mathLastSync) < 3 * 3600 { return }
+        mathLastSync = Date()
         if state == .checking { return }
         if case .downloading = state { return }
         state = .checking
@@ -429,3 +428,5 @@ struct MathStatsView: View {
         StatPill(value: "\(read)", label: T("cards read", "已读卡"))
     }
 }
+
+nonisolated(unsafe) private var mathLastSync = Date.distantPast
