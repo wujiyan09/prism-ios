@@ -698,7 +698,7 @@ struct NoteDocView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if showPages {
+            if showPages && !Self.appSidebar {
                 // Collapsible page sidebar (like Preview / GoodNotes): thumbnails, jump, reorder/add/delete, bookmarks.
                 NotePagesSheet(id: id, current: $current, inline: true) { i in vctl.goPage?(i) }
                     .frame(width: 210)
@@ -707,7 +707,13 @@ struct NoteDocView: View {
             }
             content
         }
+        .onAppear { if Self.appSidebar { OpenNote.shared.id = id; OpenNote.shared.current = current; OpenNote.shared.go = { [vctl] i in vctl.goPage?(i) } } }
+        .onDisappear { if Self.appSidebar, OpenNote.shared.id == id { OpenNote.shared.id = nil; OpenNote.shared.go = nil } }
+        .onChange(of: current) { _, c in if Self.appSidebar, OpenNote.shared.id == id { OpenNote.shared.current = c } }
     }
+
+    /// Nodus on iPad: page thumbnails live in the app's own sidebar column.
+    static var appSidebar: Bool { RootView.notesOnly && UIDevice.current.userInterfaceIdiom == .pad }
 
     @ViewBuilder private var content: some View {
         Group {
@@ -920,6 +926,8 @@ struct NoteDocView: View {
     private func setMargin(l: CGFloat, r: CGFloat) {
         InkSafety.flushAll()
         NoteMargins.set(id, l: l, r: r)
+        // Margins show in the PDF view: switch to it if the note is in the text-box editing view.
+        if classic { classic = false }; if !usePDF { usePDF = true }
         marginTick += 1
     }
     /// 全文 / 本页 / 特定范围 (e.g. "3-12", "3–12", "5"): page indices sent to DeepSeek.
@@ -1025,6 +1033,14 @@ struct NoteDocView: View {
                 Menu {
                     ForEach(NotePaper.allCases) { s in Button(s.name) { addPage(style: s.rawValue) } }
                 } label: { Label("在后面加一页", systemImage: "plus.rectangle.on.rectangle") }
+                if !pdfFailed {
+                    // Blank writable paper beside every page (display only: the note's files and ink coordinates stay as they are).
+                    Menu {
+                        let m = NoteMargins.get(id)
+                        Section("左边") { ForEach(NoteMargins.steps, id: \.self) { v in Button { setMargin(l: v, r: m.r) } label: { Label(v == 0 ? "无" : "\(Int(v / 10))%", systemImage: abs(m.l - v) < 0.5 ? "checkmark" : "") } } }
+                        Section("右边") { ForEach(NoteMargins.steps, id: \.self) { v in Button { setMargin(l: m.l, r: v) } label: { Label(v == 0 ? "无" : "\(Int(v / 10))%", systemImage: abs(m.r - v) < 0.5 ? "checkmark" : "") } } }
+                    } label: { Label("页边距", systemImage: "arrow.left.and.right.square") }
+                }
             } label: { Image(systemName: "plus.circle") }
             Menu {
                 Button { InkSafety.flushAll(); showQuiz = true } label: { Label("把 PDF 题目转成可作答", systemImage: "arrow.triangle.2.circlepath.doc.on.clipboard") }
@@ -1040,20 +1056,13 @@ struct NoteDocView: View {
             }
             Button {
                 let i = pageIndex
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { showPages.toggle() }
+                if Self.appSidebar { OpenNote.shared.sidebarToggle += 1 }
+                else { withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { showPages.toggle() } }
                 // Keep the current page in view after the width changes.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { vctl.goPage?(i) }
             } label: { Image(systemName: showPages ? "sidebar.left" : "sidebar.squares.left") }.accessibilityLabel("页面")
             Menu {
                 Button { field = doc?.title ?? ""; rename = true } label: { Label("重命名", systemImage: "pencil") }
-                if usePDF && !classic && !pdfFailed {
-                    // Blank writable paper beside every page (display only: the note's files and ink coordinates stay as they are).
-                    Menu {
-                        let m = NoteMargins.get(id)
-                        Section("左边") { ForEach(NoteMargins.steps, id: \.self) { v in Button { setMargin(l: v, r: m.r) } label: { Label(v == 0 ? "无" : "\(Int(v / 10))%", systemImage: abs(m.l - v) < 0.5 ? "checkmark" : "") } } }
-                        Section("右边") { ForEach(NoteMargins.steps, id: \.self) { v in Button { setMargin(l: m.l, r: v) } label: { Label(v == 0 ? "无" : "\(Int(v / 10))%", systemImage: abs(m.r - v) < 0.5 ? "checkmark" : "") } } }
-                    } label: { Label("页边距（可书写）", systemImage: "arrow.left.and.right.square") }
-                }
                 if usePDF {
                     Button { InkSafety.flushAll(); classic.toggle() } label: {
                         Label(classic ? "完成编辑（回到 PDF 视图）" : "编辑文本框和图片", systemImage: classic ? "checkmark.circle" : "character.textbox")
@@ -1856,4 +1865,14 @@ extension NotePagesSheet {
     func setMark(_ pid: String, _ name: String?) {
         NoteStore.shared.update(id) { d in var m = d.marks ?? [:]; m[pid] = name; d.marks = m.isEmpty ? nil : m }
     }
+}
+
+/// The note open in the main window (Nodus shows its pages in the app sidebar while it's open).
+@MainActor @Observable final class OpenNote {
+    static let shared = OpenNote()
+    var id: String?
+    var current: String?
+    @ObservationIgnored var go: ((Int) -> Void)?
+    /// Toolbar "页面" button in Nodus toggles the app sidebar instead of a second one.
+    var sidebarToggle = 0
 }

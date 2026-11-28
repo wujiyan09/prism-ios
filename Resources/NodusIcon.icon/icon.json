@@ -20,11 +20,41 @@
   ],
   "groups": [
     {
-      "name": "Nodus",
+      "name": "lines",
       "layers": [
         {
-          "name": "dots",
-          "image-name": "dots.svg",
+          "name": "lines",
+          "image-name": "lines.svg",
+          "glass": false,
+          "opacity-specializations": [
+            {
+              "value": 1
+            },
+            {
+              "appearance": "tinted",
+              "value": 0.9
+            }
+          ]
+        }
+      ],
+      "shadow": {
+        "kind": "layer-color",
+        "opacity": 0.3
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.1
+      },
+      "specular": true,
+      "lighting": "individual",
+      "blur-material": 0.4
+    },
+    {
+      "name": "front",
+      "layers": [
+        {
+          "name": "sheet3",
+          "image-name": "sheet3.svg",
           "glass": true,
           "opacity-specializations": [
             {
@@ -35,23 +65,79 @@
               "value": 0.9
             }
           ]
-        },
-        {
-          "name": "lines",
-          "image-name": "lines.svg",
-          "glass": false
         }
       ],
       "shadow": {
-        "kind": "neutral",
+        "kind": "layer-color",
         "opacity": 0.5
       },
       "translucency": {
         "enabled": true,
-        "value": 0.3
+        "value": 0.35
       },
       "specular": true,
-      "lighting": "individual"
+      "lighting": "individual",
+      "blur-material": 0.4
+    },
+    {
+      "name": "middle",
+      "layers": [
+        {
+          "name": "sheet2",
+          "image-name": "sheet2.svg",
+          "glass": true,
+          "opacity-specializations": [
+            {
+              "value": 1
+            },
+            {
+              "appearance": "tinted",
+              "value": 0.9
+            }
+          ]
+        }
+      ],
+      "shadow": {
+        "kind": "layer-color",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.35
+      },
+      "specular": true,
+      "lighting": "individual",
+      "blur-material": 0.4
+    },
+    {
+      "name": "back",
+      "layers": [
+        {
+          "name": "sheet1",
+          "image-name": "sheet1.svg",
+          "glass": true,
+          "opacity-specializations": [
+            {
+              "value": 1
+            },
+            {
+              "appearance": "tinted",
+              "value": 0.9
+            }
+          ]
+        }
+      ],
+      "shadow": {
+        "kind": "layer-color",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.5
+      },
+      "specular": true,
+      "lighting": "individual",
+      "blur-material": 0.4
     }
   ],
   "supported-platforms": {
