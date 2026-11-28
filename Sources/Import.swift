@@ -4,6 +4,7 @@ import UIKit
 import PhotosUI
 import VisionKit
 import UniformTypeIdentifiers
+import WebKit
 
 // MARK: - 导入的试卷: imported papers (PDF / photos / scans), one local library, manual delete only.
 
@@ -434,6 +435,16 @@ struct ImportPickers: ViewModifier {
                 }
                 if local.last != dst, (try? FileManager.default.copyItem(at: u, to: dst)) != nil { local.append(dst) }
                 if ok { u.stopAccessingSecurityScopedResource() }
+            }
+            // Text / Markdown / RTF / HTML / Word / PowerPoint / Excel / Pages / Keynote / Numbers: typeset to PDF pages
+            // first (WebKit / print renderer on the main thread), then they import like any PDF.
+            local = local.map { u in
+                guard DocConvert.handles(u) else { return u }
+                var out = u
+                let sem = DispatchSemaphore(value: 0)
+                DispatchQueue.main.async { Task { @MainActor in out = await DocConvert.pdf(u) ?? u; sem.signal() } }
+                sem.wait()
+                return out
             }
             // Several PDFs picked at once: import each as its own document (one by one, each with its own pending row).
             let pdfs = local.filter { $0.pathExtension.lowercased() == "pdf" }
@@ -1554,7 +1565,7 @@ enum FilePick {
         while let p = vc?.presentedViewController, !p.isBeingDismissed { vc = p }
         return vc
     }
-    static func open(types: [UTType] = [.pdf, .image, UTType(filenameExtension: "prismpaper") ?? .data], _ done: @escaping ([URL]) -> Void) {
+    static func open(types: [UTType] = [.pdf, .image, UTType(filenameExtension: "prismpaper") ?? .data] + DocConvert.types, _ done: @escaping ([URL]) -> Void) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {   // let a closing Menu finish first
             let p = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
             p.allowsMultipleSelection = true
@@ -1617,5 +1628,66 @@ struct ExportHUD: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             .transition(.opacity)
         }
+    }
+}
+
+
+
+/// Other documents → PDF (A4 pages) so they become annotatable notes.
+@MainActor enum DocConvert {
+    nonisolated static let exts: Set<String> = ["txt", "md", "markdown", "rtf", "rtfd", "html", "htm", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "pages", "key", "numbers", "csv"]
+    nonisolated static var types: [UTType] {
+        [.plainText, .rtf, .html, .commaSeparatedText] + ["md", "markdown", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "pages", "key", "numbers"].compactMap { UTType(filenameExtension: $0) }
+    }
+    nonisolated static func handles(_ u: URL) -> Bool { exts.contains(u.pathExtension.lowercased()) }
+
+    static func pdf(_ u: URL) async -> URL? {
+        let ext = u.pathExtension.lowercased()
+        let out = u.deletingPathExtension().appendingPathExtension("pdf")
+        let fmt: UIPrintFormatter
+        var web: WKWebView?
+        switch ext {
+        case "txt", "csv", "md", "markdown":
+            guard let t = (try? String(contentsOf: u, encoding: .utf8)) ?? (try? String(contentsOf: u, encoding: .utf16)) else { return nil }
+            if ext == "md" || ext == "markdown", let a = try? AttributedString(markdown: t, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                let ns = NSMutableAttributedString(a); ns.addAttribute(.font, value: UIFont.systemFont(ofSize: 12), range: NSRange(location: 0, length: ns.length))
+                fmt = UISimpleTextPrintFormatter(attributedText: ns)
+            } else {
+                let f = UISimpleTextPrintFormatter(text: t); f.font = .systemFont(ofSize: 12); fmt = f
+            }
+        case "rtf", "rtfd":
+            guard let a = try? NSAttributedString(url: u, options: [:], documentAttributes: nil) else { return nil }
+            fmt = UISimpleTextPrintFormatter(attributedText: a)
+        default:
+            // HTML, Office and iWork: WebKit renders them (same as Quick Look); print its view into pages.
+            let w = WKWebView(frame: CGRect(x: 0, y: 0, width: 794, height: 1123))
+            web = w
+            let d = Loader(); w.navigationDelegate = d
+            w.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent())
+            let ok = await withCheckedContinuation { c in d.done = { c.resume(returning: $0) } }
+            _ = d
+            guard ok else { return nil }
+            try? await Task.sleep(for: .milliseconds(400))   // let layout settle
+            fmt = w.viewPrintFormatter()
+        }
+        let r = UIPrintPageRenderer()
+        r.addPrintFormatter(fmt, startingAtPageAt: 0)
+        let page = CGRect(x: 0, y: 0, width: 595, height: 842)
+        r.setValue(page, forKey: "paperRect"); r.setValue(page.insetBy(dx: 40, dy: 48), forKey: "printableRect")
+        let data = NSMutableData()
+        UIGraphicsBeginPDFContextToData(data, page, nil)
+        r.prepare(forDrawingPages: NSRange(location: 0, length: r.numberOfPages))
+        for i in 0..<max(1, r.numberOfPages) { UIGraphicsBeginPDFPage(); r.drawPage(at: i, in: UIGraphicsGetPDFContextBounds()) }
+        UIGraphicsEndPDFContext()
+        _ = web
+        guard r.numberOfPages > 0, data.write(to: out, atomically: true) else { return nil }
+        return out
+    }
+
+    private final class Loader: NSObject, WKNavigationDelegate {
+        var done: ((Bool) -> Void)?
+        func webView(_ w: WKWebView, didFinish n: WKNavigation!) { done?(true); done = nil }
+        func webView(_ w: WKWebView, didFail n: WKNavigation!, withError e: Error) { done?(false); done = nil }
+        func webView(_ w: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { done?(false); done = nil }
     }
 }

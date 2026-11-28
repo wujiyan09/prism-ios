@@ -11,6 +11,8 @@ struct RootView: View {
     @AppStorage("lang") private var lang = "zh"
     @AppStorage("theme") private var theme = AppTheme.fallback.rawValue
     @State private var scene = SceneModel()
+    @State private var openNote = OpenNote.shared
+    @State private var columns = NavigationSplitViewVisibility.automatic
 
     var body: some View {
         let T = Tr(en: lang == "en")
@@ -85,7 +87,14 @@ struct RootView: View {
     }
 
     private func split(_ T: Tr) -> some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columns) {
+          Group {
+            if Self.notesOnly, let nid = openNote.id {
+                // Nodus: an open note turns the sidebar into its page thumbnails (same column).
+                NotePagesSheet(id: nid, current: Binding(get: { openNote.current }, set: { openNote.current = $0 }), inline: true) { i in openNote.go?(i) }
+                    .navigationTitle(NoteStore.shared.docs[nid]?.title ?? "页面")
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
+            } else {
             List(selection: Binding<AppSection?>(get: { scene.section }, set: { if let v = $0 { scene.section = v } })) {
                 let _ = (sidebarOrder, sidebarHidden)
                 Section {
@@ -124,6 +133,7 @@ struct RootView: View {
             }
             .navigationTitle(AppBrand.name)
             .environment(\.editMode, $sidebarEditing)
+            .transition(.opacity)
             .toolbar {
                 if sidebarEditing.isEditing {
                     ToolbarItem(placement: .confirmationAction) {
@@ -131,6 +141,13 @@ struct RootView: View {
                     }
                 }
             }
+            }
+          }
+          .animation(.easeInOut(duration: 0.28), value: openNote.id)
+          .onChange(of: openNote.sidebarToggle) { _, _ in
+              withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { columns = columns == .detailOnly ? .all : .detailOnly }
+          }
+          .onChange(of: openNote.id) { _, v in if v == nil, columns == .detailOnly { withAnimation { columns = .automatic } } }
         } detail: {
             stack(scene.section)
                 .id(scene.section)

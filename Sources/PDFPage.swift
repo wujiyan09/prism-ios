@@ -98,13 +98,17 @@ final class EdgePDFView: PDFView {
     override func layoutSubviews() {
         let w = bounds.width
         var anchor: (PDFKit.PDFPage, CGPoint)?
+        var wasFit = false
         if lastWidth > 0, abs(w - lastWidth) > 0.5, document != nil {
+            wasFit = scaleFactorForSizeToFit > 0 && abs(scaleFactor / scaleFactorForSizeToFit - 1) < 0.03
             let probe = CGPoint(x: bounds.midX, y: safeAreaInsets.top + 1)
             if let pg = page(for: probe, nearest: true) { anchor = (pg, convert(probe, to: pg)) }
         }
         lastWidth = w
         super.layoutSubviews(); fixInsets()
         if let (pg, pt) = anchor {
+            // Panel / sidebar opened or closed: re-fit to the new width (page re-centred), same page and height.
+            if wasFit, scaleFactorForSizeToFit > 0 { scaleFactor = scaleFactorForSizeToFit }
             let restore = { [weak self] in
                 guard let self else { return }
                 self.go(to: PDFDestination(page: pg, at: CGPoint(x: pg.bounds(for: self.displayBox).minX, y: pt.y)))
