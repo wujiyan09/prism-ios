@@ -730,7 +730,13 @@ struct PadView: View {
                         if !s.continuous { hub.padIndex = s.pages.count }   // jump to the new last page once it exists
                         NotificationCenter.default.post(name: .padAddPage, object: s.owner)
                     } label: { Label("加一页", systemImage: "plus") }
-                    Button { NotificationCenter.default.post(name: .padToggleTools, object: nil) } label: { Label("工具", systemImage: "pencil.tip.crop.circle") }
+                }
+            }
+            if hub.source != nil {
+                // Icon only, in the top bar.
+                glass {
+                    Button { NotificationCenter.default.post(name: .padToggleTools, object: nil) } label: { Image(systemName: "pencil.tip.crop.circle") }
+                        .accessibilityLabel("工具")
                 }
             }
             glass {

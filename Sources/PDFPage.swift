@@ -137,6 +137,9 @@ struct PDFKitView: UIViewRepresentable {
     var noteID: String? = nil
     var noteKeys: [String]? = nil
     final class Coord: NSObject {
+        /// Note pages shown with writable margins: the pad's page has no margins, so x is shifted by the left one.
+        weak var inkRef: InkProvider?
+        var marginL: CGFloat { inkRef?.noteMargin.l ?? 0 }
         var channels: [String]?
         func channel(_ i: Int) -> String { if let c = channels, c.indices.contains(i) { return "note:" + c[i] }; return "pdf:\(inkKey):\(i)" }
         func index(_ ch: String) -> Int? {
@@ -222,7 +225,7 @@ struct PDFKitView: UIViewRepresentable {
             }
             // Move the scroll view directly (cheap) instead of go(to:), which relayouts every frame and stuttered.
             if let sv = PDFKitView.scroller(in: v) {
-                let pt = v.convert(CGPoint(x: b.minX + r.minX, y: b.maxY - r.minY), from: p)
+                let pt = v.convert(CGPoint(x: b.minX + r.minX + marginL, y: b.maxY - r.minY), from: p)
                 let dy = pt.y
                 let dx = pt.x
                 let maxY = max(-sv.adjustedContentInset.top, sv.contentSize.height - sv.bounds.height + sv.adjustedContentInset.bottom)
@@ -244,7 +247,7 @@ struct PDFKitView: UIViewRepresentable {
             userMoved = Date()
             let b = p.bounds(for: .mediaBox)
             let r = v.convert(v.bounds, to: p)
-            let top = CGRect(x: r.minX - b.minX, y: b.maxY - r.maxY, width: r.width, height: r.height)
+            let top = CGRect(x: r.minX - b.minX - marginL, y: b.maxY - r.maxY, width: r.width, height: r.height)
             NotificationCenter.default.post(name: .mainViewport, object: channel(d.index(for: p)), userInfo: ["r": top])
         }
         /// Main window follows the pad's page.
@@ -283,14 +286,14 @@ struct PDFKitView: UIViewRepresentable {
             v.pageOverlayViewProvider = ink
             v.isInMarkupMode = true
             let co = context.coordinator
-            co.inkKey = inkKey; co.channels = noteKeys; co.owner = "note-" + nid
+            co.inkKey = inkKey; co.channels = noteKeys; co.owner = "note-" + nid; co.inkRef = ink
             co.vpObs = NotificationCenter.default.addObserver(forName: .padViewport, object: nil, queue: .main) { [weak co] n in
                 if let ch = n.object as? String, let r = n.userInfo?["r"] as? CGRect { co?.padMoved(ch, r) }
             }
             DispatchQueue.main.async { [weak v, weak co] in
                 guard let v, let sv = Self.scroller(in: v) else { return }
                 co?.kvo = sv.observe(\.contentOffset, options: [.new]) { _, _ in
-                    let now = CACurrentMediaTime(); guard now - (co?.lastTick ?? 0) > 1.0 / 30 else { return }; co?.lastTick = now
+                    co?.lastTick = CACurrentMediaTime()   // every frame: a dropped last frame left x/zoom out of sync
                     DispatchQueue.main.async { co?.mainScrolled(); co?.rememberPos() }
                 }
             }
@@ -356,7 +359,7 @@ struct PDFKitView: UIViewRepresentable {
                 guard let v, let sv = Self.scroller(in: v) else { return }
                 co?.kvo = sv.observe(\.contentOffset, options: [.new]) { _, _ in
                     // ≤ 30 sync pushes a second while scrolling (was one per offset change).
-                    let now = CACurrentMediaTime(); guard now - (co?.lastTick ?? 0) > 1.0 / 30 else { return }; co?.lastTick = now
+                    co?.lastTick = CACurrentMediaTime()   // every frame: a dropped last frame left x/zoom out of sync
                     DispatchQueue.main.async { co?.mainScrolled(); co?.updateAdd(); co?.rememberPos() }
                 }
                 co?.updateAdd()

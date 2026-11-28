@@ -33,6 +33,9 @@ struct OpenInSheet: View {
     @State private var name = ""
     @State private var subject = "math"
     @State private var done: String?
+    @State private var folder = ""
+    @State private var newFolder = false
+    @State private var newName = ""
 
     var body: some View {
         Form {
@@ -44,16 +47,34 @@ struct OpenInSheet: View {
                 Label(d, systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             } else if let doc = item.doc {
                 Section { TextField("名称", text: $name) } footer: { Text("\(doc.pageCount) 页") }
+                if RootView.notesOnly {
+                    // Nodus: no subjects. Choose the folder the note goes into.
+                    Section("存到文件夹") {
+                        Picker("文件夹", selection: $folder) {
+                            Text("笔记（顶层）").tag("")
+                            ForEach(NoteStore.shared.folders, id: \.self) { f in Text(f.replacingOccurrences(of: "/", with: " › ")).tag(f) }
+                        }
+                        Button { newName = ""; newFolder = true } label: { Label("新建文件夹", systemImage: "folder.badge.plus") }
+                    }
+                    Section {
+                        Button {
+                            let n = NoteStore.shared.createFrom(title: title, pdf: doc)
+                            NoteStore.shared.update(n.id) { $0.folder = folder }
+                            finish(folder.isEmpty ? "已存到「笔记」" : "已存到「\(NoteStore.leaf(folder))」")
+                        } label: { Label("导入", systemImage: "square.and.arrow.down") }.bold()
+                    }
+                } else {
                 Section("导入到") {
-                    Button { let n = NoteStore.shared.createFrom(title: title, pdf: doc); _ = n; finish("已存到「笔记」") } label: {
-                        Label("笔记", systemImage: "note.text")
-                    }
-                    Picker("科目", selection: $subject) {
-                        Text("数学").tag("math"); Text("化学").tag("chem"); Text("ICT").tag("ict"); Text("中文").tag("zh"); Text("其他").tag("other")
-                    }
-                    Button { _ = ImportStore.shared.create(name: title, subject: subject, chapters: [], pdf: doc); finish("已存到「导入的试卷」") } label: {
-                        Label("导入的试卷", systemImage: "doc.text.magnifyingglass")
-                    }
+                      Button { let n = NoteStore.shared.createFrom(title: title, pdf: doc); _ = n; finish("已存到「笔记」") } label: {
+                          Label("笔记", systemImage: "note.text")
+                      }
+                      Picker("科目", selection: $subject) {
+                          Text("数学").tag("math"); Text("化学").tag("chem"); Text("ICT").tag("ict"); Text("中文").tag("zh"); Text("其他").tag("other")
+                      }
+                      Button { _ = ImportStore.shared.create(name: title, subject: subject, chapters: [], pdf: doc); finish("已存到「导入的试卷」") } label: {
+                          Label("导入的试卷", systemImage: "doc.text.magnifyingglass")
+                      }
+                  }
                 }
             }
         }
@@ -61,6 +82,15 @@ struct OpenInSheet: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         .onAppear { name = item.name }
+        .alert("新建文件夹", isPresented: $newFolder) {
+            TextField("名称", text: $newName)
+            Button("取消", role: .cancel) {}
+            Button("创建") {
+                let n = newName.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "/", with: "-")
+                guard !n.isEmpty else { return }
+                NoteStore.shared.addFolder("", n); folder = n
+            }
+        }
     }
     private var title: String { name.trimmingCharacters(in: .whitespaces).isEmpty ? item.name : name }
     private func finish(_ s: String) {
