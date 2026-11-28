@@ -712,9 +712,7 @@ struct NoteDocView: View {
         .onReceive(NotificationCenter.default.publisher(for: .padAddPage)) { n in
             guard (n.object as? String) == "note-" + id, let doc else { return }
             let last = doc.pages.last
-            let p = NotePage(style: last?.src == nil ? last?.style ?? "lined" : "lined", size: last?.size ?? [595, 842])
-            store.update(id) { $0.pages.append(p) }
-            current = p.id
+            padAdd(after: last)
         }
         .onChange(of: current) { _, _ in PadHub.shared.setIndex("note-" + id, pageIndex) }
         .onChange(of: doc?.pages.count ?? 0) { _, _ in if let s = PadSources.note(id) { PadHub.shared.activate(s, index: pageIndex, force: true) } }
@@ -823,6 +821,14 @@ struct NoteDocView: View {
                 }
             }
                 }
+    }
+    private func padAdd(after last: NotePage?) {
+        var style = "lined"
+        if let l = last, l.src == nil { style = l.style }
+        let size: [Double] = last?.size ?? [595, 842]
+        let p = NotePage(style: style, size: size)
+        store.update(id) { $0.pages.append(p) }
+        current = p.id
     }
     private func setMargin(l: CGFloat, r: CGFloat) {
         InkSafety.flushAll()
