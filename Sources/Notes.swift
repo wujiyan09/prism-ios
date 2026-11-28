@@ -476,7 +476,7 @@ struct NotesLibraryView: View {
     @ViewBuilder private func gridCell(_ n: NoteDoc) -> some View {
         let sel = selection.contains(n.id)
         let cell = FileGridCell(title: n.title, subtitle: Date(timeIntervalSince1970: n.modified).formatted(date: .numeric, time: .shortened) + " · \(n.pages.count) 页", selected: edit == .active ? sel : nil) {
-            NoteThumb(doc: n)
+            NoteGridThumb(doc: n)
         }
         if edit == .active {
             Button { if sel { selection.remove(n.id) } else { selection.insert(n.id) } } label: { cell }.buttonStyle(.plain)
@@ -1756,7 +1756,7 @@ struct FileGridCell<Thumb: View>: View {
 }
 
 /// First page of a note (paper + ink + images), rendered once per change and cached.
-struct NoteThumb: View {
+struct NoteGridThumb: View {
     let doc: NoteDoc
     @State private var image: UIImage?
     private static let cache = NSCache<NSString, UIImage>()

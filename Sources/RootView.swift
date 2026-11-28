@@ -532,7 +532,7 @@ struct SettingsView: View {
                 } label: {
                     Label(T("Storage", "存储"), systemImage: "internaldrive")
                 }
-                if !Self.notesOnly {
+                if !RootView.notesOnly {
                 NavigationLink {
                     ReadingSettingsView()
                 } label: {

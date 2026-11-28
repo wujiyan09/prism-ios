@@ -170,7 +170,7 @@ struct RecentActivityView: View {
     }
     @ViewBuilder private func gridThumb(_ a: Activity) -> some View {
         if case .note(let id)? = a.target, let d = NoteStore.shared.docs[id] {
-            NoteThumb(doc: d)
+            NoteGridThumb(doc: d)
         } else {
             Image(systemName: icon(a.subject)).font(.system(size: 44, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 110, height: 140)
