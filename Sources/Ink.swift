@@ -130,6 +130,13 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, InkCanvasDelegate
     /// Notes shown as a PDF: page i's ink lives under its own note key (page 0), pad channel "note:<key>".
     /// The display PDF's pages are NoteRender.logicalWidth wide, so ink coordinates are the same as before.
     var noteKeys: [String]? = nil
+    /// Note pages shown with writable margins (logical units, page = NoteRender.logicalWidth): the stored ink stays in
+    /// the note's own coordinates; it is shifted right by `l` for display and back when saved (files never migrated).
+    var noteMargin: (l: CGFloat, r: CGFloat) = (0, 0)
+    private func shiftK(_ c: InkCanvas) -> CGFloat {
+        let full = NoteRender.logicalWidth + noteMargin.l + noteMargin.r
+        return max(1, c.bounds.width) / full
+    }
     private func store(_ i: Int) -> (String, Int) { if let n = noteKeys, n.indices.contains(i) { return (n[i], 0) }; return (key, i) }
     private func channel(_ i: Int) -> String { if let n = noteKeys, n.indices.contains(i) { return "note:" + n[i] }; return "pdf:\(key):\(i)" }
     var title = ""
@@ -143,12 +150,34 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, InkCanvasDelegate
         pending[c.tag]?.cancel(); pending[c.tag] = nil
         guard dirty.remove(c.tag) != nil else { return }
         let (k, p) = store(c.tag)
+        if noteKeys != nil, noteMargin.l + noteMargin.r > 0 {
+            let f = shiftK(c)
+            PDFInk.saveAsync(k, p, c.drawing.transformed(using: CGAffineTransform(translationX: -noteMargin.l * f, y: 0)), title: title,
+                             width: c.bounds.width - (noteMargin.l + noteMargin.r) * f, erased: true)
+            return
+        }
         PDFInk.saveAsync(k, p, c.drawing, title: title, width: c.bounds.width, erased: true)
     }
     func flushAll() { canvases.values.forEach(flush) }
     deinit { flushAll(); ToolSync.shared.unregister(picker) }
     private let picker: InkToolPicker = { let p = ToolSync.makePicker(); ToolSync.shared.register(p); return p }()
-    var enabled = false { didSet { canvases.values.forEach(apply) } }
+    var enabled = false {
+        didSet {
+            canvases.values.forEach(apply)
+            guard enabled, !oldValue else { return }
+            // Turned on from the toolbar: always show the full palette (out of the corner disc) and make sure a visible
+            // page's canvas owns it, retrying once if the page's canvas wasn't in the window yet.
+            if InkPaletteHost.corner != nil { InkPaletteHost.expand(in: canvases.values.first(where: { $0.window != nil })?.window) }
+            for delay in [0.05, 0.35] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self, self.enabled, !self.canvases.values.contains(where: { $0.isFirstResponder }) else { return }
+                    if let c = self.canvases.values.filter({ $0.window != nil }).min(by: { abs($0.convert($0.bounds, to: nil).midY - 400) < abs($1.convert($1.bounds, to: nil).midY - 400) }) {
+                        self.picker.setVisible(true, forFirstResponder: c); _ = c.becomeFirstResponder()
+                    }
+                }
+            }
+        }
+    }
 
     override init() {
         super.init()
@@ -179,7 +208,14 @@ final class InkProvider: NSObject, PDFPageOverlayViewProvider, InkCanvasDelegate
         c.drawingPolicy = .default
         c.isScrollEnabled = false
         c.tag = i
-        if let d = PDFInk.load(store(i).0, store(i).1) { c.drawing = d }
+        if let d = PDFInk.load(store(i).0, store(i).1) {
+            if noteKeys != nil, noteMargin.l > 0 {
+                // Page is NoteRender.logicalWidth + margins wide in page units; stored ink is in note units (no margins).
+                let full = NoteRender.logicalWidth + noteMargin.l + noteMargin.r
+                let f = page.bounds(for: .mediaBox).width / full
+                c.drawing = d.transformed(using: CGAffineTransform(translationX: noteMargin.l * f, y: 0))
+            } else { c.drawing = d }
+        }
         c.delegate = self
         canvases[i] = c
         _ = flushObs

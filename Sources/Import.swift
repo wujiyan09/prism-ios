@@ -596,6 +596,7 @@ struct ImportPaperView: View {
     @State private var confirmSettle = false
     @State private var confirmParse = false
     @State private var showQuiz = false
+    @State private var showGen = false
     @State private var newPaper: String?
 
     private var p: ImpPaper? { store.papers[id] }
@@ -627,8 +628,18 @@ struct ImportPaperView: View {
                 }
             }
         }
+        .sheet(isPresented: $showGen) {
+            if let d = doc, let p {
+                NavigationStack {
+                    PDFGenSheet(title: p.name, subject: p.subject, chapters: p.chapters, pageCount: d.pageCount,
+                                 page: { i in (ImpPDF.pageImage(d, i, width: 1400), d.page(at: i)?.string ?? "") },
+                                 pdf: { d }, startPage: page, onDone: { nid in DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { newPaper = nid } })
+                }
+            }
+        }
         .navigationDestination(item: $newPaper) { nid in ImportPaperView(id: nid) }
         .sheet(isPresented: $showMark) { NavigationStack { ImportInkMarkSheet(id: id) } }
+        .overlay { ExportHUD() }
         .sheet(item: $share) { s in RangeShareSheet(url: s.url, current: page) }
         .padSubmit(p.map { !$0.submitted } ?? false) { update { $0.submitted = true } }
         .confirmationDialog("确定交卷？", isPresented: $confirmSubmit, titleVisibility: .visible) {
@@ -807,6 +818,7 @@ struct ImportPaperView: View {
                 }
                 Menu {
                     Button { InkSafety.flushAll(); showQuiz = true } label: { Label("把 PDF 题目转成可作答", systemImage: "arrow.triangle.2.circlepath.doc.on.clipboard") }.disabled(doc == nil)
+                    Button { InkSafety.flushAll(); showGen = true } label: { Label("根据此 PDF 出题", systemImage: "sparkles") }.disabled(doc == nil)
                     if p.mode == "cards" {
                         Button { showEdit = true } label: { Label("编辑 / 合并 / 拆分题目", systemImage: "pencil") }.disabled(p.qs.isEmpty)
                         if !remainingPages.isEmpty && !p.qs.isEmpty { Button { confirmParse = true } label: { Label("解析剩下的页", systemImage: "sparkles") } }
@@ -821,8 +833,8 @@ struct ImportPaperView: View {
                         }
                     }
                     Section("导出") {
-                        Button { share = ImpExport.annotated(id).map { ShareItem(url: $0) } } label: { Label("带手写的 PDF", systemImage: "pencil.and.outline") }
-                        Button { share = ImpExport.original(id).map { ShareItem(url: $0) } } label: { Label("原始 PDF", systemImage: "doc") }
+                        Button { InkSafety.flushAll(); let i = id; Task { share = await Exporter.run { ImpExport.annotated(i) }.map { ShareItem(url: $0) } } } label: { Label("带手写的 PDF", systemImage: "pencil.and.outline") }
+                        Button { let i = id; Task { share = await Exporter.run { ImpExport.original(i) }.map { ShareItem(url: $0) } } } label: { Label("原始 PDF", systemImage: "doc") }
                         Button { share = ImpExport.results(id).map { ShareItem(url: $0) } } label: { Label("答题与批改结果 PDF", systemImage: "list.bullet.clipboard") }
                         Button { share = ImpExport.bundle(id).map { ShareItem(url: $0) } } label: { Label("完整导出包（可再导入）", systemImage: "shippingbox") }
                     }
@@ -901,10 +913,12 @@ struct RangeShareSheet: View {
                     }
                 }
                 .navigationTitle("导出范围").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("导出") { out = Self.subset(url, pages) }.disabled(pages.isEmpty) } }
+                .toolbar { ToolbarItem(placement: .confirmationAction) {
+                    Button("导出") { let u = url, ps = pages; Task { out = await Exporter.run { Self.subset(u, ps) } ?? u } }.disabled(pages.isEmpty)
+                } }
+                .overlay { ExportHUD() }
             }
-            .onAppear { if count == 0 { count = PDFDocument(url: url)?.pageCount ?? 0 } }
-            .task { if count == 0 { count = PDFDocument(url: url)?.pageCount ?? 0 } }
+            .task { if count == 0 { let u = url; count = await Task.detached { PDFDocument(url: u)?.pageCount ?? 0 }.value } }
         }
     }
     private var pages: [Int] {
@@ -927,7 +941,7 @@ struct RangeShareSheet: View {
     static func subset(_ url: URL, _ pages: [Int]) -> URL {
         guard let src = PDFDocument(url: url), pages.count < src.pageCount || pages != Array(0..<src.pageCount) else { return url }
         let d = PDFDocument()
-        for (k, i) in pages.enumerated() { if let p = src.page(at: i)?.copy() as? PDFKit.PDFPage { d.insert(p, at: k) } }
+        for (k, i) in pages.enumerated() { ExportProgress.report(k, pages.count); if let p = src.page(at: i)?.copy() as? PDFKit.PDFPage { d.insert(p, at: k) } }
         let o = url.deletingLastPathComponent().appendingPathComponent(url.deletingPathExtension().lastPathComponent + "（第\(pages.count == 1 ? "\(pages[0] + 1)" : "\(pages.first! + 1)-\(pages.last! + 1)")页）.pdf")
         if let data = d.dataRepresentation() { try? data.write(to: o, options: .atomic); return o }
         return url
@@ -1331,6 +1345,7 @@ enum ImpExport {
         try? r.writePDF(to: u) { ctx in
             for i in 0..<d.pageCount {
                 guard let p = d.page(at: i) else { continue }
+                ExportProgress.report(i, d.pageCount)
                 let b = p.bounds(for: .mediaBox)
                 ctx.beginPage(withBounds: CGRect(origin: .zero, size: b.size), pageInfo: [:])
                 let cg = ctx.cgContext
@@ -1535,5 +1550,48 @@ enum PDFFile {
             if (try? FileManager.default.copyItem(at: src, to: dst)) != nil { return }
         }
         pdf.write(to: dst)
+    }
+}
+
+
+// MARK: - Export off the main thread, with progress
+
+@MainActor @Observable final class ExportProgress {
+    static let shared = ExportProgress()
+    var active = false
+    var done = 0, total = 0
+    /// Called from the export thread for each page.
+    nonisolated static func report(_ i: Int, _ n: Int) {
+        DispatchQueue.main.async { shared.done = i; shared.total = n }
+    }
+}
+enum Exporter {
+    /// Runs the export on a background queue; the UI stays responsive and shows ExportHUD meanwhile.
+    @MainActor static func run(_ work: @escaping () -> URL?) async -> URL? {
+        let p = ExportProgress.shared
+        guard !p.active else { return nil }
+        p.active = true; p.done = 0; p.total = 0
+        defer { p.active = false }
+        return await withCheckedContinuation { c in
+            DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: autoreleasepool { work() }) }
+        }
+    }
+}
+struct ExportHUD: View {
+    @State private var p = ExportProgress.shared
+    var body: some View {
+        if p.active {
+            VStack(spacing: 10) {
+                if p.total > 1 {
+                    ProgressView(value: Double(p.done), total: Double(p.total)).frame(width: 180)
+                    Text("正在导出 第 \(min(p.done + 1, p.total))/\(p.total) 页").font(.footnote).monospacedDigit()
+                } else {
+                    ProgressView(); Text("正在导出…").font(.footnote)
+                }
+            }
+            .padding(20)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .transition(.opacity)
+        }
     }
 }

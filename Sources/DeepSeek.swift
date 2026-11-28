@@ -43,7 +43,7 @@ enum DSModel: String, CaseIterable, Identifiable {
 }
 
 enum DSError: LocalizedError {
-    case noKey, auth, balance, rate, server(Int, String), network(String)
+    case noKey, auth, balance, rate, server(Int, String), network(String), tooLong(Int)
     var errorDescription: String? {
         switch self {
         case .noKey: return "还没有填 DeepSeek API key。去 设置 → DeepSeek 填一下。"
@@ -52,6 +52,7 @@ enum DSError: LocalizedError {
         case .rate: return "请求太频繁（429），稍等一下再试。"
         case .server(let c, let m): return "DeepSeek 出错（\(c)）\(m.isEmpty ? "" : "：" + m)"
         case .network(let m): return "网络连接失败：\(m)"
+        case .tooLong(let t): return "内容超出 DeepSeek 模型的上下文长度：这次大约 \(t / 1000)k tokens，超过了模型上限（约 128k）。换「本页」或「范围」少发几页再试。"
         }
     }
 }
@@ -118,9 +119,22 @@ enum DSClient {
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
         r.httpBody = body
+        lastEstimate = estimate(body)
         return r
     }
 
+    /// Rough token count of the last request's text (Chinese ≈ 0.6 token/char, other text ≈ 0.3), for the length error.
+    nonisolated(unsafe) static var lastEstimate = 0
+    static func estimate(_ body: Data) -> Int {
+        guard let o = try? JSONSerialization.jsonObject(with: body) as? [String: Any], let ms = o["messages"] as? [[String: Any]] else { return 0 }
+        var cjk = 0, other = 0
+        func add(_ t: String) { for u in t.unicodeScalars { if (0x4E00...0x9FFF).contains(u.value) || (0x3400...0x4DBF).contains(u.value) { cjk += 1 } else { other += 1 } } }
+        for m in ms {
+            if let t = m["content"] as? String { add(t) }
+            else if let parts = m["content"] as? [[String: Any]] { for p in parts { if let t = p["text"] as? String { add(t) } } }
+        }
+        return Int(Double(cjk) * 0.6 + Double(other) * 0.3)
+    }
     private static func check(_ resp: URLResponse, _ body: String) throws {
         guard let h = resp as? HTTPURLResponse else { return }
         switch h.statusCode {
@@ -132,6 +146,10 @@ enum DSClient {
             var m = body
             if let d = body.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                let e = o["error"] as? [String: Any], let s = e["message"] as? String { m = s }
+            let lm = m.lowercased()
+            if h.statusCode == 413 || ((h.statusCode == 400 || h.statusCode == 422) && (lm.contains("context") || lm.contains("maximum") && lm.contains("token") || lm.contains("too long") || lm.contains("length"))) {
+                throw DSError.tooLong(lastEstimate)
+            }
             throw DSError.server(h.statusCode, String(m.prefix(200)))
         }
     }
@@ -591,13 +609,17 @@ struct DeepSeekPanel: View {
     private var busy: Bool { task != nil || grading }
 
     @AppStorage("notes.dsScope") private var noteScope = "all"
+    @AppStorage("notes.dsRange") private var noteRange = ""
     @ViewBuilder private var scopeRow: some View {
         if let s = ctx.scopeNote {
             HStack(spacing: 8) {
                 Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 Spacer(minLength: 4)
-                Picker("", selection: $noteScope) { Text("全文").tag("all"); Text("本页").tag("page") }
-                    .pickerStyle(.segmented).frame(width: 120).controlSize(.small)
+                if noteScope == "range" {
+                    DSRangeWheels(range: $noteRange, count: ctx.doc.flatMap { $0.hasPrefix("note-") ? NoteStore.shared.docs[String($0.dropFirst(5))]?.pages.count : nil } ?? 1)
+                }
+                Picker("", selection: $noteScope) { Text("全文").tag("all"); Text("本页").tag("page"); Text("范围").tag("range") }
+                    .pickerStyle(.segmented).frame(width: 170).controlSize(.small)
             }
             .padding(.horizontal, 14).padding(.vertical, 6)
             Divider()
@@ -1312,5 +1334,51 @@ struct DSPromptEditor: View {
         .confirmationDialog("恢复默认提示词？", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("恢复默认", role: .destructive) { custom = ""; text = DSClient.defaultSystemPrompt }
         }
+    }
+}
+
+/// "3-12", "3–12", "3~12", "5", "1-3,7" → zero-based page indices within 0..<count (empty if nothing valid).
+enum DSRange {
+    static func parse(_ s: String, count: Int) -> [Int] {
+        var out = Set<Int>()
+        let norm = s.replacingOccurrences(of: "–", with: "-").replacingOccurrences(of: "—", with: "-").replacingOccurrences(of: "~", with: "-").replacingOccurrences(of: "，", with: ",").replacingOccurrences(of: "至", with: "-")
+        for part in norm.split(separator: ",") {
+            let b = part.split(separator: "-").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+            if b.count == 1, (1...max(1, count)).contains(b[0]), b[0] <= count { out.insert(b[0] - 1) }
+            else if b.count == 2 {
+                let lo = max(1, min(b[0], b[1])), hi = min(count, max(b[0], b[1]))
+                if lo <= hi { for i in lo...hi { out.insert(i - 1) } }
+            }
+        }
+        return out.sorted()
+    }
+}
+
+/// 特定范围: start / end page on two wheels (in a popover), stored as "a-b".
+struct DSRangeWheels: View {
+    @Binding var range: String
+    let count: Int
+    @State private var open = false
+    private var cur: (Int, Int) {
+        let r = DSRange.parse(range, count: count)
+        return r.isEmpty ? (1, count) : (r.first! + 1, r.last! + 1)
+    }
+    var body: some View {
+        let (a, b) = cur
+        Button("第 \(a)–\(b) 页") { open = true }
+            .font(.caption).buttonStyle(.bordered).controlSize(.small)
+            .popover(isPresented: $open) {
+                HStack(spacing: 0) {
+                    Picker("从", selection: Binding(get: { a }, set: { range = "\($0)-\(max($0, b))" })) {
+                        ForEach(1...max(1, count), id: \.self) { Text("第 \($0) 页").tag($0) }
+                    }.pickerStyle(.wheel).frame(width: 130)
+                    Text("至").foregroundStyle(.secondary)
+                    Picker("到", selection: Binding(get: { b }, set: { range = "\(min(a, $0))-\($0)" })) {
+                        ForEach(1...max(1, count), id: \.self) { Text("第 \($0) 页").tag($0) }
+                    }.pickerStyle(.wheel).frame(width: 130)
+                }
+                .padding()
+                .presentationCompactAdaptation(.popover)
+            }
     }
 }

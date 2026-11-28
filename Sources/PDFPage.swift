@@ -92,7 +92,27 @@ struct PDFPage: View {
 /// inset is kept so the first page isn't under the navigation bar.
 final class EdgePDFView: PDFView {
     override func safeAreaInsetsDidChange() { super.safeAreaInsetsDidChange(); fixInsets() }
-    override func layoutSubviews() { super.layoutSubviews(); fixInsets() }
+    private var lastWidth: CGFloat = 0
+    /// Resizing the view (DeepSeek panel / sidebar dragged) used to re-scale the pages and leave the scroll position
+    /// where it was in points: the page jumped or turned. Keep the point at the top of the view anchored instead.
+    override func layoutSubviews() {
+        let w = bounds.width
+        var anchor: (PDFKit.PDFPage, CGPoint)?
+        if lastWidth > 0, abs(w - lastWidth) > 0.5, document != nil {
+            let probe = CGPoint(x: bounds.midX, y: safeAreaInsets.top + 1)
+            if let pg = page(for: probe, nearest: true) { anchor = (pg, convert(probe, to: pg)) }
+        }
+        lastWidth = w
+        super.layoutSubviews(); fixInsets()
+        if let (pg, pt) = anchor {
+            let restore = { [weak self] in
+                guard let self else { return }
+                self.go(to: PDFDestination(page: pg, at: CGPoint(x: pg.bounds(for: self.displayBox).minX, y: pt.y)))
+            }
+            restore()
+            DispatchQueue.main.async(execute: restore)
+        }
+    }
     private func fixInsets() {
         guard let sv = PDFKitView.scroller(in: self) else { return }
         if sv.contentInsetAdjustmentBehavior != .never { sv.contentInsetAdjustmentBehavior = .never }

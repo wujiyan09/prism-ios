@@ -593,6 +593,7 @@ struct NoteDocView: View {
     @State private var editing: NoteItem?
     @State private var showPages = false
     @State private var showQuiz = false
+    @State private var showGen = false
     /// Last user scroll on this window. A plain reference (not @State) so scrolling doesn't re-render the whole note every frame.
     private final class Stamp { var t = Date.distantPast }
     @State private var mainUser = Stamp()
@@ -611,6 +612,7 @@ struct NoteDocView: View {
     @State private var classic = false
     /// The PDF view couldn't be built in time (or failed): this note opens in the classic page view instead.
     @State private var pdfFailed = false
+    @State private var marginTick = 0
     /// 笔盘 shown = drawing; hidden = scroll / select.
     private var tool: NoteTool { showTools ? .pen : .select }
 
@@ -620,7 +622,7 @@ struct NoteDocView: View {
     var body: some View {
         Group {
             if let doc, usePDF, !classic, !pdfFailed {
-                NotePDFBody(id: id, drawing: tool == .pen, onFail: { pdfFailed = true }, onPage: { i in
+                NotePDFBody(id: id, drawing: tool == .pen, onFail: { pdfFailed = true }, marginTick: marginTick, onPage: { i in
                     if doc.pages.indices.contains(i), current != doc.pages[i].id { current = doc.pages[i].id }
                 }, ctl: vctl)
             } else if let doc {
@@ -736,9 +738,25 @@ struct NoteDocView: View {
                 }
             }
         }
+        .sheet(isPresented: $showGen) {
+            if let doc {
+                NavigationStack {
+                    PDFGenSheet(title: doc.title, subject: "笔记", pageCount: doc.pages.count,
+                                 page: { i in
+                                     guard doc.pages.indices.contains(i) else { return (nil, "") }
+                                     let p = doc.pages[i]
+                                     let t = p.items.compactMap { $0.kind == "text" ? $0.text : nil }.joined(separator: "\n")
+                                     return (NoteRender.background(id, p, width: 1400), t)
+                                 },
+                                 pdf: { (FileManager.default.fileExists(atPath: NoteDisplay.url(doc).path) ? PDFDocument(url: NoteDisplay.url(doc)) : nil) ?? ImpPDF.from(images: doc.pages.map { NoteRender.background(id, $0, width: 1400) }) },
+                                 startPage: pageIndex, onDone: { nid in DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { newPaper = nid } })
+                }
+            }
+        }
         .navigationDestination(item: $newPaper) { nid in ImportPaperView(id: nid) }
         .sheet(isPresented: $showPages) { NavigationStack { NotePagesSheet(id: id, current: $current) } }
         .sheet(item: $editing) { it in NavigationStack { NoteTextEditor(docID: id, item: it) } }
+        .overlay { ExportHUD() }
         .sheet(item: $share) { s in RangeShareSheet(url: s.url, current: pageIndex) }
         .sheet(isPresented: $camera) { CameraPicker { im in camera = false; if let im { insert(im) } }.ignoresSafeArea() }
         .importPickers(source: $imgSource, photos: $imgPhotos) { d, _ in
@@ -802,6 +820,31 @@ struct NoteDocView: View {
 
     // MARK: DeepSeek context
 
+    @AppStorage("notes.dsRange") private var dsRange = ""
+    private func setMargin(l: CGFloat, r: CGFloat) {
+        InkSafety.flushAll()
+        NoteMargins.set(id, l: l, r: r)
+        marginTick += 1
+    }
+    /// 全文 / 本页 / 特定范围 (e.g. "3-12", "3–12", "5"): page indices sent to DeepSeek.
+    private func scopeIndices(_ doc: NoteDoc) -> [Int] {
+        switch scope {
+        case "page": return doc.pages.indices.contains(pageIndex) ? [pageIndex] : []
+        case "range":
+            let r = DSRange.parse(dsRange, count: doc.pages.count)
+            return r.isEmpty ? Array(doc.pages.indices) : r
+        default: return Array(doc.pages.indices)
+        }
+    }
+    private func scopeLabel(_ doc: NoteDoc) -> String {
+        switch scope {
+        case "page": return "第 \(pageIndex + 1) 页"
+        case "range":
+            let r = DSRange.parse(dsRange, count: doc.pages.count)
+            return r.isEmpty ? "全文 \(doc.pages.count) 页（范围无效）" : "第 \(r.first! + 1)–\(r.last! + 1) 页"
+        default: return "全文 \(doc.pages.count) 页"
+        }
+    }
     private var attachedPages: [NotePage] {
         guard let doc else { return [] }
         if scope == "page" { return doc.pages.indices.contains(pageIndex) ? [doc.pages[pageIndex]] : [] }
@@ -813,13 +856,16 @@ struct NoteDocView: View {
 
     @ViewBuilder private func contextBar(_ doc: NoteDoc) -> some View {
         let n = attachedPages.count
-        let pages = scope == "page" ? "第 \(pageIndex + 1) 页" : "全文 \(doc.pages.count) 页"
+        let pages = scopeLabel(doc)
         HStack(spacing: 10) {
             Image(systemName: "sparkles").foregroundStyle(.secondary)
             Text("DeepSeek 会看到：\(pages)文字" + (n > 0 ? " + \(n) 张页面图" : "")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 4)
-            Picker("", selection: $scope) { Text("全文").tag("all"); Text("本页").tag("page") }
-                .pickerStyle(.segmented).frame(width: 130).controlSize(.small)
+            if scope == "range" {
+                DSRangeWheels(range: $dsRange, count: doc.pages.count)
+            }
+            Picker("", selection: $scope) { Text("全文").tag("all"); Text("本页").tag("page"); Text("范围").tag("range") }
+                .pickerStyle(.segmented).frame(width: 180).controlSize(.small)
         }
         .padding(.horizontal, 16).padding(.vertical, 6)
     }
@@ -827,17 +873,18 @@ struct NoteDocView: View {
     private func makeContext() -> DSContext? {
         guard let doc else { return nil }
         var text = ""
-        let list: [(Int, NotePage)] = scope == "page" ? (doc.pages.indices.contains(pageIndex) ? [(pageIndex, doc.pages[pageIndex])] : []) : Array(doc.pages.enumerated())
+        let list: [(Int, NotePage)] = scopeIndices(doc).map { ($0, doc.pages[$0]) }
         for (i, p) in list {
             let t = NoteRender.pageText(id, p)
             if !t.isEmpty { text += "【第 \(i + 1) 页】\n" + t + "\n\n" }
         }
         if text.isEmpty { text = "（这份笔记没有文字层或文本框，内容见附图。）" }
         let imgs = attachedPages.map { NoteRender.flat(id, $0, width: 1000) }
-        let pages = scope == "page" ? "第 \(pageIndex + 1) 页" : "全文 \(doc.pages.count) 页"
+        let pages = scopeLabel(doc)
         let note = "会看到：" + pages + "文字" + (imgs.isEmpty ? "" : " + \(imgs.count) 张页面图")
-        var c = DSContext(key: "note-" + id + (scope == "page" ? "-" + (current ?? "") : ""), subject: "笔记", title: doc.title + (scope == "page" ? " · 第 \(pageIndex + 1) 页" : ""),
-                         page: DSStudy.cut(text, 20000), images: imgs)
+        // No app-side cap: the whole chosen text is sent (DeepSeek reports if it's over the model's context).
+        var c = DSContext(key: "note-" + id + (scope == "page" ? "-" + (current ?? "") : scope == "range" ? "-r" + dsRange : ""), subject: "笔记", title: doc.title + (scope == "all" ? "" : " · " + pages),
+                         page: text, images: imgs)
         c.scopeNote = note
         c.doc = "note-" + id
         return c
@@ -883,18 +930,29 @@ struct NoteDocView: View {
                     ForEach(NotePaper.allCases) { s in Button(s.name) { addPage(style: s.rawValue) } }
                 } label: { Label("在后面加一页", systemImage: "plus.rectangle.on.rectangle") }
             } label: { Image(systemName: "plus.circle") }
-            Button { InkSafety.flushAll(); showQuiz = true } label: { Image(systemName: "sparkles.rectangle.stack") }.accessibilityLabel("把 PDF 题目转成可作答")
+            Menu {
+                Button { InkSafety.flushAll(); showQuiz = true } label: { Label("把 PDF 题目转成可作答", systemImage: "arrow.triangle.2.circlepath.doc.on.clipboard") }
+                Button { InkSafety.flushAll(); showGen = true } label: { Label("根据此 PDF 出题", systemImage: "sparkles") }
+            } label: { Image(systemName: "sparkles.rectangle.stack") }.accessibilityLabel("题目")
             Button { showPages = true } label: { Image(systemName: "square.grid.2x2") }.accessibilityLabel("页面")
             Menu {
                 Button { field = doc?.title ?? ""; rename = true } label: { Label("重命名", systemImage: "pencil") }
+                if usePDF && !classic && !pdfFailed {
+                    // Blank writable paper beside every page (display only: the note's files and ink coordinates stay as they are).
+                    Menu {
+                        let m = NoteMargins.get(id)
+                        Section("左边") { ForEach(NoteMargins.steps, id: \.self) { v in Button { setMargin(l: v, r: m.r) } label: { Label(v == 0 ? "无" : "\(Int(v / 10))%", systemImage: abs(m.l - v) < 0.5 ? "checkmark" : "") } } }
+                        Section("右边") { ForEach(NoteMargins.steps, id: \.self) { v in Button { setMargin(l: m.l, r: v) } label: { Label(v == 0 ? "无" : "\(Int(v / 10))%", systemImage: abs(m.r - v) < 0.5 ? "checkmark" : "") } } }
+                    } label: { Label("页边距（可书写）", systemImage: "arrow.left.and.right.square") }
+                }
                 if usePDF {
                     Button { InkSafety.flushAll(); classic.toggle() } label: {
                         Label(classic ? "完成编辑（回到 PDF 视图）" : "编辑文本框和图片", systemImage: classic ? "checkmark.circle" : "character.textbox")
                     }
                 }
                 Section("导出") {
-                    Button { share = NoteExport.flattened(id).map { ShareItem(url: $0) } } label: { Label("PDF（含手写、图片和文本框）", systemImage: "doc.richtext") }
-                    Button { share = NoteExport.original(id).map { ShareItem(url: $0) } } label: { Label("原始 PDF", systemImage: "doc") }
+                    Button { let job = NoteExport.flattenedJob(id); Task { share = await Exporter.run(job).map { ShareItem(url: $0) } } } label: { Label("PDF（含手写、图片和文本框）", systemImage: "doc.richtext") }
+                    Button { let job = NoteExport.originalJob(id); Task { share = await Exporter.run(job).map { ShareItem(url: $0) } } } label: { Label("原始 PDF", systemImage: "doc") }
                     Button { share = NoteExport.bundle(id).map { ShareItem(url: $0) } } label: { Label("完整导出包（可再导入）", systemImage: "shippingbox") }
                 }
             } label: { Image(systemName: "ellipsis.circle") }
@@ -1251,6 +1309,57 @@ enum NoteExport {
         let n = (NoteStore.shared.docs[id]?.title ?? "note").replacingOccurrences(of: "/", with: "-")
         return ImpExport.out.appendingPathComponent(n + suffix + "." + ext)
     }
+    /// Export work prepared on main (snapshot of the note + its images), run off main by Exporter, page by page.
+    static func job(_ id: String, overlay: Bool, to u: URL) -> () -> URL? {
+        InkSafety.flushAll()
+        guard let d = NoteStore.shared.docs[id] else { return { nil } }
+        var ims: [String: UIImage] = [:]
+        if overlay { for p in d.pages { for it in p.items where it.kind == "image" { if let f = it.file, let im = NoteStore.shared.image(id, f) { ims[f] = im } } } }
+        let baseURL = NoteStore.baseURL(id), hasBase = d.hasBase
+        return {
+            PDFInk.saveQ.sync {}   // pending ink writes are on disk
+            let base = hasBase ? PDFDocument(url: baseURL) : nil   // own copy, only used on this thread
+            let r = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842))
+            do {
+                try r.writePDF(to: u) { ctx in
+                    for (i, p) in d.pages.enumerated() {
+                        autoreleasepool {
+                            ExportProgress.report(i, d.pages.count)
+                            let rect = CGRect(x: 0, y: 0, width: p.size[0], height: p.size[1])
+                            ctx.beginPage(withBounds: rect, pageInfo: [:])
+                            let cg = ctx.cgContext
+                            if let s = p.src, let pg = base?.page(at: s) {
+                                let b = pg.bounds(for: .mediaBox)
+                                cg.saveGState(); cg.translateBy(x: 0, y: rect.height); cg.scaleBy(x: rect.width / max(1, b.width), y: -rect.height / max(1, b.height))
+                                pg.draw(with: .mediaBox, to: cg); cg.restoreGState()
+                            } else {
+                                NoteRender.drawPaper(p.style, in: rect, cg)
+                            }
+                            if overlay {
+                                let W = rect.width
+                                for it in p.items {
+                                    let f = CGRect(x: it.x * W, y: it.y * W, width: it.w * W, height: it.h * W)
+                                    if it.kind == "image", let fl = it.file, let im = ims[fl] { im.draw(in: f) }
+                                    else if it.kind == "text", let t = it.text { NoteRender.textImage(t, width: W, height: f.height).draw(with: f, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], context: nil) }
+                                }
+                                ImpExport.drawInk(NoteStore.inkKey(id, p.id), 0, in: rect)
+                            }
+                        }
+                    }
+                }
+            } catch { return nil }
+            return u
+        }
+    }
+    static func flattenedJob(_ id: String) -> () -> URL? { job(id, overlay: true, to: url(id, "", "pdf")) }
+    static func originalJob(_ id: String) -> () -> URL? {
+        guard let d = NoteStore.shared.docs[id] else { return { nil } }
+        if d.hasBase {
+            let u = url(id, "（原始）", "pdf"), src = NoteStore.baseURL(id)
+            return { try? FileManager.default.removeItem(at: u); try? FileManager.default.copyItem(at: src, to: u); return u }
+        }
+        return job(id, overlay: false, to: url(id, "（原始）", "pdf"))
+    }
     private static func render(_ id: String, overlay: Bool, to u: URL) -> URL? {
         InkSafety.flushAll()   // save ink still waiting on the debounce
         guard let d = NoteStore.shared.docs[id] else { return nil }
@@ -1357,6 +1466,18 @@ enum InkSafety {
 }
 
 
+// MARK: - Writable margins for notes (display only)
+
+enum NoteMargins {
+    /// Logical units (page width = 1000): 0, 10 %, 20 %, 30 %, 40 %, 60 % of the page width per side.
+    static let steps: [CGFloat] = [0, 100, 200, 300, 400, 600]
+    static func get(_ id: String) -> (l: CGFloat, r: CGFloat) {
+        let a = UserDefaults.standard.array(forKey: "note.margins." + id) as? [Double] ?? []
+        return a.count == 2 ? (CGFloat(a[0]), CGFloat(a[1])) : (0, 0)
+    }
+    static func set(_ id: String, l: CGFloat, r: CGFloat) { UserDefaults.standard.set([Double(l), Double(r)], forKey: "note.margins." + id) }
+}
+
 // MARK: - Notes through PDFKit
 
 /// A note shown as one PDF: every page NoteRender.logicalWidth points wide (so ink coordinates match the stored
@@ -1367,6 +1488,7 @@ enum NoteDisplay {
     static func signature(_ d: NoteDoc) -> String {
         var h = Hasher()
         for p in d.pages { h.combine(p) }
+        let m = NoteMargins.get(d.id); h.combine(m.l); h.combine(m.r)
         return "\(d.id)-\(d.pages.count)-\(UInt(bitPattern: h.finalize()))"
     }
     static func url(_ d: NoteDoc) -> URL {
@@ -1382,6 +1504,7 @@ enum NoteDisplay {
             var ims: [String: UIImage] = [:]
             for p in d.pages { for it in p.items where it.kind == "image" { if let f = it.file, let im = NoteStore.shared.image(d.id, f) { ims[f] = im } } }
             let base = NoteStore.baseURL(d.id), hasBase = d.hasBase
+            let mg = NoteMargins.get(d.id)
             let ok: Bool = await withCheckedContinuation { c in
                 q.async {
                     let src = hasBase ? PDFDocument(url: base) : nil   // own copy: only used on this queue
@@ -1390,8 +1513,16 @@ enum NoteDisplay {
                     let data = r.pdfData { ctx in
                         for p in d.pages {
                             let rect = CGRect(x: 0, y: 0, width: W, height: W * CGFloat(p.aspect))
-                            ctx.beginPage(withBounds: rect, pageInfo: [:])
+                            // Writable margins: a wider white page, the note's page drawn at x = left margin.
+                            ctx.beginPage(withBounds: CGRect(x: 0, y: 0, width: W + mg.l + mg.r, height: rect.height), pageInfo: [:])
                             let cg = ctx.cgContext
+                            if mg.l + mg.r > 0 {
+                                UIColor.white.setFill(); cg.fill(CGRect(x: 0, y: 0, width: W + mg.l + mg.r, height: rect.height))
+                                UIColor(white: 0.85, alpha: 1).setStroke(); cg.setLineWidth(1)
+                                if mg.l > 0 { cg.stroke(CGRect(x: mg.l, y: 0, width: 0, height: rect.height)) }
+                                if mg.r > 0 { cg.stroke(CGRect(x: mg.l + W, y: 0, width: 0, height: rect.height)) }
+                                cg.translateBy(x: mg.l, y: 0)
+                            }
                             if let s = p.src, let pg = src?.page(at: s) {
                                 UIColor.white.setFill(); cg.fill(rect)
                                 let b = pg.bounds(for: .mediaBox)
@@ -1434,6 +1565,7 @@ struct NotePDFBody: View {
     let id: String
     var drawing = true
     var onFail: () -> Void = {}
+    var marginTick = 0
     let onPage: (Int) -> Void
     let ctl: ViewCtl
     @State private var store = NoteStore.shared
@@ -1450,11 +1582,16 @@ struct NotePDFBody: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: store.docs[id].map(NoteDisplay.signature) ?? "") {
+        .task(id: (store.docs[id].map(NoteDisplay.signature) ?? "") + "|\(marginTick)") {
             guard let d = store.docs[id] else { return }
             let sig = NoteDisplay.signature(d)
             guard sig != builtFor else { return }
-            if let p = await NoteDisplay.document(d) { pdf = p; builtFor = sig }
+            if let p = await NoteDisplay.document(d) {
+                // Save pending ink with the old margins before the new ones apply.
+                ink.flushAll()
+                let m = NoteMargins.get(d.id); ink.noteMargin = (m.l, m.r)
+                pdf = p; builtFor = sig
+            }
             else if pdf == nil { onFail() }
         }
         .task {
