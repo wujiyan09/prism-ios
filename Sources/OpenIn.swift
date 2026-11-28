@@ -57,7 +57,7 @@ struct OpenInSheet: View {
                 }
             }
         }
-        .navigationTitle("导入到 Prism")
+        .navigationTitle("导入到 \(AppBrand.name)")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         .onAppear { name = item.name }
