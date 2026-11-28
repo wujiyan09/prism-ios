@@ -639,7 +639,6 @@ struct ImportPaperView: View {
         }
         .navigationDestination(item: $newPaper) { nid in ImportPaperView(id: nid) }
         .sheet(isPresented: $showMark) { NavigationStack { ImportInkMarkSheet(id: id) } }
-        .overlay { ExportHUD() }
         .sheet(item: $share) { s in RangeShareSheet(url: s.url, current: page) }
         .padSubmit(p.map { !$0.submitted } ?? false) { update { $0.submitted = true } }
         .confirmationDialog("确定交卷？", isPresented: $confirmSubmit, titleVisibility: .visible) {

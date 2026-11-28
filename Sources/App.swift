@@ -13,7 +13,7 @@ struct ICTApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView().overlay { ExportHUD() }
                 .preferredColorScheme(appearance == "light" ? .light : (appearance == "dark" ? .dark : nil))
                 .environment(library)
                 .environment(progress)
