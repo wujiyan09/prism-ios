@@ -38,23 +38,25 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build
-          xcodebuild archive \
-            -project ICT.xcodeproj -scheme ICT \
-            -archivePath build/ICT.xcarchive \
-            -destination 'generic/platform=iOS' \
-            -configuration Release \
-            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO > build/log.txt 2>&1 || true
-          grep -E "error:|BUILD|ARCHIVE" build/log.txt | grep -v "Secrets.swift" || true
-          test -d build/ICT.xcarchive/Products/Applications/ICT.app
+          for S in ICT Nodus; do
+            xcodebuild archive \
+              -project ICT.xcodeproj -scheme $S \
+              -archivePath build/$S.xcarchive \
+              -destination 'generic/platform=iOS' \
+              -configuration Release \
+              CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO > build/log-$S.txt 2>&1 || true
+            grep -E "error:|BUILD|ARCHIVE" build/log-$S.txt | grep -v "Secrets.swift" || true
+            test -d build/$S.xcarchive/Products/Applications/$S.app
+          done
 
       - name: Package IPA
         id: pkg
         run: |
           N=$(( ${{ github.run_number }} + 44 ))
           echo "n=$N" >> "$GITHUB_OUTPUT"
-          cd build && mkdir -p Payload
-          cp -R ICT.xcarchive/Products/Applications/ICT.app Payload/
-          zip -qry "Prism-build-$N.ipa" Payload
+          cd build
+          mkdir -p a/Payload && cp -R ICT.xcarchive/Products/Applications/ICT.app a/Payload/ && (cd a && zip -qry "../DSE-Trainer-build-$N.ipa" Payload)
+          mkdir -p b/Payload && cp -R Nodus.xcarchive/Products/Applications/Nodus.app b/Payload/ && (cd b && zip -qry "../Nodus-build-$N.ipa" Payload)
 
       - name: Release to private repo
         if: github.ref == 'refs/heads/main' && github.repository == 'wujiyan09/prism-ios'
@@ -62,17 +64,17 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           N: ${{ steps.pkg.outputs.n }}
         run: |
-          gh release create "build-$N" "build/Prism-build-$N.ipa" \
+          gh release create "build-$N" "build/DSE-Trainer-build-$N.ipa" "build/Nodus-build-$N.ipa" \
             --repo wujiyan09/ict-portal-ios \
-            --title "Prism build $N" \
+            --title "DSE Trainer + Nodus build $N" \
             --notes "Built from wujiyan09/prism-ios@${GITHUB_SHA::7}"
 
       - name: Upload IPA (branch builds)
         if: github.ref != 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: Prism-${{ steps.pkg.outputs.n }}
-          path: build/Prism-build-${{ steps.pkg.outputs.n }}.ipa
+          name: apps-${{ steps.pkg.outputs.n }}
+          path: build/*-build-${{ steps.pkg.outputs.n }}.ipa
 
       - name: Remove build output
         if: always()
