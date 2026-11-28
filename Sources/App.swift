@@ -359,6 +359,14 @@ enum AppTheme: String, CaseIterable, Identifiable {
     static let fallback: AppTheme = .navy
     #endif
     static var current: AppTheme { AppTheme(rawValue: UserDefaults.standard.string(forKey: "theme") ?? "") ?? fallback }
+    /// Accent that follows the theme (Nodus): green only for 森林绿, system blue for the others. DSE Trainer: unchanged (nil).
+    var accent: Color? {
+        #if NODUS
+        return self == .forest ? Color("NodusAccent") : .blue
+        #else
+        return nil
+        #endif
+    }
 
     private static func rgb(_ h: UInt32) -> UIColor {
         UIColor(red: CGFloat(h >> 16 & 0xFF) / 255, green: CGFloat(h >> 8 & 0xFF) / 255, blue: CGFloat(h & 0xFF) / 255, alpha: 1)

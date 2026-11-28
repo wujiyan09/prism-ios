@@ -33,6 +33,7 @@ struct RootView: View {
         }
         .scratchKeepPrompt()
         .id(theme)   // rebuild so every page picks up a new background theme
+        .tint((AppTheme(rawValue: theme) ?? .fallback).accent)
         .environment(scene)
         .environment(\.tr, T)
         .onChange(of: Reminders.shared.openExam) { _, id in

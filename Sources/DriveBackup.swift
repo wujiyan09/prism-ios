@@ -11,8 +11,14 @@ import Observation
 final class DriveBackup: NSObject, ASWebAuthenticationPresentationContextProviding {
     static let shared = DriveBackup()
 
+    #if NODUS
+    // Own Google Cloud project "Nodus" (nodus-516102): the sign-in screen says Nodus.
+    static let clientID = "592381461523-530fr7q5kqhbqfn4edqoktgfeiq9knu2.apps.googleusercontent.com"
+    static let scheme = "com.googleusercontent.apps.592381461523-530fr7q5kqhbqfn4edqoktgfeiq9knu2"
+    #else
     static let clientID = "604525247700-nif26q5j8d3o7ph6rud43igc836g4pv7.apps.googleusercontent.com"
     static let scheme = "com.googleusercontent.apps.604525247700-nif26q5j8d3o7ph6rud43igc836g4pv7"
+    #endif
     static var redirect: String { scheme + ":/oauth2redirect" }
     // DSE Trainer keeps the old folder so existing backups stay readable; Nodus gets its own.
     #if NODUS

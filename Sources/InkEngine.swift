@@ -437,7 +437,9 @@ enum InkPaletteHost {
         v.center = CGPoint(x: min(w.bounds.width - half - m, max(half + m, CGFloat(fx) * w.bounds.width)), y: y)
     }
     /// Drop anywhere: snaps to the nearest corner (disc) or edge (bar along that edge), and remembers it.
-    static func snap(_ v: UIView, in w: UIWindow) {
+    /// Running snap animation (interruptible: a new drag grabs the tray mid-flight).
+    static var snapAnim: UIViewPropertyAnimator?
+    static func snap(_ v: UIView, in w: UIWindow, velocity: CGPoint = .zero) {
         at = nil
         let p = v.center, sa = w.safeAreaInsets
         let W = w.bounds.width, H = w.bounds.height
@@ -457,8 +459,26 @@ enum InkPaletteHost {
                 UserDefaults.standard.set(Double(p.x / max(1, W)), forKey: "ink.palette.x")
             }
         }
-        update()
-        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0) { place(v, in: w) }
+        // Target frame first (without moving the view), so the spring's initial velocity matches the finger.
+        let from = v.center
+        let fromBounds = v.bounds
+        update(); v.superview?.layoutIfNeeded()
+        place(v, in: w)
+        let to = v.center, toBounds = v.bounds
+        v.center = from; v.bounds = fromBounds; v.layoutIfNeeded()
+        let dist = max(1, hypot(to.x - from.x, to.y - from.y))
+        let along = (velocity.x * (to.x - from.x) + velocity.y * (to.y - from.y)) / dist
+        let rel = max(-30, min(30, along / dist))
+        snapAnim?.stopAnimation(true)
+        let a = UIViewPropertyAnimator(duration: 0.5, timingParameters: UISpringTimingParameters(dampingRatio: 0.82, initialVelocity: CGVector(dx: rel, dy: rel)))
+        a.isInterruptible = true
+        a.addAnimations {
+            // Position and shape (disc ↔ bar, horizontal ↔ vertical) move in the same spring.
+            v.bounds = toBounds; v.center = to; v.layoutIfNeeded()
+        }
+        a.addCompletion { _ in if snapAnim === a { snapAnim = nil } }
+        snapAnim = a
+        a.startAnimation()
     }
     /// Tap on the disc: expands into a bar along the nearer horizontal edge of its corner.
     static func expand(in w: UIWindow?) {
@@ -545,11 +565,14 @@ final class PaletteDrag: NSObject {
     @objc func pan(_ g: UIPanGestureRecognizer) {
         guard let v = g.view, let w = window else { return }
         switch g.state {
-        case .began: dragging = true; start = v.center
+        case .began:
+            // Catch the tray where it is now, even mid-snap.
+            if let a = InkPaletteHost.snapAnim { a.stopAnimation(false); a.finishAnimation(at: .current); InkPaletteHost.snapAnim = nil }
+            dragging = true; start = v.layer.presentation()?.position ?? v.center; v.center = start
         case .changed:
             let t = g.translation(in: w)
             v.center = CGPoint(x: start.x + t.x, y: start.y + t.y)
-        default: dragging = false; InkPaletteHost.snap(v, in: w)
+        default: dragging = false; InkPaletteHost.snap(v, in: w, velocity: g.velocity(in: w))
         }
     }
 }
@@ -604,7 +627,7 @@ struct InkPalette: View {
                 .contextMenu { Button("编辑笔", systemImage: "slider.horizontal.3") { editing = true } }
                 .popover(isPresented: Binding(get: { quick == p.id }, set: { if !$0 { quick = nil } }),
                          arrowEdge: layout == "l" ? .trailing : layout == "r" ? .leading : layout == "b" ? .bottom : .top) {
-                    QuickPen(id: p.id, picker: picker).presentationCompactAdaptation(.popover)
+                    QuickPen(id: p.id, picker: picker).presentationCompactAdaptation(.popover).presentationBackground(.regularMaterial)
                 }
                 .accessibilityLabel("\(p.kind.title)")
             }
@@ -739,12 +762,15 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
     private let hoverLayer = CAShapeLayer()
     private var liftedAt: CFTimeInterval = 0
     private var lastHover: CGPoint?
+    /// The canvas the pencil last hovered over (any page / window), for placing the squeeze menu at the tip.
+    weak static var hoverCanvas: InkCanvas?
+    static var hoverAt: CFTimeInterval = 0
     @objc private func hovered(_ g: UIHoverGestureRecognizer) {
         CATransaction.begin(); CATransaction.setDisableActions(true); defer { CATransaction.commit() }
         switch g.state {
         case .began, .changed:
             let p = g.location(in: inkView)
-            lastHover = g.location(in: self)
+            lastHover = g.location(in: self); InkCanvas.hoverCanvas = self; InkCanvas.hoverAt = CACurrentMediaTime()
             guard drawingGestureRecognizer.touch == nil, CACurrentMediaTime() - liftedAt > 0.28, tool.kind != .lasso else { hoverLayer.path = nil; return }
             let z = g.zOffset
             let eraser = tool.kind == .eraser || tool.kind == .pixelEraser
@@ -793,10 +819,16 @@ class InkCanvas: UIScrollView, InkToolPickerObserver, UIEditMenuInteractionDeleg
         if let p = InkToolPicker.all.allObjects.first(where: { $0.visibleFor.contains(self) }) { p.selectedTool = t } else { tool = t }
     }
     private func showRadial(_ p: CGPoint?) {
-        guard let w = window else { return }
-        let picker = InkToolPicker.all.allObjects.first(where: { $0.visibleFor.contains(self) })
-        let q = p ?? lastHover ?? CGPoint(x: bounds.midX, y: bounds.midY)
-        InkRadial.show(at: convert(q, to: w), in: w, picker: picker, canvas: self)
+        // p is in this canvas's own coordinates (hover pose of the squeeze). Without one, use the canvas the pencil
+        // last hovered (the squeeze can be delivered to another page first), converting in that canvas's space.
+        var c: InkCanvas = self, q: CGPoint
+        if let p { q = p }
+        else if let h = InkCanvas.hoverCanvas, h.window != nil, CACurrentMediaTime() - InkCanvas.hoverAt < 3, let lh = h.lastHover { c = h; q = lh }
+        else { q = lastHover ?? CGPoint(x: bounds.midX, y: bounds.midY) }
+        guard let w = c.window else { return }
+        let picker = InkToolPicker.all.allObjects.first(where: { $0.visibleFor.contains(c) })
+        // convert(_:to:) from a UIScrollView uses bounds (content offset + zoom included) → window space of that screen.
+        InkRadial.show(at: c.convert(q, to: w), in: w, picker: picker, canvas: c)
     }
     private func showPaletteAt(_ p: CGPoint?) {
         guard let w = window else { return }
@@ -1467,7 +1499,16 @@ enum InkRadial {
     private static var host: UIView?
     private static var lastToggle = Date.distantPast
     static var isShown: Bool { host != nil }
-    static func dismiss() { host?.removeFromSuperview(); host = nil }
+    static func dismiss() {
+        guard let h = host else { return }
+        host = nil
+        h.isUserInteractionEnabled = false
+        let card = h.subviews.first
+        // Same motion as opening, reversed: shrink + fade, then remove.
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseIn, .beginFromCurrentState], animations: {
+            card?.transform = CGAffineTransform(scaleX: 0.6, y: 0.6); card?.alpha = 0
+        }) { _ in h.removeFromSuperview() }
+    }
     /// Squeeze once opens, squeeze again closes. One squeeze can reach several canvases at once: only the first counts.
     static func toggle(open: () -> Void) {
         guard Date().timeIntervalSince(lastToggle) > 0.3 else { return }

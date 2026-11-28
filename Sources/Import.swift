@@ -347,14 +347,16 @@ enum ImportSource: String, Identifiable { case files, photos, scan; var id: Stri
 
 extension View {
     /// Files / Photos / document-camera pickers that hand back one PDF (images become pages). `.prismpaper` bundles restore directly.
-    func importPickers(source: Binding<ImportSource?>, photos: Binding<[PhotosPickerItem]>, done: @escaping (PDFDocument?, String?) -> Void) -> some View {
-        modifier(ImportPickers(source: source, photos: photos, done: done))
+    func importPickers(source: Binding<ImportSource?>, photos: Binding<[PhotosPickerItem]>, separate: Bool = false, done: @escaping (PDFDocument?, String?) -> Void) -> some View {
+        modifier(ImportPickers(source: source, photos: photos, separate: separate, done: done))
     }
 }
 
 struct ImportPickers: ViewModifier {
     @Binding var source: ImportSource?
     @Binding var photos: [PhotosPickerItem]
+    /// Several PDFs picked: one document each (otherwise they're merged into one).
+    var separate = false
     let done: (PDFDocument?, String?) -> Void
     @State private var busy = false
     @State private var busyText = "正在导入…"
@@ -399,7 +401,7 @@ struct ImportPickers: ViewModifier {
         let pendingNames = urls.map { $0.deletingPathExtension().lastPathComponent }
         ImportPending.shared.names += pendingNames
         let t0 = Date()
-        let done = self.done
+        let done = self.done, separate = self.separate
         // Copy the picked files now, while the picker's security-scoped URLs are still valid (they can vanish after
         // the callback returns); parse the copies in the background.
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("import-" + UUID().uuidString, isDirectory: true)
@@ -432,6 +434,28 @@ struct ImportPickers: ViewModifier {
                 }
                 if local.last != dst, (try? FileManager.default.copyItem(at: u, to: dst)) != nil { local.append(dst) }
                 if ok { u.stopAccessingSecurityScopedResource() }
+            }
+            // Several PDFs picked at once: import each as its own document (one by one, each with its own pending row).
+            let pdfs = local.filter { $0.pathExtension.lowercased() == "pdf" }
+            if separate && pdfs.count > 1 && pdfs.count == local.count {
+                DispatchQueue.main.asyncAfter(deadline: .now() + max(0, 0.6 - Date().timeIntervalSince(t0))) { busy = false }
+                for (k, u) in pdfs.enumerated() {
+                    var r: (PDFDocument?, String?) = (nil, nil)
+                    ImportPickers.read([u]) { d, e in r = (d, e) }
+                    if let d = r.0 { PageSizes.put(u, (0..<d.pageCount).map { d.page(at: $0)?.bounds(for: .mediaBox).size ?? CGSize(width: 595, height: 842) }) }
+                    let name = u.deletingPathExtension().lastPathComponent, title = r.0?.documentAttributes?[PDFDocumentAttribute.titleAttribute]
+                    let err = r.1
+                    let sem = DispatchSemaphore(value: 0)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + (k == 0 ? max(0, 0.6 - Date().timeIntervalSince(t0)) : 0.05)) {
+                        if let i = ImportPending.shared.names.firstIndex(of: name) { ImportPending.shared.names.remove(at: i) }
+                        let fresh = PDFDocument(url: u)
+                        if let fresh, let title { var a = fresh.documentAttributes ?? [:]; a[PDFDocumentAttribute.titleAttribute] = title; fresh.documentAttributes = a }
+                        done(fresh, fresh == nil ? (err ?? "读不到 \(name)") : nil)
+                        sem.signal()
+                    }
+                    sem.wait()
+                }
+                return
             }
             // Touch page sizes here so creating the note on the main thread doesn't parse pages.
             var result: (PDFDocument?, String?) = (nil, nil)

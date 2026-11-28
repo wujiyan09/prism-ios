@@ -36,6 +36,8 @@ struct NoteDoc: Codable, Identifiable, Hashable {
     var modified: Double
     var pages: [NotePage] = []
     var hasBase = false
+    /// Bookmarked pages: page id → name ("" = default name). Optional so older notes decode unchanged.
+    var marks: [String: String]? = nil
 }
 
 struct NoteSummary: Codable, Hashable { var id: String; var title: String; var folder: String; var pages: Int; var modified: Double }
@@ -153,7 +155,7 @@ final class NoteStore {
     }
     func deletePage(_ id: String, _ pid: String) {
         try? FileManager.default.removeItem(at: PDFInk.dir(Self.inkKey(id, pid)))
-        update(id) { $0.pages.removeAll { $0.id == pid } }
+        update(id) { $0.pages.removeAll { $0.id == pid }; $0.marks?[pid] = nil }
     }
     func size(_ id: String) -> Int {
         var n = 0
@@ -548,7 +550,7 @@ struct NotesLibraryView: View {
         .confirmationDialog("删除 \(confirm.count) 份笔记？页面、手写、图片和文本框都会从这台设备删除。", isPresented: Binding(get: { !confirm.isEmpty }, set: { if !$0 { confirm = [] } }), titleVisibility: .visible) {
             Button("删除", role: .destructive) { confirm.forEach { store.delete($0) }; confirm = []; selection = [] }
         }
-        .importPickers(source: $picker, photos: $photoItems) { doc, err in
+        .importPickers(source: $picker, photos: $photoItems, separate: true) { doc, err in
             if let doc {
                 let t = (doc.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String).flatMap { $0.isEmpty ? nil : $0 }
                     ?? "笔记 " + Date().formatted(date: .numeric, time: .omitted)
@@ -695,6 +697,19 @@ struct NoteDocView: View {
     private var pageIndex: Int { doc?.pages.firstIndex { $0.id == current } ?? 0 }
 
     var body: some View {
+        HStack(spacing: 0) {
+            if showPages {
+                // Collapsible page sidebar (like Preview / GoodNotes): thumbnails, jump, reorder/add/delete, bookmarks.
+                NotePagesSheet(id: id, current: $current, inline: true) { i in vctl.goPage?(i) }
+                    .frame(width: 210)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                Divider()
+            }
+            content
+        }
+    }
+
+    @ViewBuilder private var content: some View {
         Group {
             if let doc, usePDF, !classic, !pdfFailed {
                 NotePDFBody(id: id, drawing: tool == .pen, onFail: { pdfFailed = true }, marginTick: marginTick, onPage: { i in
@@ -736,7 +751,6 @@ struct NoteDocView: View {
                                 current = d.pages[i].id; jump = offset(d, b, d.pages[i].id)
                             }
                         }
-                        .onChange(of: showPages) { _, v in if !v, let c = current { jump = offset(doc, base, c) } }
                         .onReceive(NotificationCenter.default.publisher(for: .padViewport)) { n in
                             // 手写板 scrolled/zoomed: show the same part of the same page.
                             guard Date().timeIntervalSince(mainUser.t) > 0.6, PadHub.shared.mainFollows, let ch = n.object as? String, let r = n.userInfo?["r"] as? CGRect, r.width > 1,
@@ -799,7 +813,6 @@ struct NoteDocView: View {
         .sheet(isPresented: $showQuiz) { quizSheet(gen: false) }
         .sheet(isPresented: $showGen) { quizSheet(gen: true) }
         .navigationDestination(item: $newPaper) { nid in ImportPaperView(id: nid) }
-        .sheet(isPresented: $showPages) { NavigationStack { NotePagesSheet(id: id, current: $current) } }
         .sheet(item: $editing) { it in NavigationStack { NoteTextEditor(docID: id, item: it) } }
         .sheet(item: $share) { s in RangeShareSheet(url: s.url, current: pageIndex) }
         .sheet(isPresented: $camera) { CameraPicker { im in camera = false; if let im { insert(im) } }.ignoresSafeArea() }
@@ -1017,7 +1030,20 @@ struct NoteDocView: View {
                 Button { InkSafety.flushAll(); showQuiz = true } label: { Label("把 PDF 题目转成可作答", systemImage: "arrow.triangle.2.circlepath.doc.on.clipboard") }
                 Button { InkSafety.flushAll(); showGen = true } label: { Label("根据此 PDF 出题", systemImage: "sparkles") }
             } label: { Image(systemName: "sparkles.rectangle.stack") }.accessibilityLabel("题目")
-            Button { showPages = true } label: { Image(systemName: "square.grid.2x2") }.accessibilityLabel("页面")
+            if let doc, doc.pages.indices.contains(pageIndex) {
+                let pid = doc.pages[pageIndex].id, on = doc.marks?[pid] != nil
+                Button {
+                    store.update(id) { d in var m = d.marks ?? [:]; if m[pid] != nil { m[pid] = nil } else { m[pid] = "" }; d.marks = m.isEmpty ? nil : m }
+                } label: { Image(systemName: on ? "bookmark.fill" : "bookmark") }
+                .tint(on ? .orange : nil).foregroundStyle(on ? Color.orange : Color.primary)
+                .accessibilityLabel(on ? "取消书签" : "添加书签")
+            }
+            Button {
+                let i = pageIndex
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { showPages.toggle() }
+                // Keep the current page in view after the width changes.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { vctl.goPage?(i) }
+            } label: { Image(systemName: showPages ? "sidebar.left" : "sidebar.squares.left") }.accessibilityLabel("页面")
             Menu {
                 Button { field = doc?.title ?? ""; rename = true } label: { Label("重命名", systemImage: "pencil") }
                 if usePDF && !classic && !pdfFailed {
@@ -1339,27 +1365,64 @@ struct CameraPicker: UIViewControllerRepresentable {
 struct NotePagesSheet: View {
     let id: String
     @Binding var current: String?
+    /// Sidebar in the note view (no sheet chrome; tapping jumps and stays open).
+    var inline = false
+    var onPick: ((Int) -> Void)? = nil
     @State private var store = NoteStore.shared
     @State private var confirm: String?
+    @State private var onlyMarked = false
+    @State private var renaming: String?
+    @State private var markName = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        let pages = store.docs[id]?.pages ?? []
+        let all = store.docs[id]?.pages ?? []
+        let marks = store.docs[id]?.marks ?? [:]
+        let pages = all
         List {
-            ForEach(Array(pages.enumerated()), id: \.element.id) { i, p in
-                Button { current = p.id; dismiss() } label: {
+            if !marks.isEmpty || onlyMarked {
+                Picker("显示", selection: $onlyMarked) { Text("全部页面").tag(false); Text("只看书签").tag(true) }
+                    .pickerStyle(.segmented).listRowBackground(Color.clear)
+            }
+            ForEach(Array(pages.enumerated()).filter { !onlyMarked || marks[$0.element.id] != nil }, id: \.element.id) { i, p in
+                Button { current = p.id; if inline { onPick?(i) } else { dismiss() } } label: {
+                  if inline {
+                    VStack(spacing: 6) {
+                        NoteThumb(id: id, page: p).frame(width: 130, height: 130 * p.aspect)
+                            .overlay(RoundedRectangle(cornerRadius: 3).stroke(p.id == current ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: p.id == current ? 3 : 0.5))
+                            .overlay(alignment: .topTrailing) { if marks[p.id] != nil { Image(systemName: "bookmark.fill").foregroundStyle(.orange).padding(4) } }
+                        Text(marks[p.id].map { $0.isEmpty ? "\(i + 1)" : $0 } ?? "\(i + 1)").font(.caption).lineLimit(1)
+                            .foregroundStyle(p.id == current ? Color.accentColor : .secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                  } else {
                     HStack(spacing: 14) {
                         NoteThumb(id: id, page: p).frame(width: 70, height: 70 * p.aspect)
                         VStack(alignment: .leading) {
-                            Text("第 \(i + 1) 页").font(.headline)
-                            Text(p.src != nil ? "导入的页面" : (NotePaper(rawValue: p.style)?.name ?? "") + "纸").font(.caption).foregroundStyle(.secondary)
+                            if let m = marks[p.id] {
+                                Label(m.isEmpty ? "第 \(i + 1) 页" : m, systemImage: "bookmark.fill").font(.headline).labelStyle(.titleAndIcon)
+                                    .foregroundStyle(.primary).tint(.orange)
+                                Text("第 \(i + 1) 页").font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                Text("第 \(i + 1) 页").font(.headline)
+                                Text(p.src != nil ? "导入的页面" : (NotePaper(rawValue: p.style)?.name ?? "") + "纸").font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                         Spacer()
                         if p.id == current { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
                     }
+                  }
                 }
                 .buttonStyle(.plain)
                 .swipeActions { if pages.count > 1 { Button("删除", role: .destructive) { confirm = p.id } } }
+                .contextMenu {
+                    if marks[p.id] != nil {
+                        Button { markName = marks[p.id] ?? ""; renaming = p.id } label: { Label("重命名书签", systemImage: "pencil") }
+                        Button(role: .destructive) { setMark(p.id, nil) } label: { Label("取消书签", systemImage: "bookmark.slash") }
+                    } else {
+                        Button { setMark(p.id, "") } label: { Label("添加书签", systemImage: "bookmark") }
+                    }
+                }
             }
             .onMove { from, to in store.update(id) { $0.pages.move(fromOffsets: from, toOffset: to) } }
             .listRowBackground(Color.cardBackground)
@@ -1377,8 +1440,11 @@ struct NotePagesSheet: View {
         }
         .appList()
         .environment(\.editMode, .constant(.active))
-        .navigationTitle("页面（\(pages.count)）").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() }.bold() } }
+        .alert("书签名称", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("名称", text: $markName)
+            Button("取消", role: .cancel) {}
+            Button("好") { if let r = renaming { setMark(r, markName.trimmingCharacters(in: .whitespaces)) } }
+        }
         .confirmationDialog("删除这一页？上面的手写、图片和文本框也会删除。", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }), titleVisibility: .visible) {
             Button("删除", role: .destructive) { if let c = confirm { store.deletePage(id, c); if current == c { current = nil } }; confirm = nil }
         }
@@ -1781,5 +1847,13 @@ struct NoteGridThumb: View {
             let im = NoteRender.flat(doc.id, p, width: 280)
             Self.cache.setObject(im, forKey: key); image = im
         }
+    }
+}
+
+
+extension NotePagesSheet {
+    /// nil removes the bookmark; "" = default name. Stored in the note itself (so it's in exports and Drive backups).
+    func setMark(_ pid: String, _ name: String?) {
+        NoteStore.shared.update(id) { d in var m = d.marks ?? [:]; m[pid] = name; d.marks = m.isEmpty ? nil : m }
     }
 }

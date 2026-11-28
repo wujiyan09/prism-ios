@@ -354,7 +354,7 @@ enum DataMigration {
         let fm = FileManager.default
         let lib = fm.urls(for: .libraryDirectory, in: .userDomainMask)[0]
         let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"
-        let dest = lib.appendingPathComponent("Prism 升级前备份 " + f.string(from: Date()), isDirectory: true)
+        let dest = lib.appendingPathComponent(AppBrand.name + " 升级前备份 " + f.string(from: Date()), isDirectory: true)
         do {
             try fm.createDirectory(at: dest, withIntermediateDirectories: true)
             for d in [fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0], fm.urls(for: .documentDirectory, in: .userDomainMask)[0]] where fm.fileExists(atPath: d.path) {
