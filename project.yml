@@ -30,6 +30,7 @@ targets:
         buildPhase: resources
         excludes:
           - "AppIcon.icon/**"
+          - "NodusIcon.icon/**"
           - "data/book-*.json"
           - "data/dse-*.json"
           - "data/manifest.json"
@@ -58,9 +59,13 @@ targets:
         buildPhase: resources
         excludes:
           - "AppIcon.icon/**"
+          - "NodusIcon.icon/**"
           - "data/book-*.json"
           - "data/dse-*.json"
           - "data/manifest.json"
+      - path: Resources/NodusIcon.icon
+        type: file
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wujiyan09.nodus

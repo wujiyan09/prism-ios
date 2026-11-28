@@ -3,8 +3,8 @@
     {
       "value": {
         "linear-gradient": [
-          "srgb:0.10588,0.18039,0.41961,1.00000",
-          "srgb:0.02353,0.05490,0.14118,1.00000"
+          "srgb:0.06,0.42,0.34,1",
+          "srgb:0.01,0.12,0.10,1"
         ]
       }
     },
@@ -12,39 +12,30 @@
       "appearance": "dark",
       "value": {
         "linear-gradient": [
-          "srgb:0.04706,0.07843,0.20000,1.00000",
-          "srgb:0.00000,0.00000,0.00000,1.00000"
+          "srgb:0.02,0.20,0.16,1",
+          "srgb:0,0,0,1"
         ]
       }
     }
   ],
   "groups": [
     {
-      "name": "Prism",
+      "name": "DSE Trainer",
       "layers": [
         {
-          "name": "facet",
-          "image-name": "facet.svg",
+          "name": "check",
+          "image-name": "check.svg",
           "glass": false
         },
         {
-          "name": "prism",
-          "image-name": "prism.svg",
-          "glass": true,
-          "opacity-specializations": [
-            {
-              "value": 1
-            },
-            {
-              "appearance": "tinted",
-              "value": 0.9
-            }
-          ]
+          "name": "rings",
+          "image-name": "rings.svg",
+          "glass": false
         },
         {
-          "name": "spectrum",
-          "image-name": "spectrum.svg",
-          "glass": false
+          "name": "glass",
+          "image-name": "glass.svg",
+          "glass": true
         },
         {
           "name": "depth",

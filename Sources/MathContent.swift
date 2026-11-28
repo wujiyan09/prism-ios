@@ -268,6 +268,7 @@ struct StorageView: View {
                     } label: { Label("Google 云端硬盘备份", systemImage: "externaldrive.badge.icloud") }
                 }
             }
+            if !RootView.notesOnly {
             Section {
                 LabeledContent(T("Maths on this device", "数学（本机）"), value: fmt(total))
                 Stepper(value: Binding(get: { c.capMB }, set: { c.capMB = $0; c.evict() }), in: 100...2000, step: 100) {
@@ -277,9 +278,11 @@ struct StorageView: View {
                 Text(T("Chapters download when you open them. Over the limit, the least recently opened ones are removed, except books kept offline.",
                        "章节在打开时下载。超过上限时，会先删最久没打开的章节；设为离线的课本不会被删。"))
             }
+            }
             ImportStorageSection()
             NotesStorageSection()
             PDFInkSection()
+            if !RootView.notesOnly {
             Section {
                 ForEach(ict.books) { b in
                     let size = ict.bookSize(b.id)
@@ -347,6 +350,7 @@ struct StorageView: View {
                 } header: {
                     Text("\(T(b.name, b.nameZh)) · \(fmt(b.chs.reduce(0) { $0 + (sizes[$1.id] ?? 0) }))")
                 }
+            }
             }
         }
         .navigationTitle(T("Storage", "存储"))

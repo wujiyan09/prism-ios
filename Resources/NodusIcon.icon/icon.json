@@ -1,0 +1,56 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "linear-gradient": [
+          "srgb:0.28,0.18,0.62,1",
+          "srgb:0.07,0.04,0.20,1"
+        ]
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "srgb:0.12,0.07,0.30,1",
+          "srgb:0,0,0,1"
+        ]
+      }
+    }
+  ],
+  "groups": [
+    {
+      "name": "Nodus",
+      "layers": [
+        {
+          "name": "nodes",
+          "image-name": "nodes.svg",
+          "glass": false
+        },
+        {
+          "name": "glass",
+          "image-name": "glass.svg",
+          "glass": true
+        },
+        {
+          "name": "depth",
+          "image-name": "depth.svg",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.3
+      },
+      "specular": true,
+      "lighting": "individual"
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

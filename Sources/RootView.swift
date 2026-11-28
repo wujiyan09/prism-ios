@@ -532,10 +532,12 @@ struct SettingsView: View {
                 } label: {
                     Label(T("Storage", "存储"), systemImage: "internaldrive")
                 }
+                if !Self.notesOnly {
                 NavigationLink {
                     ReadingSettingsView()
                 } label: {
                     Label(T("Reading", "阅读"), systemImage: "textformat.size")
+                }
                 }
                 NavigationLink {
                     DeepSeekSettingsView()
@@ -544,6 +546,7 @@ struct SettingsView: View {
                 }
             }
             .listRowBackground(Color.cardBackground)
+            if !RootView.notesOnly {
             PortalSettingsSection()
             Section {
                 Picker(T("Language", "语言"), selection: $lang) {
@@ -558,9 +561,10 @@ struct SettingsView: View {
                 Text(T("Knowledge points stay in English. EN + 中文 adds Chinese explanations.", "知识点保持英文；EN + 中文 会加上中文讲解。"))
             }
             .listRowBackground(Color.cardBackground)
+            }
             Section {
                 NavigationLink { SidebarOrderView() } label: { Label(T("Sidebar", "侧边栏"), systemImage: "sidebar.left") }
-                NavigationLink { SubjectOrderView() } label: { Label(T("Subject order", "学科顺序"), systemImage: "arrow.up.arrow.down") }
+                if !RootView.notesOnly { NavigationLink { SubjectOrderView() } label: { Label(T("Subject order", "学科顺序"), systemImage: "arrow.up.arrow.down") } }
             } header: {
                 Text(T("Order", "顺序"))
             }
