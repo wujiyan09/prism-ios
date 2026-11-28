@@ -9,7 +9,7 @@ struct RootView: View {
     @Environment(Library.self) private var lib
     @Environment(\.horizontalSizeClass) private var hsc
     @AppStorage("lang") private var lang = "zh"
-    @AppStorage("theme") private var theme = AppTheme.navy.rawValue
+    @AppStorage("theme") private var theme = AppTheme.fallback.rawValue
     @State private var scene = SceneModel()
 
     var body: some View {
@@ -498,7 +498,7 @@ struct SettingsView: View {
     @State private var checking = false
     @AppStorage("autoNext") private var autoNext = true
     @AppStorage("appearance") private var appearance = "system"
-    @AppStorage("theme") private var theme = AppTheme.navy.rawValue
+    @AppStorage("theme") private var theme = AppTheme.fallback.rawValue
     var body: some View {
         let T = Tr(en: lang == "en")
         Form {

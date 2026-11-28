@@ -353,7 +353,12 @@ struct SectionCommands: Commands {
 enum AppTheme: String, CaseIterable, Identifiable {
     case navy, black, graphite, forest, plum, system
     var id: String { rawValue }
-    static var current: AppTheme { AppTheme(rawValue: UserDefaults.standard.string(forKey: "theme") ?? "") ?? .navy }
+    #if NODUS
+    static let fallback: AppTheme = .forest
+    #else
+    static let fallback: AppTheme = .navy
+    #endif
+    static var current: AppTheme { AppTheme(rawValue: UserDefaults.standard.string(forKey: "theme") ?? "") ?? fallback }
 
     private static func rgb(_ h: UInt32) -> UIColor {
         UIColor(red: CGFloat(h >> 16 & 0xFF) / 255, green: CGFloat(h >> 8 & 0xFF) / 255, blue: CGFloat(h & 0xFF) / 255, alpha: 1)

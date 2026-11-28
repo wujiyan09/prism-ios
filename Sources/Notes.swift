@@ -358,13 +358,28 @@ struct NotesLibraryView: View {
     @State private var field = ""
     @State private var error: String?
     @State private var open: String?
+    /// Files-style view options (remembered): 图标 / 列表, sort, group by date.
+    @AppStorage("notes.view") private var viewMode = "list"
+    @AppStorage("notes.sort") private var sortKey = "date"
+    @AppStorage("notes.group") private var grouped = false
 
     private var shown: [NoteDoc] {
         let q = search.trimmingCharacters(in: .whitespaces)
-        if !q.isEmpty { return store.sorted.filter { $0.title.localizedCaseInsensitiveContains(q) && ($0.folder == folder || $0.folder.hasPrefix(folder.isEmpty ? "" : folder + "/")) } }
-        return store.sorted.filter { $0.folder == folder }
+        let base: [NoteDoc]
+        if !q.isEmpty { base = store.sorted.filter { $0.title.localizedCaseInsensitiveContains(q) && ($0.folder == folder || $0.folder.hasPrefix(folder.isEmpty ? "" : folder + "/")) } }
+        else { base = store.sorted.filter { $0.folder == folder } }
+        switch sortKey {
+        case "name": return base.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        case "size": return base.sorted { $0.pages.count > $1.pages.count }
+        case "created": return base.sorted { $0.created > $1.created }
+        default: return base
+        }
     }
-    private var groups: [(String, [NoteDoc])] { shown.isEmpty ? [] : [("", shown)] }
+    private var groups: [(String, [NoteDoc])] {
+        guard !shown.isEmpty else { return [] }
+        guard grouped else { return [("", shown)] }
+        return FileViewOptions.dateGroups(shown) { $0.modified }
+    }
 
     @ViewBuilder private var folderSection: some View {
         if search.isEmpty && !store.children(folder).isEmpty {
@@ -423,6 +438,60 @@ struct NotesLibraryView: View {
         }
     }
 
+    private var gridView: some View {
+        ScrollView {
+            ImportPendingRows()
+            if store.docs.isEmpty && folder.isEmpty {
+                ContentUnavailableView("还没有笔记", systemImage: "note.text", description: Text("右上角 + 新建空白笔记，或导入 PDF、照片、扫描。")).padding(.top, 60)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 22, alignment: .top)], alignment: .leading, spacing: 26) {
+                if search.isEmpty {
+                    ForEach(store.children(folder), id: \.self) { f in
+                        NavigationLink { NotesLibraryView(folder: f) } label: {
+                            FileGridCell(title: NoteStore.leaf(f), subtitle: "\(count(f)) 项") {
+                                Image(systemName: "folder.fill").resizable().scaledToFit().foregroundStyle(Color.accentColor.gradient).padding(18)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .dropDestination(for: String.self) { ids, _ in dropNotes(ids, f) }
+                        .contextMenu {
+                            Button { field = NoteStore.leaf(f); renameFolder = f } label: { Label("重命名文件夹", systemImage: "pencil") }
+                            Button(role: .destructive) { deleteFolder = f } label: { Label("删除文件夹", systemImage: "trash") }
+                        }
+                    }
+                }
+                ForEach(groups, id: \.0) { g in
+                    Section {
+                        ForEach(g.1) { n in gridCell(n) }
+                    } header: {
+                        if !g.0.isEmpty { Text(g.0).font(.title3.bold()).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8) }
+                    }
+                }
+            }
+            .padding(20)
+        }
+        .scrollContentBackground(.hidden)
+        .background(Color.appBackground)
+    }
+    @ViewBuilder private func gridCell(_ n: NoteDoc) -> some View {
+        let sel = selection.contains(n.id)
+        let cell = FileGridCell(title: n.title, subtitle: Date(timeIntervalSince1970: n.modified).formatted(date: .numeric, time: .shortened) + " · \(n.pages.count) 页", selected: edit == .active ? sel : nil) {
+            NoteThumb(doc: n)
+        }
+        if edit == .active {
+            Button { if sel { selection.remove(n.id) } else { selection.insert(n.id) } } label: { cell }.buttonStyle(.plain)
+        } else {
+            NavigationLink { NoteDocView(id: n.id) } label: { cell }
+                .buttonStyle(.plain)
+                .draggable(n.id)
+                .contextMenu { noteMenu(n) }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        if viewMode == "grid" { gridView } else { listView }
+    }
+
     private var listView: some View {
         List(selection: $selection) {
             ImportPendingRows()
@@ -434,14 +503,17 @@ struct NotesLibraryView: View {
             ForEach(groups, id: \.0) { g in
                 Section {
                     ForEach(g.1) { n in noteRow(n) }
-                } header: { notesHeader }
+                } header: { if g.0.isEmpty { notesHeader } else { Text(g.0) } }
                 .listRowBackground(Color.cardBackground)
             }
             remoteSection
         }
         .environment(\.editMode, $edit)
-        .searchable(text: $search, prompt: "搜索标题")
         .appList()
+    }
+    private var browser: some View {
+        content
+        .searchable(text: $search, prompt: "搜索标题")
         .navigationTitle(folder.isEmpty ? "笔记" : NoteStore.leaf(folder))
         .navigationDestination(item: $open) { NoteDocView(id: $0) }
     }
@@ -456,6 +528,9 @@ struct NotesLibraryView: View {
                 if VNDocumentCameraViewController.isSupported { Button { picker = .scan } label: { Label("扫描纸本", systemImage: "doc.viewfinder") } }
             } label: { Image(systemName: "plus") }
         }
+        ToolbarItem(placement: .primaryAction) {
+            FileViewOptions(mode: $viewMode, sort: $sortKey, grouped: $grouped, sorts: [("date", "修改日期"), ("created", "创建日期"), ("name", "名称"), ("size", "大小（页数）")])
+        }
         if edit == .active {
             ToolbarItem(placement: .confirmationAction) { Button("完成") { withAnimation { edit = .inactive; selection = [] } }.bold() }
         } else {
@@ -468,7 +543,7 @@ struct NotesLibraryView: View {
     }
 
     private var core: some View {
-        listView
+        browser
             .toolbar { bar }
         .confirmationDialog("删除 \(confirm.count) 份笔记？页面、手写、图片和文本框都会从这台设备删除。", isPresented: Binding(get: { !confirm.isEmpty }, set: { if !$0 { confirm = [] } }), titleVisibility: .visible) {
             Button("删除", role: .destructive) { confirm.forEach { store.delete($0) }; confirm = []; selection = [] }
@@ -1610,5 +1685,101 @@ struct NotePDFBody: View {
         .onAppear { ink.enabled = drawing }
         .onChange(of: drawing) { _, v in ink.enabled = v }
         .onDisappear { ink.flushAll() }
+    }
+}
+
+
+// MARK: - Files-style grid / list (笔记 and 最近使用)
+
+/// The Files app's view-options button: 图标 / 列表, 排序方式, 使用分组.
+struct FileViewOptions: View {
+    @Binding var mode: String
+    @Binding var sort: String
+    @Binding var grouped: Bool
+    var sorts: [(String, String)] = []
+    var body: some View {
+        Menu {
+            Picker("显示方式", selection: $mode.animation()) {
+                Label("图标", systemImage: "square.grid.2x2").tag("grid")
+                Label("列表", systemImage: "list.bullet").tag("list")
+            }
+            .pickerStyle(.inline)
+            if !sorts.isEmpty {
+                Picker(selection: $sort.animation()) {
+                    ForEach(sorts, id: \.0) { k, t in Text(t).tag(k) }
+                } label: { Label("排序方式", systemImage: "arrow.up.arrow.down") }
+                .pickerStyle(.menu)
+            }
+            Toggle(isOn: $grouped.animation()) { Label("使用分组", systemImage: "rectangle.3.group") }
+        } label: {
+            Image(systemName: mode == "grid" ? "square.grid.2x2" : "list.bullet")
+        }
+        .accessibilityLabel("显示选项")
+    }
+    static func dateGroups<T>(_ xs: [T], _ time: (T) -> Double) -> [(String, [T])] {
+        let cal = Calendar.current
+        var b: [(String, [T])] = [("今天", []), ("昨天", []), ("过去 7 天", []), ("过去 30 天", []), ("更早", [])]
+        for x in xs {
+            let d = Date(timeIntervalSince1970: time(x))
+            let days = cal.dateComponents([.day], from: cal.startOfDay(for: d), to: cal.startOfDay(for: Date())).day ?? 99
+            let i = cal.isDateInToday(d) ? 0 : cal.isDateInYesterday(d) ? 1 : days < 7 ? 2 : days < 30 ? 3 : 4
+            b[i].1.append(x)
+        }
+        return b.filter { !$0.1.isEmpty }
+    }
+}
+
+/// One icon in the grid: thumbnail with a soft shadow, name (2 lines) and a small date line under it, like Files.
+struct FileGridCell<Thumb: View>: View {
+    let title: String
+    let subtitle: String
+    var selected: Bool? = nil
+    @ViewBuilder let thumb: () -> Thumb
+    var body: some View {
+        VStack(spacing: 6) {
+            thumb()
+                .frame(height: 170)
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .bottomTrailing) {
+                    if let selected {
+                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                            .font(.title2).symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, selected ? Color.accentColor : Color.black.opacity(0.25))
+                            .padding(6)
+                    }
+                }
+            Text(title).font(.subheadline.weight(.medium)).multilineTextAlignment(.center).lineLimit(2).foregroundStyle(.primary)
+            Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+/// First page of a note (paper + ink + images), rendered once per change and cached.
+struct NoteThumb: View {
+    let doc: NoteDoc
+    @State private var image: UIImage?
+    private static let cache = NSCache<NSString, UIImage>()
+    var body: some View {
+        let key = "\(doc.id)-\(Int(doc.modified))" as NSString
+        Group {
+            if let im = image ?? Self.cache.object(forKey: key) {
+                Image(uiImage: im).resizable().scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(.black.opacity(0.12), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+            } else {
+                RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.9))
+                    .aspectRatio(0.707, contentMode: .fit)
+                    .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+            }
+        }
+        .task(id: key) {
+            if Self.cache.object(forKey: key) != nil { return }
+            guard let p = doc.pages.first else { return }
+            try? await Task.sleep(for: .milliseconds(30))
+            let im = NoteRender.flat(doc.id, p, width: 280)
+            Self.cache.setObject(im, forKey: key); image = im
+        }
     }
 }

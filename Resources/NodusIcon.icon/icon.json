@@ -3,8 +3,8 @@
     {
       "value": {
         "linear-gradient": [
-          "srgb:0.28,0.18,0.62,1",
-          "srgb:0.07,0.04,0.20,1"
+          "srgb:0.10,0.36,0.22,1",
+          "srgb:0.027,0.094,0.059,1"
         ]
       }
     },
@@ -12,7 +12,7 @@
       "appearance": "dark",
       "value": {
         "linear-gradient": [
-          "srgb:0.12,0.07,0.30,1",
+          "srgb:0.05,0.18,0.11,1",
           "srgb:0,0,0,1"
         ]
       }
@@ -23,18 +23,22 @@
       "name": "Nodus",
       "layers": [
         {
-          "name": "nodes",
-          "image-name": "nodes.svg",
-          "glass": false
+          "name": "dots",
+          "image-name": "dots.svg",
+          "glass": true,
+          "opacity-specializations": [
+            {
+              "value": 1
+            },
+            {
+              "appearance": "tinted",
+              "value": 0.9
+            }
+          ]
         },
         {
-          "name": "glass",
-          "image-name": "glass.svg",
-          "glass": true
-        },
-        {
-          "name": "depth",
-          "image-name": "depth.svg",
+          "name": "lines",
+          "image-name": "lines.svg",
           "glass": false
         }
       ],

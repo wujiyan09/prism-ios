@@ -117,6 +117,8 @@ struct RecentActivityView: View {
     @State private var store = ResumeStore.shared
     @Environment(SceneModel.self) private var scene
     @State private var result: RunRecord?
+    @AppStorage("recent.view") private var viewMode = "list"
+    @AppStorage("recent.group") private var grouped = true
 
     private var groups: [(String, [Activity])] {
         let cal = Calendar.current
@@ -126,10 +128,57 @@ struct RecentActivityView: View {
             let d = Date(timeIntervalSince1970: a.time)
             if cal.isDateInToday(d) { today.append(a) } else if cal.isDateInYesterday(d) { yesterday.append(a) } else { older.append(a) }
         }
+        if !grouped { return all.isEmpty ? [] : [("", all)] }
         return [("今天", today), ("昨天", yesterday), ("更早", older)].filter { !$0.1.isEmpty }
     }
 
     var body: some View {
+        Group { if viewMode == "grid" { grid } else { list } }
+        .tint(AppSection.recent.tint)
+        .navigationTitle("最近使用")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                FileViewOptions(mode: $viewMode, sort: .constant("date"), grouped: $grouped)
+            }
+        }
+        .sheet(item: $result) { r in NavigationStack { RunDetailView(run: r).toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { result = nil } } } } }
+    }
+
+    private var grid: some View {
+        ScrollView {
+            if store.activities.isEmpty {
+                ContentUnavailableView("还没有最近使用", systemImage: "clock", description: Text("打开过的笔记和文件会出现在这里。")).padding(.top, 60)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 22, alignment: .top)], alignment: .leading, spacing: 26) {
+                ForEach(groups, id: \.0) { g in
+                    Section {
+                        ForEach(g.1) { a in
+                            Button { open(a) } label: {
+                                FileGridCell(title: a.title, subtitle: Date(timeIntervalSince1970: a.time).formatted(.relative(presentation: .named))) { gridThumb(a) }
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu { Button("移除", role: .destructive) { store.remove(a.id) } }
+                        }
+                    } header: {
+                        if !g.0.isEmpty { Text(g.0).font(.title3.bold()).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8) }
+                    }
+                }
+            }
+            .padding(20)
+        }
+        .background(Color.appBackground)
+    }
+    @ViewBuilder private func gridThumb(_ a: Activity) -> some View {
+        if case .note(let id)? = a.target, let d = NoteStore.shared.docs[id] {
+            NoteThumb(doc: d)
+        } else {
+            Image(systemName: icon(a.subject)).font(.system(size: 44, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: 110, height: 140)
+                .background(tint(a.subject).gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+    private var list: some View {
         List {
             if store.activities.isEmpty {
                 ContentUnavailableView("还没有最近使用", systemImage: "clock",
@@ -137,7 +186,7 @@ struct RecentActivityView: View {
                     .listRowBackground(Color.clear)
             }
             ForEach(groups, id: \.0) { g in
-                Section(g.0) {
+                Section(g.0.isEmpty ? "最近" : g.0) {
                     ForEach(g.1) { a in
                         Button { open(a) } label: { row(a) }
                             .buttonStyle(.plain)
@@ -160,9 +209,6 @@ struct RecentActivityView: View {
         }
         .listStyle(.insetGrouped)
         .appList()
-        .tint(AppSection.recent.tint)
-        .navigationTitle("最近使用")
-        .sheet(item: $result) { r in NavigationStack { RunDetailView(run: r).toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { result = nil } } } } }
     }
 
     private func row(_ a: Activity) -> some View {
