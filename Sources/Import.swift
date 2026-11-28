@@ -1559,7 +1559,8 @@ enum PDFFile {
 @MainActor @Observable final class ExportProgress {
     static let shared = ExportProgress()
     var active = false
-    var done = 0, total = 0
+    var done = 0
+    var total = 0
     /// Called from the export thread for each page.
     nonisolated static func report(_ i: Int, _ n: Int) {
         DispatchQueue.main.async { shared.done = i; shared.total = n }

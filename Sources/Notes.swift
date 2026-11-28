@@ -723,36 +723,8 @@ struct NoteDocView: View {
             if !Task.isCancelled { ctx = makeContext() }
         }
         .onChange(of: showTools) { _, _ in selected = nil }
-        .sheet(isPresented: $showQuiz) {
-            if let doc {
-                NavigationStack {
-                    PDFQuizSheet(title: doc.title, subject: "笔记", pageCount: doc.pages.count,
-                                 page: { i in
-                                     guard doc.pages.indices.contains(i) else { return (nil, "") }
-                                     let p = doc.pages[i]
-                                     let t = p.items.compactMap { $0.kind == "text" ? $0.text : nil }.joined(separator: "\n")
-                                     return (NoteRender.background(id, p, width: 1400), t)
-                                 },
-                                 pdf: { (FileManager.default.fileExists(atPath: NoteDisplay.url(doc).path) ? PDFDocument(url: NoteDisplay.url(doc)) : nil) ?? ImpPDF.from(images: doc.pages.map { NoteRender.background(id, $0, width: 1400) }) },
-                                 startPage: pageIndex, onDone: { nid in DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { newPaper = nid } })
-                }
-            }
-        }
-        .sheet(isPresented: $showGen) {
-            if let doc {
-                NavigationStack {
-                    PDFGenSheet(title: doc.title, subject: "笔记", pageCount: doc.pages.count,
-                                 page: { i in
-                                     guard doc.pages.indices.contains(i) else { return (nil, "") }
-                                     let p = doc.pages[i]
-                                     let t = p.items.compactMap { $0.kind == "text" ? $0.text : nil }.joined(separator: "\n")
-                                     return (NoteRender.background(id, p, width: 1400), t)
-                                 },
-                                 pdf: { (FileManager.default.fileExists(atPath: NoteDisplay.url(doc).path) ? PDFDocument(url: NoteDisplay.url(doc)) : nil) ?? ImpPDF.from(images: doc.pages.map { NoteRender.background(id, $0, width: 1400) }) },
-                                 startPage: pageIndex, onDone: { nid in DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { newPaper = nid } })
-                }
-            }
-        }
+        .sheet(isPresented: $showQuiz) { quizSheet(gen: false) }
+        .sheet(isPresented: $showGen) { quizSheet(gen: true) }
         .navigationDestination(item: $newPaper) { nid in ImportPaperView(id: nid) }
         .sheet(isPresented: $showPages) { NavigationStack { NotePagesSheet(id: id, current: $current) } }
         .sheet(item: $editing) { it in NavigationStack { NoteTextEditor(docID: id, item: it) } }
@@ -821,6 +793,37 @@ struct NoteDocView: View {
     // MARK: DeepSeek context
 
     @AppStorage("notes.dsRange") private var dsRange = ""
+    @ViewBuilder private func quizSheet(gen: Bool) -> some View {
+        if gen {
+            if let doc {
+                NavigationStack {
+                    PDFGenSheet(title: doc.title, subject: "笔记", pageCount: doc.pages.count,
+                                 page: { i in
+                                     guard doc.pages.indices.contains(i) else { return (nil, "") }
+                                     let p = doc.pages[i]
+                                     let t = p.items.compactMap { $0.kind == "text" ? $0.text : nil }.joined(separator: "\n")
+                                     return (NoteRender.background(id, p, width: 1400), t)
+                                 },
+                                 pdf: { (FileManager.default.fileExists(atPath: NoteDisplay.url(doc).path) ? PDFDocument(url: NoteDisplay.url(doc)) : nil) ?? ImpPDF.from(images: doc.pages.map { NoteRender.background(id, $0, width: 1400) }) },
+                                 startPage: pageIndex, onDone: { nid in DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { newPaper = nid } })
+                }
+            }
+                } else {
+            if let doc {
+                NavigationStack {
+                    PDFQuizSheet(title: doc.title, subject: "笔记", pageCount: doc.pages.count,
+                                 page: { i in
+                                     guard doc.pages.indices.contains(i) else { return (nil, "") }
+                                     let p = doc.pages[i]
+                                     let t = p.items.compactMap { $0.kind == "text" ? $0.text : nil }.joined(separator: "\n")
+                                     return (NoteRender.background(id, p, width: 1400), t)
+                                 },
+                                 pdf: { (FileManager.default.fileExists(atPath: NoteDisplay.url(doc).path) ? PDFDocument(url: NoteDisplay.url(doc)) : nil) ?? ImpPDF.from(images: doc.pages.map { NoteRender.background(id, $0, width: 1400) }) },
+                                 startPage: pageIndex, onDone: { nid in DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { newPaper = nid } })
+                }
+            }
+                }
+    }
     private func setMargin(l: CGFloat, r: CGFloat) {
         InkSafety.flushAll()
         NoteMargins.set(id, l: l, r: r)

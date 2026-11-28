@@ -424,7 +424,7 @@ enum InkPaletteHost {
             let size = v.sizeThatFits(CGSize(width: 200, height: w.bounds.height - sa.top - 20))
             v.bounds = CGRect(origin: .zero, size: CGSize(width: size.width, height: min(size.height, w.bounds.height - sa.top - 20)))
             let hw = v.bounds.width / 2, hh = v.bounds.height / 2
-            let fy = UserDefaults.standard.object(forKey: "ink.palette.y") as? Double ?? 0.5
+            let fy = 0.5   // always centred along the edge
             let x = e == "l" ? sa.left + m + hw : w.bounds.width - sa.right - m - hw
             v.center = CGPoint(x: x, y: min(w.bounds.height - hh - m, max(sa.top + hh + m, CGFloat(fy) * w.bounds.height)))
             return
@@ -432,7 +432,7 @@ enum InkPaletteHost {
         let size = v.sizeThatFits(CGSize(width: w.bounds.width - 20, height: 200))
         v.bounds = CGRect(origin: .zero, size: CGSize(width: min(size.width, w.bounds.width - 20), height: size.height))
         let half = v.bounds.width / 2, hh = v.bounds.height / 2
-        let fx = UserDefaults.standard.object(forKey: "ink.palette.x") as? Double ?? 0.5
+        let fx = 0.5   // always centred along the edge
         let y = e == "t" ? sa.top + m + hh : w.bounds.height - m - hh
         v.center = CGPoint(x: min(w.bounds.width - half - m, max(half + m, CGFloat(fx) * w.bounds.width)), y: y)
     }
