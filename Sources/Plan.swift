@@ -258,7 +258,7 @@ struct PlanListView: View {
                 ContentUnavailableView {
                     Label(T("No exams yet", "还没有考试"), systemImage: "calendar.badge.plus")
                 } description: {
-                    Text(T("Add an exam and Prism builds a day-by-day revision plan up to the exam date.", "添加一场考试，Prism 会排出到考试当天的每日复习计划。"))
+                    Text(T("Add an exam and DSE Trainer builds a day-by-day revision plan up to the exam date.", "添加一场考试，DSE Trainer 会排出到考试当天的每日复习计划。"))
                 } actions: {
                     Button(T("Add exam", "添加考试")) { editing = Exam() }.glassButton(prominent: true)
                 }

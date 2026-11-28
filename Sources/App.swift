@@ -18,7 +18,11 @@ struct ICTApp: App {
                 .environment(library)
                 .environment(progress)
                 .environment(exams)
-                .task { if !library.loaded { await library.load() }; Reminders.shared.reschedule() }
+                .task {
+                    #if !NODUS
+                    if !library.loaded { await library.load() }; Reminders.shared.reschedule()
+                    #endif
+                }
                 .task { Reminders.shared.setUp() }
                 .task { SongtiFont.request() }
                 .task { await MathContent.shared.sync() }
@@ -147,11 +151,19 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
     }
     /// Sections that get their own tab in compact width; the rest live under "More".
     /// Sidebar order Sam chose (设置 › 侧边栏, or 编辑 in the sidebar). Synced as "sidebar.order".
+    /// Sections this app has: Nodus is notes only.
+    static var available: [AppSection] {
+        #if NODUS
+        return [.notes, .recent, .settings]
+        #else
+        return allCases
+        #endif
+    }
     static var ordered: [AppSection] {
         let ids = (UserDefaults.standard.string(forKey: "sidebar.order") ?? "").split(separator: ",").compactMap { AppSection(rawValue: String($0)) }
         var out: [AppSection] = []
-        for s in ids where !out.contains(s) { out.append(s) }
-        for s in allCases where !out.contains(s) { out.append(s) }
+        for s in ids where !out.contains(s) && available.contains(s) { out.append(s) }
+        for s in available where !out.contains(s) { out.append(s) }
         return out
     }
     static var hidden: Set<AppSection> {
@@ -379,4 +391,14 @@ enum AppTheme: String, CaseIterable, Identifiable {
         }
     }
     var swatch: Color { Color(uiColor: colors?.bg ?? .systemGroupedBackground) }
+}
+
+
+/// App name shown in the UI: one codebase, two apps.
+enum AppBrand {
+    #if NODUS
+    static let name = "Nodus"
+    #else
+    static let name = "DSE Trainer"
+    #endif
 }

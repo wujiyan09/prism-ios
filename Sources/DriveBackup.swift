@@ -14,7 +14,12 @@ final class DriveBackup: NSObject, ASWebAuthenticationPresentationContextProvidi
     static let clientID = "604525247700-nif26q5j8d3o7ph6rud43igc836g4pv7.apps.googleusercontent.com"
     static let scheme = "com.googleusercontent.apps.604525247700-nif26q5j8d3o7ph6rud43igc836g4pv7"
     static var redirect: String { scheme + ":/oauth2redirect" }
+    // DSE Trainer keeps the old folder so existing backups stay readable; Nodus gets its own.
+    #if NODUS
+    static let folderName = "Nodus 备份"
+    #else
     static let folderName = "Prism 备份"
+    #endif
     /// Application Support folders that are re-downloadable content, not user data.
     static let skip: Set<String> = ["mathdata", "sync-snapshot.json", "drive-manifest.json"]
 
@@ -371,6 +376,6 @@ struct DriveBackupView: View {
         } message: { Text("本机上同名的笔记、手写和记录会被备份里的版本替换。") }
         .alert("恢复完成", isPresented: $restored) {
             Button("好") {}
-        } message: { Text("请从多任务界面完全关掉 Prism 再打开，恢复的内容才会显示。") }
+        } message: { Text("请从多任务界面完全关掉 \(AppBrand.name) 再打开，恢复的内容才会显示。") }
     }
 }

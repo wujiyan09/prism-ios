@@ -1,6 +1,11 @@
 import SwiftUI
 
 struct RootView: View {
+    #if NODUS
+    static let notesOnly = true
+    #else
+    static let notesOnly = false
+    #endif
     @Environment(Library.self) private var lib
     @Environment(\.horizontalSizeClass) private var hsc
     @AppStorage("lang") private var lang = "zh"
@@ -10,7 +15,10 @@ struct RootView: View {
     var body: some View {
         let T = Tr(en: lang == "en")
         Group {
-            if lib.needsDownload || (!lib.loaded && !Library.hasCache) {
+            if Self.notesOnly {
+                // Nodus: notes only, no subject content to download.
+                if hsc == .compact && UIDevice.current.userInterfaceIdiom != .pad { tabs(T) } else { split(T) }
+            } else if lib.needsDownload || (!lib.loaded && !Library.hasCache) {
                 // Only a real first download (nothing on disk) gets this screen.
                 DownloadView()
             } else if !lib.loaded {
@@ -99,6 +107,7 @@ struct RootView: View {
                         sidebarOrder = UserDefaults.standard.string(forKey: "sidebar.order") ?? ""
                     }
                 } footer: {
+                    if !Self.notesOnly {
                     let t = lib.totals
                     let m = MathLibrary.shared
                     let mmc = m.chapters("math").reduce(0) { $0 + $1.sets.reduce(0) { $0 + $1.n } }
@@ -109,9 +118,10 @@ struct RootView: View {
                         if !m.chapters("zh").isEmpty { Text("中文 · \(m.chapters("zh").count) 篇範文 · \(m.chapters("zh").reduce(0) { $0 + $1.sets.reduce(0) { $0 + $1.n } }) MC") }
                         if !m.chapters("chem").isEmpty { Text("\(T("Chemistry", "化学")) · \(m.chapters("chem").count) \(T("chapters", "章")) · \(m.chapters("chem").reduce(0) { $0 + $1.nCards }) \(T("cards", "卡")) · \(m.chapters("chem").reduce(0) { $0 + $1.sets.reduce(0) { $0 + $1.n } }) MC") }
                     }
+                    }
                 }
             }
-            .navigationTitle("Prism")
+            .navigationTitle(AppBrand.name)
             .environment(\.editMode, $sidebarEditing)
             .toolbar {
                 if sidebarEditing.isEditing {
@@ -351,7 +361,7 @@ struct MoreRoot: View {
                             .frame(width: 56, height: 56)
                             .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Prism").font(.title3.bold())
+                            Text(AppBrand.name).font(.title3.bold())
                             let s = prog.stat(lib.chapters.flatMap { $0.mc } + lib.dseMC)
                             Text(T("\(prog.learned.count) chapters learned · \(s.done) MC done", "已学 \(prog.learned.count) 章 · 已做 \(s.done) 题"))
                                 .font(.subheadline).foregroundStyle(.secondary)
@@ -569,7 +579,7 @@ struct SettingsView: View {
                     PadButton()
                     PadSyncPicker()
                 } header: { Text("外接显示器") } footer: {
-                    Text("Prism 放在外接显示器上，iPad 屏幕打开「手写板」窗口：在 iPad 上写，大屏的草稿纸、笔记或 PDF 实时同步；手写板底部可切题、选 A–D、问 DeepSeek。")
+                    Text("\(AppBrand.name) 放在外接显示器上，iPad 屏幕打开「手写板」窗口：在 iPad 上写，大屏的草稿纸、笔记或 PDF 实时同步；手写板底部可切题、选 A–D、问 DeepSeek。")
                 }
                 .listRowBackground(Color.cardBackground)
             }
