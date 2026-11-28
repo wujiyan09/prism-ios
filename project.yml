@@ -38,12 +38,13 @@ targets:
         buildPhase: resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.wujiyan09.prism
+        PRODUCT_BUNDLE_IDENTIFIER: com.wujiyan09.nodus
         PRODUCT_NAME: ICT
-        APP_DISPLAY_NAME: DSE Trainer
+        APP_DISPLAY_NAME: Nodus
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) NODUS"
         TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_FILE: Info.plist
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_APPICON_NAME: NodusIcon
         ENABLE_PREVIEWS: NO
         SUPPORTS_MACCATALYST: NO
   # Nodus: notes-only app from the same sources (compiled with NODUS). Bundle ID / icon / name differ.
